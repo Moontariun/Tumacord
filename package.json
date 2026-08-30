@@ -18,7 +18,7 @@
     "start": "node dist-server/server-bundle.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "node --test --import tsx tests/**/*.test.ts",
-    "package:linux": "npm run build && electron-builder --linux AppImage tar.gz",
+    "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --publish never",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
