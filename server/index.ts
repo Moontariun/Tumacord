@@ -67,7 +67,7 @@ const profileSchema = z.object({
 });
 
 app.get('/api/health', (_request, response) => {
-  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.1.0' });
+  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.1.1' });
 });
 
 function issueSession(user: StoredUser): string {
@@ -393,7 +393,7 @@ io.on('connection', (socket) => {
     io.to(`voice:${channelId}`).emit('voice:members', rooms.updatePing(channelId, socket.id, parsed.data));
   });
 
-  for (const event of ['rtc:offer', 'rtc:answer', 'rtc:ice'] as const) {
+  for (const event of ['rtc:offer', 'rtc:answer', 'rtc:ice', 'rtc:resync'] as const) {
     socket.on(event, (payload: { target?: unknown; [key: string]: unknown }) => {
       if (typeof payload?.target !== 'string' || !sameVoiceRoom(socket.id, payload.target)) return;
       const { target, ...forwarded } = payload;

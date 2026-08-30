@@ -11,6 +11,7 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 - servidor completo embutido em toda instalação;
 - o primeiro a entrar vira host; se ele sair, o participante com menor ping médio assume e a sinalização migra automaticamente;
 - câmera e live permanecem ativas ao reconectar ou quando outra pessoa sai e volta para a call;
+- reconexão WebRTC automática com fila de candidatos ICE, renegociação pendente e reconstrução do enlace quando a rota ZeroTier/Wi-Fi muda;
 - microfone a 48 kHz com cancelamento de eco, supressão neural GTCRN em WebAssembly, corte de ruído grave, compressor de voz e ganho automático;
 - detecção e seleção de microfone, saída de áudio e câmera;
 - câmera e compartilhamento de tela;
@@ -19,6 +20,7 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 - perfis Fonte (1080p60), 2.5K (1440p60 e 1440p30), Alta (1080p30), Equilibrada (720p30) e Econômica (480p15), com ajuste adaptativo para manter a transmissão estável;
 - volume individual por participante e pela live, de 0 a 200%, com ganho real de até +10 dB e limitador contra estouro;
 - dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**;
+- indicador **AO VIVO** no nome de quem transmite, recuperação visível quando a mídia atrasa e opção de sair apenas da live sem abandonar a call;
 - mensagens mescladas entre os participantes online e guardadas localmente, de modo que alguém que entra depois recebe o histórico disponível;
 - anexos de até 25 MB com prévia leve, download manual e opção de manter os arquivos completos sincronizados neste PC;
 - perfis com avatar estático ou GIF, banner, descrição e cor personalizada;
@@ -31,13 +33,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 
 ### Pelo GitHub
 
-Para instalar ou atualizar para a Release mais recente:
+Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/main/scripts/install-from-github.sh | bash
 ```
 
-O script baixa o AppImage publicado em **Releases**, valida se ele é um AppImage executável, instala em `~/.local/bin/tumacord` e atualiza o atalho do menu. Feche uma versão já aberta usando **Sair do Tumacord** na bandeja antes de iniciar a nova.
+O script baixa o código-fonte, instala as dependências, compila o aplicativo e coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`. O AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
+
+O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
 
 ### A partir do código
 
@@ -48,7 +52,7 @@ chmod +x scripts/*.sh
 ./scripts/install-cachyos.sh
 ```
 
-É o mesmo comando para todos. O instalador gera e coloca o AppImage em `~/.local/bin/tumacord` e cria o atalho do menu. Cada cópia já contém o servidor, o detector de calls e o mecanismo de eleição de host.
+É o mesmo comando para todos. O instalador gera o diretório nativo do Electron, instala em `~/.local/share/tumacord/app` e cria o atalho do menu. Cada cópia já contém o servidor, o detector de calls e o mecanismo de eleição de host.
 
 Para remover o aplicativo sem apagar os dados locais, execute:
 
@@ -120,7 +124,7 @@ npm run typecheck
 npm run build
 ```
 
-As tags Git `v*` executam `.github/workflows/release.yml`, repetem testes e tipagem e publicam o AppImage e o pacote `.tar.gz` na Release correspondente.
+Todo push e pull request executa `.github/workflows/release.yml`, repete testes e tipagem, compila o AppImage opcional e o guarda como artefato. As tags Git `v*` também publicam o AppImage e o pacote `.tar.gz` na Release correspondente.
 
 O servidor embutido P2P fica em `http://0.0.0.0:3927`; a imagem Docker usa `4600`. O modo de desenvolvimento da interface usa `http://localhost:5173`.
 

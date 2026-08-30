@@ -3,6 +3,7 @@ set -euo pipefail
 
 icon_root="$HOME/.local/share/icons/hicolor"
 rm -f "$HOME/.local/bin/tumacord" "$HOME/.local/share/applications/tumacord.desktop"
+rm -rf -- "${XDG_DATA_HOME:-$HOME/.local/share}/tumacord"
 rm -f "$icon_root/scalable/apps/tumacord.svg"
 for icon_size in 16 24 32 48 64 96 128 256 512; do
   rm -f "$icon_root/${icon_size}x${icon_size}/apps/tumacord.png"

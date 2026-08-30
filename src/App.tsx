@@ -3,7 +3,7 @@ import { io, type Socket } from 'socket.io-client';
 import type { Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { Icon } from './components/Icon';
 import { useDevices } from './hooks/useDevices';
-import { qualityOptions, useVoice, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
+import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
 import { clearSession, defaultServerUrl, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, setSoundPreference, unlockAudio } from './lib/sound';
 import { cacheAttachment, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, resolveAttachment, uploadAttachment } from './lib/chatSync';
@@ -335,7 +335,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         <ChannelGroup title="Canais de voz" onAdd={() => createChannel('voice')}>
           {snapshot.channels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
-            {(snapshot.voiceRooms[channel.id] ?? []).map((member) => <div className={`voice-member-mini ${member.speaking ? 'speaking' : ''}`} key={member.socketId}><Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small /><span>{member.username}</span>{member.pingMs < 9999 && <small>{member.pingMs} ms</small>}{member.isHost && <Icon name="host" />}{member.muted && <Icon name="micOff" />}</div>)}
+            {(snapshot.voiceRooms[channel.id] ?? []).map((member) => <div className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} key={member.socketId}><Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small /><span>{member.username}{member.screen && <small className="mini-live"><span className="live-dot" /> AO VIVO</small>}</span>{member.pingMs < 9999 && <small>{member.pingMs} ms</small>}{member.isHost && <Icon name="host" />}{member.muted && <Icon name="micOff" />}</div>)}
           </div>)}
         </ChannelGroup>
       </div>
@@ -435,6 +435,8 @@ interface VoiceViewModel {
   cameraOn: boolean;
   screenOn: boolean;
   remoteMedia: RemoteMedia[];
+  peerHealth: Record<string, PeerHealth>;
+  recoverPeer: (peerId: string, reason?: string, notifyRemote?: boolean) => void;
   localCamera?: MediaStream;
   localScreen?: MediaStream;
   join: (id: string) => Promise<void>;
@@ -452,31 +454,54 @@ function CallView({ voice, channel, members, speakerId, userVolumes, setUserVolu
   const [streamVolume, setStreamVolume] = useState(1);
   const [streamMuted, setStreamMuted] = useState(false);
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
+  const [hiddenScreenUsers, setHiddenScreenUsers] = useState<Set<string>>(() => new Set());
   const inThisCall = voice.channelId === channel.id;
   const videoMedia = voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length > 0);
+  const visibleVideoMedia = videoMedia.filter((media) => media.kind !== 'screen' || !hiddenScreenUsers.has(media.user?.id ?? media.peerId));
   const audioMedia = voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0);
   const tiles = inThisCall ? voice.members : members;
+  const expectedRemoteStreams = voice.members.filter((member) => member.id !== voice.user.id && member.screen);
+  const missingStreams = expectedRemoteStreams.filter((member) => !videoMedia.some((media) => media.kind === 'screen' && (media.user?.id === member.id || media.peerId === member.socketId)));
+  const hiddenStreams = expectedRemoteStreams.filter((member) => hiddenScreenUsers.has(member.id) && videoMedia.some((media) => media.kind === 'screen' && (media.user?.id === member.id || media.peerId === member.socketId)));
   const volumeFor = (userId?: string) => userId ? Math.max(0, Math.min(2, userVolumes[userId] ?? 1)) : 1;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.fullscreenElement) setTheaterMediaKey(null); };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+  useEffect(() => {
+    const active = new Set(voice.members.filter((member) => member.screen).map((member) => member.id));
+    setHiddenScreenUsers((current) => {
+      const next = new Set([...current].filter((id) => active.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [voice.members]);
+  useEffect(() => {
+    if (!theaterMediaKey) return;
+    const validKeys = new Set([
+      ...(voice.localScreen ? ['local-screen'] : []),
+      ...(voice.localCamera ? ['local-camera'] : []),
+      ...visibleVideoMedia.map((media) => `${media.peerId}:${media.stream.id}`),
+    ]);
+    if (!validKeys.has(theaterMediaKey)) setTheaterMediaKey(null);
+  }, [theaterMediaKey, visibleVideoMedia, voice.localCamera, voice.localScreen]);
   const showMedia = (key: string) => !theaterMediaKey || theaterMediaKey === key;
-  const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + videoMedia.length;
+  const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length + hiddenStreams.length;
   return <main className="call-view">
     <div className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''}`}>
       {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {videoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${media.kind === 'screen' ? ' · tela' : ''}`} muted={voice.deafened || (media.kind === 'screen' && streamMuted)} volume={Math.min(2, (media.kind === 'screen' ? streamVolume : 1) * volumeFor(media.user?.id))} speakerId={speakerId} screen={media.kind === 'screen'} theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} />; })}
-      {!videoMedia.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={voice.deafened || (screen && streamMuted)} volume={Math.min(2, (screen ? streamVolume : 1) * volumeFor(media.user?.id))} speakerId={speakerId} screen={screen} theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
+      {!theaterMediaKey && missingStreams.map((member) => <div className="stream-recovery-card" key={`missing-${member.id}`}><span className="live-dot" /><strong>{member.username} está AO VIVO</strong><p>A transmissão está se reconectando automaticamente.</p><small>{voice.peerHealth[member.socketId] === 'recovering' ? 'Recuperando conexão…' : 'Aguardando a faixa de vídeo…'}</small><button onClick={() => voice.recoverPeer(member.socketId, 'tentativa manual da interface', true)}>Tentar agora</button></div>)}
+      {!theaterMediaKey && hiddenStreams.map((member) => <div className="stream-recovery-card stream-hidden-card" key={`hidden-${member.id}`}><Icon name="screen" /><strong>Live de {member.username} ocultada</strong><p>Você saiu desta transmissão, mas continua na call.</p><button onClick={() => setHiddenScreenUsers((current) => { const next = new Set(current); next.delete(member.id); return next; })}>Assistir novamente</button></div>)}
+      {!visibleVideoMedia.length && !missingStreams.length && !hiddenStreams.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
         {tiles.length ? tiles.map((member) => <ParticipantTile key={member.socketId} member={member} serverUrl={serverUrl} onProfile={onProfile} />) : <div className="empty-call"><img src="./tumacord-logo.svg" alt="" /><h2>A call está quietinha</h2><p>Entre e seja o host. Quem chegar depois conecta direto com você.</p></div>}
       </div>}
     </div>
     {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly />)}
     <div className="call-footer">
       {inThisCall && voice.screenOn && <label className="quality-picker"><span>Stream</span><select value={voice.quality} onChange={(event) => void voice.setQuality(event.target.value as StreamQuality)}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
-      {videoMedia.some((media) => media.kind === 'screen') && <div className="stream-audio-controls"><button onClick={() => setStreamMuted((muted) => !muted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /></div>}
+      {visibleVideoMedia.some((media) => media.kind === 'screen') && <div className="stream-audio-controls"><button onClick={() => setStreamMuted((muted) => !muted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /></div>}
       {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
         <ControlButton icon={voice.muted ? 'micOff' : 'mic'} label={voice.muted ? 'Ativar microfone' : 'Silenciar'} active={voice.muted} danger onClick={() => void voice.toggleMute()} />
         <ControlButton icon="headphones" label={voice.deafened ? 'Ouvir' : 'Ensurdecer'} active={voice.deafened} danger onClick={voice.toggleDeafen} />
@@ -493,10 +518,10 @@ function ControlButton({ icon, label, active, danger, accent, onClick }: { icon:
 }
 
 function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState; serverUrl: string; onProfile: (user: PublicUser) => void }) {
-  return <button className={`participant-tile ${member.speaking ? 'speaking' : ''}`} onClick={() => onProfile(member)}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong><span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
+  return <button className={`participant-tile ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => onProfile(member)}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong>{member.screen && <span className="streaming-label"><span className="live-dot" /> AO VIVO</span>}<span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, theater = false, onTheater }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; theater?: boolean; onTheater?: (key: string | null) => void }) {
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, theater = false, onTheater, onClose }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const toggleFullscreen = async () => {
@@ -516,25 +541,50 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     window.addEventListener('keydown', onKeyDown);
     return () => { document.removeEventListener('fullscreenchange', onFullscreenChange); window.removeEventListener('keydown', onKeyDown); };
   }, [fullscreen]);
-  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} /><span>{label}</span><div className="video-actions"><button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} /><span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={onClose} title="Sair desta live sem sair da call"><Icon name="close" /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean }) {
   const ref = useRef<HTMLMediaElement>(null);
+  const [trackRevision, setTrackRevision] = useState(0);
   const gainContext = useRef<AudioContext | null>(null);
-  const gainSource = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainNode = useRef<GainNode | null>(null);
-  const limiterNode = useRef<DynamicsCompressorNode | null>(null);
+  const playback = useRef({ muted, volume, speakerId });
+  const syncPlayback = useRef<() => void>(() => undefined);
+  playback.current = { muted, volume, speakerId };
+  useEffect(() => {
+    const refreshTracks = () => setTrackRevision((revision) => revision + 1);
+    stream.addEventListener('addtrack', refreshTracks);
+    stream.addEventListener('removetrack', refreshTracks);
+    return () => {
+      stream.removeEventListener('addtrack', refreshTracks);
+      stream.removeEventListener('removetrack', refreshTracks);
+    };
+  }, [stream]);
   useEffect(() => {
     const media = ref.current;
     if (!media) return;
     media.srcObject = stream;
-    media.muted = true;
-    media.volume = 1;
-    void media.play().catch(() => undefined);
-    if (!stream.getAudioTracks().length) return;
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.length) {
+      media.muted = true;
+      void media.play().catch(() => undefined);
+      return () => { media.srcObject = null; };
+    }
     const AudioContextClass = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) return;
+    const applyDirectFallback = () => {
+      const current = playback.current;
+      media.muted = current.muted;
+      media.volume = Math.max(0, Math.min(1, current.volume));
+      const sinkMedia = media as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
+      if (current.speakerId && sinkMedia.setSinkId) void sinkMedia.setSinkId(current.speakerId).catch(() => undefined);
+      void media.play().catch(() => undefined);
+    };
+    if (!AudioContextClass) {
+      syncPlayback.current = applyDirectFallback;
+      applyDirectFallback();
+      return () => { syncPlayback.current = () => undefined; media.srcObject = null; };
+    }
     const context = new AudioContextClass({ latencyHint: 'interactive' });
     const source = context.createMediaStreamSource(stream);
     const gain = context.createGain();
@@ -546,31 +596,61 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
     limiter.release.value = 0.1;
     source.connect(gain).connect(limiter).connect(context.destination);
     gainContext.current = context;
-    gainSource.current = source;
     gainNode.current = gain;
-    limiterNode.current = limiter;
+    const apply = () => {
+      const current = playback.current;
+      const now = context.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setTargetAtTime(current.muted ? 0 : volumeToGain(current.volume), now, 0.012);
+      if (context.state === 'running') {
+        // WebAudio entrega o ganho real acima de 100%. O elemento HTML fica
+        // mudo para não duplicar o som.
+        media.muted = true;
+        media.volume = 1;
+      } else {
+        // Se PipeWire/Chromium suspender o AudioContext, o áudio continua pelo
+        // elemento nativo (limitado a 100%) até o grafo retomar.
+        applyDirectFallback();
+      }
+      const sinkContext = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+      if (current.speakerId && sinkContext.setSinkId) void sinkContext.setSinkId(current.speakerId).catch(() => undefined);
+    };
+    syncPlayback.current = apply;
+    const resume = () => {
+      if (context.state === 'suspended') void context.resume().then(apply).catch(applyDirectFallback);
+      else apply();
+    };
+    context.addEventListener('statechange', apply);
+    window.addEventListener('pointerdown', resume);
+    window.addEventListener('keydown', resume);
+    document.addEventListener('visibilitychange', resume);
+    for (const track of audioTracks) track.addEventListener('unmute', resume);
+    const watchdog = window.setInterval(resume, 2_000);
+    apply();
+    resume();
     return () => {
+      window.clearInterval(watchdog);
+      context.removeEventListener('statechange', apply);
+      window.removeEventListener('pointerdown', resume);
+      window.removeEventListener('keydown', resume);
+      document.removeEventListener('visibilitychange', resume);
+      for (const track of audioTracks) track.removeEventListener('unmute', resume);
       source.disconnect(); gain.disconnect(); limiter.disconnect();
-      gainSource.current = null; gainNode.current = null; limiterNode.current = null; gainContext.current = null;
+      syncPlayback.current = () => undefined;
+      gainNode.current = null; gainContext.current = null;
+      media.srcObject = null;
       void context.close().catch(() => undefined);
     };
-  }, [stream]);
+  }, [stream, trackRevision]);
   useEffect(() => {
-    const context = gainContext.current as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
-    const gain = gainNode.current;
-    if (!context || !gain) return;
-    const now = context.currentTime;
-    gain.gain.cancelScheduledValues(now);
-    gain.gain.setTargetAtTime(muted ? 0 : volumeToGain(volume), now, 0.012);
-    if (speakerId && context.setSinkId) void context.setSinkId(speakerId).catch(() => undefined);
-    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    syncPlayback.current();
   }, [muted, speakerId, stream, volume]);
-  return audioOnly ? <audio ref={ref as React.RefObject<HTMLAudioElement>} autoPlay muted /> : <video ref={ref as React.RefObject<HTMLVideoElement>} autoPlay playsInline muted />;
+  return audioOnly ? <audio ref={ref as React.RefObject<HTMLAudioElement>} autoPlay /> : <video ref={ref as React.RefObject<HTMLVideoElement>} autoPlay playsInline />;
 }
 
 function MemberList({ users, voiceMembers, userVolumes, setUserVolume, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; userVolumes: Record<string, number>; setUserVolume: (userId: string, volume: number) => void; serverUrl: string; onProfile: (user: PublicUser) => void }) {
   const hostIds = useMemo(() => new Set(voiceMembers.filter((member) => member.isHost).map((member) => member.id)), [voiceMembers]);
-  return <aside className="member-list"><h3>Online — {users.length}</h3>{users.map((user) => { const voice = voiceMembers.find((member) => member.id === user.id); const volume = Math.max(0, Math.min(2, userVolumes[user.id] ?? 1)); return <div className={`member-row ${voice?.speaking ? 'speaking' : ''}`} key={user.id}><button className="member-profile" onClick={() => onProfile(user)}><Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online /><span>{user.username}</span></button>{voice?.pingMs !== undefined && voice.pingMs < 9999 && <small>{voice.pingMs} ms</small>}{hostIds.has(user.id) && <span title="Host da call"><Icon name="host" /></span>}{voice && <label className="member-volume" title={`Volume de ${user.username}: ${Math.round(volume * 100)}%`}><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => setUserVolume(user.id, Number(event.target.value))} aria-label={`Volume de ${user.username} (até 200%)`} /></label>}</div>; })}</aside>;
+  return <aside className="member-list"><h3>Online — {users.length}</h3>{users.map((user) => { const voice = voiceMembers.find((member) => member.id === user.id); const volume = Math.max(0, Math.min(2, userVolumes[user.id] ?? 1)); return <div className={`member-row ${voice?.speaking ? 'speaking' : ''} ${voice?.screen ? 'is-streaming' : ''}`} key={user.id}><button className="member-profile" onClick={() => onProfile(user)}><Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online /><span>{user.username}</span></button>{voice?.screen && <span className="member-live"><span className="live-dot" /> AO VIVO</span>}{voice?.pingMs !== undefined && voice.pingMs < 9999 && <small>{voice.pingMs} ms</small>}{hostIds.has(user.id) && <span title="Host da call"><Icon name="host" /></span>}{voice && <label className="member-volume" title={`Volume de ${user.username}: ${Math.round(volume * 100)}%`}><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => setUserVolume(user.id, Number(event.target.value))} aria-label={`Volume de ${user.username} (até 200%)`} /></label>}</div>; })}</aside>;
 }
 
 function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user: PublicUser; own: boolean; serverUrl: string; token: string; onClose: () => void; onSaved: (user: PublicUser) => void }) {

@@ -35,6 +35,15 @@ function isCallAudio(input) {
   return /tumacord|discord|web\s*rtc\s*voice|voiceengine|loopback|tumacord_stream_bus/i.test(searchable);
 }
 
+function activePipewireLinks(graph) {
+  return new Set(graph
+    .filter((entry) => entry.type === 'PipeWire:Interface:Link')
+    .map((entry) => {
+      const properties = entry.info?.props ?? {};
+      return `${properties['link.output.port']}:${properties['link.input.port']}`;
+    }));
+}
+
 class ScreenAudioRouter {
   constructor() {
     this.nullSinkModule = null;
@@ -109,6 +118,7 @@ class ScreenAudioRouter {
     const graph = await pipewireGraph();
     const nodes = graph.filter((entry) => entry.type === 'PipeWire:Interface:Node');
     const ports = graph.filter((entry) => entry.type === 'PipeWire:Interface:Port');
+    const activeLinks = activePipewireLinks(graph);
     const busNode = nodes.find((entry) => entry.info?.props?.['node.name'] === BUS_NAME);
     if (!busNode) return;
     const busInputs = ports.filter((entry) => Number(entry.info?.props?.['node.id']) === Number(busNode.id) && entry.info?.props?.['port.direction'] === 'in');
@@ -123,9 +133,14 @@ class ScreenAudioRouter {
           ?? busInputs[0];
         if (!input) continue;
         const key = `${output.id}:${input.id}`;
-        if (this.links.has(key)) continue;
+        // Processos PipeWire recriam suas portas ao trocar de faixa, pausar um
+        // jogo ou sair do modo tela cheia. O cache antigo dizia que o link
+        // ainda existia e deixava a live muda para sempre. O grafo real é a
+        // fonte de verdade, então qualquer link desaparecido é refeito.
+        this.links.add(key);
+        if (activeLinks.has(key)) continue;
         await execFileAsync('pw-link', ['-L', String(output.id), String(input.id)], { encoding: 'utf8' })
-          .then(() => this.links.add(key))
+          .then(() => activeLinks.add(key))
           .catch(() => undefined);
       }
     }
@@ -147,4 +162,4 @@ class ScreenAudioRouter {
   }
 }
 
-module.exports = { ScreenAudioRouter, isCallAudio };
+module.exports = { ScreenAudioRouter, activePipewireLinks, isCallAudio };

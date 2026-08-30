@@ -26,23 +26,36 @@ fi
 
 cd "$project_dir"
 npm ci
-npm run package:linux
+npm run package:dir
 
-appimage="$(find "$project_dir/release" -maxdepth 1 -name 'Tumacord-*.AppImage' -type f -print -quit)"
-if [[ -z "$appimage" ]]; then
-  echo "O AppImage não foi gerado." >&2
+compiled_app="$project_dir/release/linux-unpacked"
+if [[ ! -x "$compiled_app/tumacord" ]]; then
+  echo "A compilação não gerou o executável do Tumacord." >&2
   exit 1
 fi
 
 icon_root="$HOME/.local/share/icons/hicolor"
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$icon_root/scalable/apps"
-install -m755 "$appimage" "$HOME/.local/bin/tumacord"
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/tumacord"
+app_dir="$install_root/app"
+previous_dir="$install_root/app.previous"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$icon_root/scalable/apps" "$install_root"
+next_dir="$(mktemp -d "$install_root/app.next.XXXXXX")"
+trap 'rm -rf -- "$next_dir"' EXIT
+cp -a "$compiled_app/." "$next_dir/"
+if [[ -d "$app_dir" ]]; then
+  rm -rf -- "$previous_dir"
+  mv -- "$app_dir" "$previous_dir"
+fi
+mv -- "$next_dir" "$app_dir"
+trap - EXIT
+ln -sfn "$app_dir/tumacord" "$HOME/.local/bin/tumacord"
 install -m644 "$project_dir/assets/tumacord-logo.svg" "$icon_root/scalable/apps/tumacord.svg"
 for icon_size in 16 24 32 48 64 96 128 256 512; do
   mkdir -p "$icon_root/${icon_size}x${icon_size}/apps"
   install -m644 "$project_dir/assets/tumacord-logo.png" "$icon_root/${icon_size}x${icon_size}/apps/tumacord.png"
 done
 install -m644 "$project_dir/packaging/tumacord.desktop" "$HOME/.local/share/applications/tumacord.desktop"
+node -p "require('./package.json').version" > "$install_root/version"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$icon_root" >/dev/null 2>&1 || true
@@ -52,4 +65,6 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   echo "Adicione $HOME/.local/bin ao PATH para abrir pelo terminal. O menu de aplicativos já funcionará."
 fi
 
-echo "Tumacord instalado com servidor e descoberta automática. Procure por Tumacord no menu de aplicativos."
+echo "Tumacord compilado do código-fonte e instalado com servidor e descoberta automática."
+echo "A instalação anterior, quando existente, ficou em $previous_dir para recuperação."
+echo "Procure por Tumacord no menu de aplicativos."

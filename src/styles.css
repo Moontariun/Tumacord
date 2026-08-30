@@ -108,6 +108,9 @@ svg { width: 20px; height: 20px; }
 .voice-member-mini small + svg { margin-left: 2px; }
 .voice-member-mini > svg:last-child { margin-left: 0; margin-right: 8px; color: #ec6c76; }
 .voice-member-mini.speaking span:not(.avatar) { color: #fff; animation: speaking-name .8s ease-in-out infinite alternate; }
+.voice-member-mini.is-streaming > span:not(.avatar) { color: #ff9a9c; }
+.voice-member-mini .mini-live { display: flex; align-items: center; gap: 4px; margin: 1px 0 0 !important; color: #ff777a; font-size: 7px; font-weight: 900; line-height: 1; animation: none; }
+.voice-member-mini .mini-live .live-dot { width: 5px; height: 5px; }
 .voice-status { display: flex; gap: 10px; padding: 11px 10px 10px 14px; border-top: 1px solid var(--border); background: #15161e; }
 .voice-status div { min-width: 0; display: grid; gap: 2px; }
 .voice-status strong { color: var(--green); font-size: 12px; }
@@ -150,6 +153,8 @@ svg { width: 20px; height: 20px; }
 .member-row small + span:last-child { margin-left: 3px; }
 .member-row svg { width: 14px; height: 14px; }
 .member-row.speaking .member-profile > span:last-child { color: #fff; animation: speaking-name .8s ease-in-out infinite alternate; }
+.member-row.is-streaming .member-profile > span:last-child { color: #ff9a9c; }
+.member-live { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; color: #ff7d80 !important; font-size: 7px; font-weight: 900; letter-spacing: .04em; }
 .member-volume { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: #777989; }
 .member-volume svg { width: 13px; height: 13px; flex: 0 0 auto; }
 .member-volume input { width: 52px; height: 14px; accent-color: var(--violet); cursor: pointer; }
@@ -223,6 +228,9 @@ svg { width: 20px; height: 20px; }
 .participant-tile strong { font-size: 13px; }
 .participant-tile.speaking { border-color: rgba(82,215,137,.75); box-shadow: 0 0 0 2px rgba(82,215,137,.16), inset 0 1px rgba(255,255,255,.04); }
 .participant-tile.speaking > strong { color: #fff; animation: speaking-name .8s ease-in-out infinite alternate; }
+.participant-tile.is-streaming { border-color: rgba(255,77,79,.24); }
+.streaming-label { display: inline-flex; align-items: center; gap: 5px; margin-top: -8px; color: #ff898b; font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+.live-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #ff4d4f; box-shadow: 0 0 0 3px rgba(255,77,79,.14), 0 0 10px rgba(255,77,79,.65); animation: live-pulse 1.35s ease-in-out infinite; }
 .tile-ping { margin-top: -8px; color: #777988; font-size: 9px; }
 .participant-badges { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 6px; }
 .host-badge, .muted-badge { height: 24px; display: inline-flex; align-items: center; gap: 4px; border-radius: 99px; padding: 0 8px; color: #fec45c; background: rgba(247,185,85,.11); font-size: 9px; font-weight: 800; text-transform: uppercase; }
@@ -235,6 +243,7 @@ svg { width: 20px; height: 20px; }
 .video-tile.is-fullscreen { position: fixed; inset: 0; z-index: 500; width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; box-shadow: none; }
 .video-tile.is-fullscreen video { object-fit: contain; }
 .video-tile > span { position: absolute; left: 9px; bottom: 9px; border-radius: 7px; background: rgba(8,9,13,.76); padding: 5px 8px; font-size: 10px; font-weight: 700; backdrop-filter: blur(8px); }
+.video-tile > span .live-dot { margin-right: 6px; width: 6px; height: 6px; }
 .video-tile:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; }
 .video-tile:fullscreen video { object-fit: contain; }
 .video-actions { position: absolute; right: 9px; top: 9px; z-index: 2; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }
@@ -242,6 +251,14 @@ svg { width: 20px; height: 20px; }
 .video-actions button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(8,9,13,.78); color: white; backdrop-filter: blur(8px); }
 .video-actions button:hover { background: rgba(125,92,255,.94); transform: translateY(-1px); }
 .video-actions svg { width: 17px; height: 17px; }
+.stream-recovery-card { min-width: 0; min-height: 150px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; padding: 20px; border: 1px solid rgba(255,77,79,.2); border-radius: 14px; background: linear-gradient(145deg, rgba(39,31,39,.96), rgba(20,21,29,.96)); text-align: center; }
+.stream-recovery-card strong { font-size: 13px; }
+.stream-recovery-card p { margin: 0; color: #9698a8; font-size: 10px; }
+.stream-recovery-card small { color: #ff9294; font-size: 9px; }
+.stream-recovery-card button { margin-top: 5px; padding: 8px 12px; border-radius: 8px; background: rgba(125,92,255,.18); color: #c9c0ff; font-size: 9px; font-weight: 800; }
+.stream-recovery-card button:hover { background: var(--violet); color: white; }
+.stream-hidden-card { border-color: rgba(125,92,255,.2); background: linear-gradient(145deg, rgba(34,32,48,.96), rgba(20,21,29,.96)); }
+.stream-hidden-card > svg { width: 24px; height: 24px; color: #9c87ff; }
 .call-footer { min-height: 88px; display: flex; justify-content: center; align-items: flex-start; gap: 9px; padding: 8px 14px 16px; }
 .quality-picker { display: flex; align-items: center; gap: 7px; margin: 7px 8px 0 0; color: #9b9dac; font-size: 10px; font-weight: 700; }
 .quality-picker select { max-width: 170px; border: 1px solid var(--border); border-radius: 8px; background: #242631; color: #e2e2ec; padding: 8px 24px 8px 9px; font-size: 10px; }
@@ -328,6 +345,7 @@ svg { width: 20px; height: 20px; }
 .toast { position: fixed; z-index: 200; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 30px)); padding: 11px 16px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: #292a35; color: #f0f0f5; box-shadow: 0 16px 50px rgba(0,0,0,.4); font-size: 12px; animation: toast-in .2s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @keyframes speaking-name { from { text-shadow: 0 0 0 rgba(82,215,137,0); } to { text-shadow: 0 0 10px rgba(82,215,137,.8); } }
+@keyframes live-pulse { 50% { opacity: .52; transform: scale(.82); box-shadow: 0 0 0 5px rgba(255,77,79,.06); } }
 @keyframes button-spin { to { transform: rotate(360deg); } }
 
 ::-webkit-scrollbar { width: 10px; }
