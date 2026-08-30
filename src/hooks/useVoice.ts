@@ -680,21 +680,30 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const polite = isPolitePeer(selfId.current, from);
       state.ignoreOffer = !polite && collision;
       if (state.ignoreOffer) return;
-      if (collision) await state.pc.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
-      await state.pc.setRemoteDescription(sdp);
-      state.ignoreOffer = false;
-      await flushPendingCandidates(state);
-      await state.pc.setLocalDescription(await state.pc.createAnswer());
-      socket.emit('rtc:answer', { target: from, sdp: state.pc.localDescription });
-      if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
+      try {
+        if (collision) await state.pc.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
+        await state.pc.setRemoteDescription(sdp);
+        state.ignoreOffer = false;
+        await flushPendingCandidates(state);
+        await state.pc.setLocalDescription(await state.pc.createAnswer());
+        socket.emit('rtc:answer', { target: from, sdp: state.pc.localDescription });
+        if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
+      } catch {
+        state.needsNegotiation = true;
+        recoverPeer(from, 'erro ao aplicar oferta', true);
+      }
     };
     const onAnswer = async ({ from, sdp }: { from: string; sdp: RTCSessionDescriptionInit }) => {
       const state = peers.current.get(from);
       if (state && state.pc.signalingState === 'have-local-offer') {
-        await state.pc.setRemoteDescription(sdp);
-        state.ignoreOffer = false;
-        await flushPendingCandidates(state);
-        if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
+        try {
+          await state.pc.setRemoteDescription(sdp);
+          state.ignoreOffer = false;
+          await flushPendingCandidates(state);
+          if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
+        } catch {
+          recoverPeer(from, 'erro ao aplicar resposta', true);
+        }
       }
     };
     const onIce = async ({ from, candidate }: { from: string; candidate: RTCIceCandidateInit }) => {
