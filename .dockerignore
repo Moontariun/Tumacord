@@ -1,0 +1,9 @@
+node_modules
+release
+dist-web
+dist-server
+data
+work
+*.AppImage
+*.tar.gz
+.git

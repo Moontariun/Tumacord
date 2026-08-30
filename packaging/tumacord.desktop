@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Tumacord
+Comment=A call da turma
+GenericName=Chat de voz e vídeo
+Exec=tumacord %U
+TryExec=tumacord
+Icon=tumacord
+Terminal=false
+Type=Application
+Categories=Network;Chat;
+StartupNotify=true
+StartupWMClass=tumacord
+Keywords=voz;vídeo;chat;call;amigos;

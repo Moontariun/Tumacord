@@ -1,0 +1,18 @@
+services:
+  tumacord-server:
+    build: .
+    container_name: tumacord-server
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4600
+      SERVER_NAME: Tumacord da Turma
+      DATA_DIR: /data
+      WEB_DIR: /app/dist-web
+    ports:
+      - "4600:4600"
+    volumes:
+      - tumacord-data:/data
+
+volumes:
+  tumacord-data:
