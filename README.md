@@ -36,10 +36,12 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/main/scripts/install-from-github.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/p2p-stream-stability-v0.1.1/scripts/install-from-github.sh | bash -s -- fix/p2p-stream-stability-v0.1.1
 ```
 
-O script baixa o código-fonte, instala as dependências, compila o aplicativo e coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`. O AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
+Este comando é específico da branch `fix/p2p-stream-stability-v0.1.1`: ele baixa e compila exatamente esse código, sem puxar a `main`. O instalador coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`; o AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
+
+Para instalar outra branch, troque os dois trechos `fix/p2p-stream-stability-v0.1.1` pelo nome dela. O segundo trecho, depois de `bash -s --`, é o ref que será compilado.
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
 
