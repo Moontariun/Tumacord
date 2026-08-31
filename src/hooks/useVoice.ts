@@ -7,6 +7,7 @@ import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate } from '../lib/rtcPolicy';
+import { activePathMetrics, adaptScreenBitrate, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
 
 export type StreamQuality = 'source' | 'ultra60' | 'ultra30' | 'high' | 'balanced' | 'data';
 
@@ -28,6 +29,12 @@ interface PeerConnectionState {
   pendingCandidates: RTCIceCandidateInit[];
   recoveryAttempts: number;
   recoveryTimer?: number;
+  screenBitrate?: number;
+  healthyScreenSamples: number;
+  lastScreenBytes?: number;
+  lastScreenPackets?: number;
+  stalledScreenSamples: number;
+  lastScreenRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
 }
 
@@ -61,12 +68,12 @@ async function tuneVoiceSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
-async function tuneScreenSender(sender: RTCRtpSender, config: (typeof QUALITY)[StreamQuality]): Promise<void> {
+async function tuneScreenSender(sender: RTCRtpSender, config: (typeof QUALITY)[StreamQuality], maxBitrate = config.bitrate): Promise<void> {
   const parameters = sender.getParameters();
   const current = parameters.encodings?.[0] ?? {};
   parameters.encodings = [{
     ...current,
-    maxBitrate: config.bitrate,
+    maxBitrate,
     maxFramerate: config.frameRate,
     priority: 'high',
     networkPriority: 'high',
@@ -196,6 +203,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
   const [quality, setQuality] = useState<StreamQuality>('balanced');
+  const qualityRef = useRef<StreamQuality>('balanced');
+  qualityRef.current = quality;
   const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[]>([]);
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
@@ -306,6 +315,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       for (const track of stream.getTracks()) {
         const sender = pc.addTrack(track, stream);
         if (kind === 'microphone') void tuneVoiceSender(sender);
+        if (kind === 'screen' && track.kind === 'video') void tuneScreenSender(sender, QUALITY[qualityRef.current]);
       }
       if (kind === 'camera' || kind === 'screen') sendStreamMeta(target, stream, kind);
     }
@@ -326,6 +336,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       needsNegotiation: false,
       pendingCandidates: [],
       recoveryAttempts: 0,
+      screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
+      healthyScreenSamples: 0,
+      stalledScreenSamples: 0,
+      lastScreenRecoveryAt: 0,
       remoteStreams: new Map(),
     };
     peers.current.set(peerId, state);
@@ -501,6 +515,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const config = QUALITY[screenQuality];
         if (sender) {
           await tuneScreenSender(sender, config);
+          state.screenBitrate = config.bitrate;
+          state.healthyScreenSamples = 0;
+          state.lastScreenBytes = undefined;
+          state.lastScreenPackets = undefined;
+          state.stalledScreenSamples = 0;
         }
       }
       void negotiate(peerId);
@@ -779,16 +798,66 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   useEffect(() => {
     if (!socket || !channelId) return;
+    let running = false;
     const publishLatency = async () => {
+      if (running) return;
+      running = true;
       const samples: number[] = [];
-      for (const state of peers.current.values()) {
-        const report = await state.pc.getStats().catch(() => null);
-        report?.forEach((stat) => {
-          if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && typeof stat.currentRoundTripTime === 'number') samples.push(stat.currentRoundTripTime * 1000);
-        });
+      const stalledPeers: string[] = [];
+      try {
+        for (const [peerId, state] of peers.current) {
+          const report = await state.pc.getStats().catch(() => null);
+          if (!report) continue;
+          const stats: RtcStatLike[] = [];
+          report.forEach((stat) => stats.push(stat as unknown as RtcStatLike));
+          const path = activePathMetrics(stats);
+          if (path.rttMs !== undefined) samples.push(path.rttMs);
+
+          const screen = localStreams.current.get('screen');
+          const screenTrack = screen?.getVideoTracks().find((track) => track.readyState === 'live');
+          const sender = screenTrack ? state.pc.getSenders().find((candidate) => candidate.track === screenTrack) : undefined;
+          if (!sender || !screenTrack) continue;
+          const senderReport = await sender.getStats().catch(() => null);
+          const senderStats: RtcStatLike[] = [];
+          senderReport?.forEach((stat) => senderStats.push(stat as unknown as RtcStatLike));
+          const outbound = outboundVideoMetrics(senderStats.length ? senderStats : stats);
+          const config = QUALITY[qualityRef.current];
+          const decision = adaptScreenBitrate({
+            targetBitrate: config.bitrate,
+            currentBitrate: state.screenBitrate ?? config.bitrate,
+            healthySamples: state.healthyScreenSamples,
+            rttMs: path.rttMs,
+            availableOutgoingBitrate: path.availableOutgoingBitrate,
+            fractionLost: outbound.fractionLost,
+          });
+          state.healthyScreenSamples = decision.healthySamples;
+          if (Math.abs(decision.bitrate - (state.screenBitrate ?? config.bitrate)) >= 50_000) {
+            state.screenBitrate = decision.bitrate;
+            await tuneScreenSender(sender, config, decision.bitrate);
+          }
+
+          if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
+            state.stalledScreenSamples = state.lastScreenBytes !== undefined
+              && state.lastScreenPackets !== undefined
+              && outbound.bytesSent <= state.lastScreenBytes
+              && outbound.packetsSent <= state.lastScreenPackets
+              ? state.stalledScreenSamples + 1
+              : 0;
+            state.lastScreenBytes = outbound.bytesSent;
+            state.lastScreenPackets = outbound.packetsSent;
+            const now = Date.now();
+            if (state.stalledScreenSamples >= 5 && now - state.lastScreenRecoveryAt >= 20_000) {
+              state.lastScreenRecoveryAt = now;
+              state.stalledScreenSamples = 0;
+              stalledPeers.push(peerId);
+            }
+          }
+        }
+        socket.emit('voice:latency', median(samples) ?? 9999);
+        for (const peerId of stalledPeers) recoverPeerRef.current(peerId, 'live local sem tráfego', true);
+      } finally {
+        running = false;
       }
-      const average = samples.length ? samples.reduce((sum, value) => sum + value, 0) / samples.length : 9999;
-      socket.emit('voice:latency', average);
     };
     void publishLatency();
     const timer = window.setInterval(() => void publishLatency(), 2000);
@@ -937,6 +1006,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
       if (!sender) continue;
       await tuneScreenSender(sender, config);
+      state.screenBitrate = config.bitrate;
+      state.healthyScreenSamples = 0;
+      state.lastScreenBytes = undefined;
+      state.lastScreenPackets = undefined;
+      state.stalledScreenSamples = 0;
     }
   };
 

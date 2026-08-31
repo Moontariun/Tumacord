@@ -36,12 +36,16 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/p2p-stream-stability-v0.1.1/scripts/install-from-github.sh | bash -s -- fix/p2p-stream-stability-v0.1.1
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/p2p-stream-stability-v0.1.1/scripts/install-p2p-stability.sh | bash
 ```
 
-Este comando é específico da branch `fix/p2p-stream-stability-v0.1.1`: ele baixa e compila exatamente esse código, sem puxar a `main`. O instalador coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`; o AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
+Este comando é específico da branch `fix/p2p-stream-stability-v0.1.1`: ele clona e compila exatamente esse código, sem puxar a `main`. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-fix-p2p-stream-stability-v0.1.1`). O instalador coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`; o AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
 
-Para instalar outra branch, troque os dois trechos `fix/p2p-stream-stability-v0.1.1` pelo nome dela. O segundo trecho, depois de `bash -s --`, é o ref que será compilado.
+Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/p2p-stream-stability-v0.1.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
+```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
 
