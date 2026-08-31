@@ -9,7 +9,7 @@ import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSo
 import { cacheAttachment, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
-import logoUrl from '../assets/tumacord-logo.svg';
+import logoUrl from '../assets/tumacord-logo.png';
 
 function App() {
   const [session, setSession] = useState<SavedSession | null>(() => loadSession());

@@ -34,7 +34,12 @@ rm -f -- "$HOME/.local/bin/tumacord" "$HOME/.local/share/applications/tumacord.d
 rm -rf -- "$install_root"
 rm -f -- "$icon_root/scalable/apps/tumacord.svg"
 for icon_size in 16 24 32 48 64 96 128 256 512; do
-  rm -f -- "$icon_root/${icon_size}x${icon_size}/apps/tumacord.png"
+  icon_dir="$icon_root/${icon_size}x${icon_size}/apps"
+  rm -f -- "$icon_dir/tumacord.png"
+  kde_icons=("$icon_dir"/tumacord-kde-*.png)
+  for kde_icon in "${kde_icons[@]}"; do
+    [[ -e "$kde_icon" ]] && rm -f -- "$kde_icon"
+  done
 done
 
 if [[ "$purge_data" == "yes" ]]; then
@@ -46,5 +51,6 @@ fi
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$icon_root" >/dev/null 2>&1 || true
+command -v xdg-icon-resource >/dev/null 2>&1 && xdg-icon-resource forceupdate --theme hicolor >/dev/null 2>&1 || true
 command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 echo "Tumacord desinstalado. O clone em Downloads não é apagado automaticamente."

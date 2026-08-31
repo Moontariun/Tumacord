@@ -51,7 +51,7 @@ icon_root="$HOME/.local/share/icons/hicolor"
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/tumacord"
 app_dir="$install_root/app"
 previous_dir="$install_root/app.previous"
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$icon_root/scalable/apps" "$install_root"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$install_root"
 next_dir="$(mktemp -d "$install_root/app.next.XXXXXX")"
 trap 'rm -rf -- "$next_dir"' EXIT
 cp -a "$compiled_app/." "$next_dir/"
@@ -62,16 +62,27 @@ fi
 mv -- "$next_dir" "$app_dir"
 trap - EXIT
 ln -sfn "$app_dir/tumacord" "$HOME/.local/bin/tumacord"
-install -m644 "$project_dir/assets/tumacord-logo.svg" "$icon_root/scalable/apps/tumacord.svg"
+rm -f -- "$icon_root/scalable/apps/tumacord.svg"
+icon_hash="$(sha256sum "$project_dir/assets/tumacord-logo.png" | cut -c1-12)"
+kde_icon_name="tumacord-kde-${icon_hash}"
 for icon_size in 16 24 32 48 64 96 128 256 512; do
-  mkdir -p "$icon_root/${icon_size}x${icon_size}/apps"
-  install -m644 "$project_dir/assets/tumacord-logo.png" "$icon_root/${icon_size}x${icon_size}/apps/tumacord.png"
+  icon_dir="$icon_root/${icon_size}x${icon_size}/apps"
+  icon_source="$project_dir/assets/icons/${icon_size}x${icon_size}/apps/tumacord.png"
+  mkdir -p "$icon_dir"
+  install -m644 "$icon_source" "$icon_dir/tumacord.png"
+  stale_kde_icons=("$icon_dir"/tumacord-kde-*.png)
+  for stale_kde_icon in "${stale_kde_icons[@]}"; do
+    [[ -e "$stale_kde_icon" ]] && rm -f -- "$stale_kde_icon"
+  done
+  install -m644 "$icon_source" "$icon_dir/${kde_icon_name}.png"
 done
 install -m644 "$project_dir/packaging/tumacord.desktop" "$HOME/.local/share/applications/tumacord.desktop"
+sed -i "s/^Icon=.*/Icon=${kde_icon_name}/" "$HOME/.local/share/applications/tumacord.desktop"
 node -p "require('./package.json').version" > "$install_root/version"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$icon_root" >/dev/null 2>&1 || true
+command -v xdg-icon-resource >/dev/null 2>&1 && xdg-icon-resource forceupdate --theme hicolor >/dev/null 2>&1 || true
 command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then

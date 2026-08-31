@@ -65,7 +65,7 @@
       "dist-web/**/*",
       "dist-server/**/*",
       "assets/tumacord-logo.png",
-      "assets/tumacord-logo.svg",
+      "assets/icons/**/*",
       "package.json"
     ],
     "linux": {
