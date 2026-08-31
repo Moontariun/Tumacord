@@ -15,6 +15,7 @@ import {
   PhoneOff,
   Paperclip,
   Plus,
+  RefreshCw,
   ScreenShare,
   Server,
   Send,
@@ -28,7 +29,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export type IconName = 'hash' | 'voice' | 'mic' | 'micOff' | 'headphones' | 'camera' | 'screen' | 'settings' | 'phoneOff' | 'plus' | 'users' | 'send' | 'host' | 'close' | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand' | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server';
+export type IconName = 'hash' | 'voice' | 'mic' | 'micOff' | 'headphones' | 'camera' | 'screen' | 'settings' | 'phoneOff' | 'plus' | 'users' | 'send' | 'host' | 'close' | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand' | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server' | 'refresh';
 
 const icons: Record<IconName, LucideIcon> = {
   hash: Hash,
@@ -42,6 +43,7 @@ const icons: Record<IconName, LucideIcon> = {
   settings: Settings,
   phoneOff: PhoneOff,
   plus: Plus,
+  refresh: RefreshCw,
   users: Users,
   send: Send,
   host: Crown,

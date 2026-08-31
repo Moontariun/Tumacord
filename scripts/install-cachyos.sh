@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'status=$?; echo "Falha ao compilar/instalar o Tumacord (linha ${BASH_LINENO[0]}, código ${status})." >&2; exit "$status"' ERR
+
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v pacman >/dev/null 2>&1; then
@@ -17,7 +19,18 @@ if ! command -v pw-link >/dev/null 2>&1 || ! command -v pw-dump >/dev/null 2>&1;
 fi
 if ((${#packages[@]})); then
   echo "Instalando dependências: ${packages[*]}"
-  sudo pacman -S --needed "${packages[@]}"
+  sudo -- pacman --sync --needed "${packages[@]}"
+  hash -r
+fi
+
+missing_commands=()
+for required_command in node npm pactl pw-link pw-dump; do
+  command -v "$required_command" >/dev/null 2>&1 || missing_commands+=("$required_command")
+done
+if ((${#missing_commands[@]})); then
+  echo "A instalação de dependências terminou, mas estes comandos ainda não apareceram: ${missing_commands[*]}" >&2
+  echo "Feche este terminal, abra outro e execute o instalador novamente." >&2
+  exit 1
 fi
 
 if ! systemctl --user is-active --quiet pipewire.service 2>/dev/null; then
@@ -25,7 +38,7 @@ if ! systemctl --user is-active --quiet pipewire.service 2>/dev/null; then
 fi
 
 cd "$project_dir"
-npm ci
+npm ci --no-audit --no-fund
 npm run package:dir
 
 compiled_app="$project_dir/release/linux-unpacked"

@@ -11,10 +11,17 @@ export interface StoredUser {
   profile?: UserProfile;
 }
 
+export interface StoredSession {
+  token: string;
+  userId: string;
+  expiresAt: number;
+}
+
 interface StoredData {
   users: StoredUser[];
   channels: Channel[];
   messages: ChatMessage[];
+  sessions: StoredSession[];
 }
 
 const initialData = (): StoredData => ({
@@ -26,6 +33,7 @@ const initialData = (): StoredData => ({
     { id: 'jogos', name: 'Jogos', type: 'voice' },
   ],
   messages: [],
+  sessions: [],
 });
 
 export class JsonStore {
@@ -48,6 +56,7 @@ export class JsonStore {
         users: parsed.users ?? [],
         channels: parsed.channels?.length ? parsed.channels : initialData().channels,
         messages: parsed.messages ?? [],
+        sessions: parsed.sessions ?? [],
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -58,9 +67,31 @@ export class JsonStore {
   get users(): readonly StoredUser[] { return this.data.users; }
   get channels(): readonly Channel[] { return this.data.channels; }
   get messages(): readonly ChatMessage[] { return this.data.messages; }
+  get sessions(): readonly StoredSession[] { return this.data.sessions; }
 
   async addUser(user: StoredUser): Promise<void> {
     this.data.users.push(user);
+    await this.save();
+  }
+
+  async addSession(session: StoredSession): Promise<void> {
+    this.data.sessions = this.data.sessions.filter((candidate) => candidate.token !== session.token && candidate.expiresAt > Date.now());
+    this.data.sessions.push(session);
+    if (this.data.sessions.length > 500) this.data.sessions.splice(0, this.data.sessions.length - 500);
+    await this.save();
+  }
+
+  async removeSession(token: string): Promise<void> {
+    const next = this.data.sessions.filter((candidate) => candidate.token !== token);
+    if (next.length === this.data.sessions.length) return;
+    this.data.sessions = next;
+    await this.save();
+  }
+
+  async pruneSessions(now = Date.now()): Promise<void> {
+    const next = this.data.sessions.filter((candidate) => candidate.expiresAt > now);
+    if (next.length === this.data.sessions.length) return;
+    this.data.sessions = next;
     await this.save();
   }
 

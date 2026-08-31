@@ -21,6 +21,8 @@ let discovery;
 let mainWindow;
 let tray;
 let pendingDesktopSource;
+let mediaFullscreenActive = false;
+let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
 
 function blockedCaptureSource(name) {
@@ -45,8 +47,8 @@ async function createWindow() {
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 760,
-    minHeight: 540,
+    minWidth: 620,
+    minHeight: 480,
     backgroundColor: '#111219',
     icon: path.join(__dirname, '../assets/tumacord-logo.png'),
     title: 'Tumacord',
@@ -61,7 +63,13 @@ async function createWindow() {
   });
   mainWindow = window;
   window.on('enter-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', true));
-  window.on('leave-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', false));
+  window.on('leave-full-screen', () => {
+    window.webContents.send('tumacord:fullscreen-changed', false);
+    if (mediaFullscreenActive) {
+      mediaFullscreenActive = false;
+      window.webContents.send('tumacord:media-fullscreen-changed', false);
+    }
+  });
 
   const target = process.env.TUMACORD_WEB_URL || `file://${path.join(__dirname, '../dist-web/index.html')}`;
   await window.loadURL(target);
@@ -128,6 +136,24 @@ app.whenReady().then(async () => {
     return next;
   });
   ipcMain.handle('tumacord:is-fullscreen', () => Boolean(mainWindow?.isFullScreen()));
+  ipcMain.handle('tumacord:begin-media-fullscreen', () => {
+    if (!mainWindow) return false;
+    if (!mediaFullscreenActive) {
+      mediaFullscreenWasActive = mainWindow.isFullScreen();
+      mediaFullscreenActive = true;
+      if (!mediaFullscreenWasActive) mainWindow.setFullScreen(true);
+      mainWindow.webContents.send('tumacord:media-fullscreen-changed', true);
+    }
+    return true;
+  });
+  ipcMain.handle('tumacord:end-media-fullscreen', () => {
+    if (!mainWindow) return false;
+    const restoreWindow = mediaFullscreenActive && !mediaFullscreenWasActive;
+    mediaFullscreenActive = false;
+    mainWindow.webContents.send('tumacord:media-fullscreen-changed', false);
+    if (restoreWindow && mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    return false;
+  });
 
   // getDisplayMedia é o caminho do Chromium que diferencia áudio da janela
   // de áudio geral do sistema. O renderer escolhe a fonte antes de chamar a

@@ -14,6 +14,10 @@ ENV NODE_ENV=production \
     WEB_DIR=/app/dist-web
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/dist-web ./dist-web
+RUN mkdir -p /data && chown -R node:node /app /data
 VOLUME ["/data"]
 EXPOSE 4600
+USER node
+HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4600/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["node", "dist-server/server-bundle.cjs"]

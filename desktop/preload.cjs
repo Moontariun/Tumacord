@@ -27,4 +27,11 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     ipcRenderer.on('tumacord:fullscreen-changed', handler);
     return () => ipcRenderer.removeListener('tumacord:fullscreen-changed', handler);
   },
+  beginMediaFullscreen: () => ipcRenderer.invoke('tumacord:begin-media-fullscreen'),
+  endMediaFullscreen: () => ipcRenderer.invoke('tumacord:end-media-fullscreen'),
+  onMediaFullscreenChanged: (listener) => {
+    const handler = (_event, fullscreen) => listener(Boolean(fullscreen));
+    ipcRenderer.on('tumacord:media-fullscreen-changed', handler);
+    return () => ipcRenderer.removeListener('tumacord:media-fullscreen-changed', handler);
+  },
 });

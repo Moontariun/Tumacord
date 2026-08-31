@@ -2,6 +2,7 @@ services:
   tumacord-server:
     build: .
     container_name: tumacord-server
+    init: true
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -9,10 +10,16 @@ services:
       SERVER_NAME: Tumacord da Turma
       DATA_DIR: /data
       WEB_DIR: /app/dist-web
+      SESSION_TTL_DAYS: 30
     ports:
       - "4600:4600"
     volumes:
       - tumacord-data:/data
+    stop_grace_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   tumacord-data:

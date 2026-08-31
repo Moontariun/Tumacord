@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'status=$?; echo "Falha no instalador do Tumacord (linha ${BASH_LINENO[0]}, código ${status})." >&2; exit "$status"' ERR
+
 repository="Moontariun/Tumacord"
 repository_url="https://github.com/${repository}.git"
 source_ref="${1:-${TUMACORD_REF:-main}}"
@@ -8,12 +10,17 @@ source_ref="${1:-${TUMACORD_REF:-main}}"
 if ! command -v git >/dev/null 2>&1; then
   if command -v pacman >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
     echo "O Git não está instalado; instalando a dependência…"
-    sudo pacman -S --needed git
+    sudo -- pacman --sync --needed git
+    hash -r
   else
     echo "Dependência ausente: git" >&2
     echo "No CachyOS: sudo pacman -S --needed git" >&2
     exit 1
   fi
+fi
+if ! command -v git >/dev/null 2>&1; then
+  echo "O Git continuou indisponível depois da instalação. Abra um terminal novo e tente novamente." >&2
+  exit 1
 fi
 
 downloads_directory=""

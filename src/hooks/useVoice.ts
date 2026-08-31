@@ -207,6 +207,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   qualityRef.current = quality;
   const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[]>([]);
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
+  const [showShareSetup, setShowShareSetup] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [peerHealth, setPeerHealth] = useState<Record<string, PeerHealth>>({});
   const peers = useRef(new Map<string, PeerConnectionState>());
@@ -222,6 +223,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const recoveryCooldown = useRef(new Map<string, number>());
   const missingScreenSince = useRef(new Map<string, number>());
   const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
+  const pendingShareOptions = useRef<{ includeAudio: boolean; quality: StreamQuality }>({ includeAudio: true, quality: 'balanced' });
   const screenAudioEndedRef = useRef<(endedTrack: MediaStreamTrack) => void>(() => undefined);
 
   const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
@@ -440,6 +442,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }, [createPeer, refreshRemote, socket, updatePeerHealth]);
   recoverPeerRef.current = recoverPeer;
 
+  const recoverAllPeers = useCallback(() => {
+    const targets = membersRef.current.filter((member) => member.socketId !== selfId.current);
+    for (const member of targets) recoverPeer(member.socketId, 'reconexão manual da malha P2P', true);
+    return targets.length;
+  }, [recoverPeer]);
+
   const recoverScreenAudio = useCallback((endedTrack: MediaStreamTrack) => {
     const recovery = screenAudioRecovery.current;
     const screen = localStreams.current.get('screen');
@@ -497,11 +505,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
       screenAudioRecovery.current.timer = undefined;
       setScreenOn(false);
+      setShowShareSetup(false);
       setShowSourcePicker(false);
       publishState({ screen: false });
       await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     }
-    playSound('stream');
+    playSound(kind === 'screen' ? 'streamStop' : 'notification');
   }, [negotiate, publishState]);
 
   const attachStream = useCallback(async (kind: 'camera' | 'screen', stream: MediaStream, screenQuality: StreamQuality = quality) => {
@@ -537,7 +546,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setShowSourcePicker(false);
       publishState({ screen: true });
     }
-    playSound('stream');
+    playSound(kind === 'screen' ? 'streamStart' : 'notification');
   }, [negotiate, publishState, quality, sendStreamMeta, stopStream]);
 
   const ensureMicrophone = useCallback(async () => {
@@ -666,8 +675,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   useEffect(() => {
     if (!socket) return;
     const onMembers = (next: VoiceState[]) => {
+      const previous = membersRef.current;
+      const remoteStreamStarted = next.some((member) => member.socketId !== selfId.current && member.screen && !previous.some((candidate) => candidate.id === member.id && candidate.screen));
+      const remoteStreamStopped = previous.some((member) => member.socketId !== selfId.current && member.screen && !next.some((candidate) => candidate.id === member.id && candidate.screen));
       membersRef.current = next;
       setMembers(next);
+      if (remoteStreamStarted) playSound('streamStart');
+      else if (remoteStreamStopped) playSound('streamStop');
     };
     const onPeerLeft = (peerId: string) => {
       const peer = peers.current.get(peerId);
@@ -928,28 +942,42 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   const requestScreenShare = async () => {
     if (screenOn) return stopStream('screen');
+    setShowShareSetup(true);
+  };
+
+  const prepareScreenShare = async (includeAudio: boolean, selectedQuality: StreamQuality) => {
+    pendingShareOptions.current = { includeAudio, quality: selectedQuality };
+    setQuality(selectedQuality);
     if (window.tumacordDesktop) {
-      const sources = await window.tumacordDesktop.getSources();
-      setDesktopSources(sources);
-      setShowSourcePicker(true);
+      try {
+        const sources = await window.tumacordDesktop.getSources();
+        if (!sources.length) throw new Error('Nenhuma tela ou janela foi encontrada.');
+        setDesktopSources(sources);
+        setShowShareSetup(false);
+        setShowSourcePicker(true);
+      } catch (error) {
+        onError(error instanceof Error ? error.message : 'Não consegui listar as telas disponíveis.');
+      }
       return;
     }
     try {
-      const config = QUALITY[quality];
+      const config = QUALITY[selectedQuality];
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } },
-        audio: true,
+        audio: includeAudio,
         selfBrowserSurface: 'exclude',
-        systemAudio: 'include',
+        systemAudio: includeAudio ? 'include' : 'exclude',
         windowAudio: 'window',
       } as DisplayMediaStreamOptions);
-      await attachStream('screen', stream, quality);
+      setShowShareSetup(false);
+      await attachStream('screen', stream, selectedQuality);
     } catch (error) {
       if ((error as DOMException).name !== 'NotAllowedError') onError('Não consegui compartilhar a tela.');
     }
   };
 
-  const shareDesktopSource = async (sourceId: string, includeAudio: boolean, selectedQuality: StreamQuality, _sourceKind: DesktopSource['kind']) => {
+  const shareDesktopSource = async (sourceId: string, _sourceKind: DesktopSource['kind']) => {
+    const { includeAudio, quality: selectedQuality } = pendingShareOptions.current;
     setQuality(selectedQuality);
     const config = QUALITY[selectedQuality];
     let routedScreenAudio = false;
@@ -1016,10 +1044,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   return {
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
-    peerHealth, recoverPeer,
+    peerHealth, recoverPeer, recoverAllPeers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
-    shareDesktopSource,
+    showShareSetup, setShowShareSetup, prepareScreenShare, shareDesktopSource,
     localCamera: localStreams.current.get('camera'),
     localScreen: localStreams.current.get('screen'),
     user,

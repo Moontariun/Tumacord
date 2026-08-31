@@ -11,6 +11,7 @@ export interface SavedSession {
   password?: string;
   resumeChannelId?: string;
   connectionMode?: 'p2p' | 'server';
+  rememberMe?: boolean;
 }
 
 export function defaultServerUrl(): string {
@@ -20,23 +21,30 @@ export function defaultServerUrl(): string {
 
 export function loadSession(): SavedSession | null {
   try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null') as SavedSession | null;
+    const raw = localStorage.getItem(SESSION_KEY) ?? sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as SavedSession;
+    return { ...saved, rememberMe: saved.rememberMe ?? Boolean(localStorage.getItem(SESSION_KEY)) };
   } catch {
     return null;
   }
 }
 
 export function saveSession(session: SavedSession): void {
-  const { password: _password, resumeChannelId: _resumeChannelId, ...safeSession } = session;
-  localStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+  const persistent = session.rememberMe ?? true;
+  const target = persistent ? localStorage : sessionStorage;
+  const other = persistent ? sessionStorage : localStorage;
+  target.setItem(SESSION_KEY, JSON.stringify({ ...session, rememberMe: persistent }));
+  other.removeItem(SESSION_KEY);
   localStorage.setItem(SERVER_KEY, session.serverUrl);
 }
 
 export function clearSession(): void {
   localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
 }
 
-async function authenticate(path: 'login' | 'register', serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p'): Promise<SavedSession> {
+async function authenticate(path: 'login' | 'register', serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
   const normalizedUrl = serverUrl.trim().replace(/\/$/, '');
   const response = await fetch(`${normalizedUrl}/api/auth/${path}`, {
     method: 'POST',
@@ -45,15 +53,18 @@ async function authenticate(path: 'login' | 'register', serverUrl: string, usern
   });
   const body = await response.json() as SessionResponse & { error?: string };
   if (!response.ok) throw new Error(body.error || 'Não foi possível entrar.');
-  const saved = { serverUrl: normalizedUrl, token: body.token, user: body.user, serverName: body.serverName, password, resumeChannelId, connectionMode };
+  // A senha só precisa acompanhar a sessão no modo dinâmico: ela permite
+  // autenticar automaticamente no novo host durante a troca P2P. No servidor
+  // dedicado o token persistente é suficiente, então não guardamos a senha.
+  const saved = { serverUrl: normalizedUrl, token: body.token, user: body.user, serverName: body.serverName, password: connectionMode === 'p2p' ? password : undefined, resumeChannelId, connectionMode, rememberMe };
   saveSession(saved);
   return saved;
 }
 
-export function login(serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p'): Promise<SavedSession> {
-  return authenticate('login', serverUrl, username, password, resumeChannelId, allowCreate, connectionMode);
+export function login(serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
+  return authenticate('login', serverUrl, username, password, resumeChannelId, allowCreate, connectionMode, rememberMe);
 }
 
-export function register(serverUrl: string, username: string, password: string, resumeChannelId?: string, connectionMode: 'p2p' | 'server' = 'p2p'): Promise<SavedSession> {
-  return authenticate('register', serverUrl, username, password, resumeChannelId, false, connectionMode);
+export function register(serverUrl: string, username: string, password: string, resumeChannelId?: string, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
+  return authenticate('register', serverUrl, username, password, resumeChannelId, false, connectionMode, rememberMe);
 }

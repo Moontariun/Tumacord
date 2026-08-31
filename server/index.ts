@@ -67,12 +67,14 @@ const profileSchema = z.object({
 });
 
 app.get('/api/health', (_request, response) => {
-  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.1.1' });
+  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.2.0' });
 });
 
-function issueSession(user: StoredUser): string {
+async function issueSession(user: StoredUser): Promise<string> {
   const token = createToken();
-  sessions.set(token, { userId: user.id, expiresAt: Date.now() + sessionTtl });
+  const session = { userId: user.id, expiresAt: Date.now() + sessionTtl };
+  sessions.set(token, session);
+  await store.addSession({ token, ...session });
   return token;
 }
 
@@ -95,7 +97,7 @@ app.post('/api/auth/register', async (request, response) => {
     createdAt: new Date().toISOString(),
   } satisfies StoredUser;
   await store.addUser(user);
-  response.status(201).json({ token: issueSession(user), user: publicUser(user), serverName, created: true });
+  response.status(201).json({ token: await issueSession(user), user: publicUser(user), serverName, created: true });
 });
 
 app.post('/api/auth/login', async (request, response) => {
@@ -124,7 +126,7 @@ app.post('/api/auth/login', async (request, response) => {
     response.status(401).json({ error: 'Senha incorreta.' });
     return;
   }
-  response.json({ token: issueSession(user), user: publicUser(user), serverName, created: false });
+  response.json({ token: await issueSession(user), user: publicUser(user), serverName, created: false });
 });
 
 function publicUser(user: StoredUser): PublicUser {
@@ -136,6 +138,7 @@ function authenticatedUser(token: unknown): PublicUser | undefined {
   const session = sessions.get(token);
   if (!session || session.expiresAt < Date.now()) {
     sessions.delete(token);
+    void store.removeSession(token);
     return undefined;
   }
   const user = store.users.find((candidate) => candidate.id === session.userId);
@@ -456,7 +459,9 @@ if (existsSync(webDirectory)) {
   });
 }
 
-storeReady.then(() => {
+storeReady.then(async () => {
+  await store.pruneSessions();
+  for (const session of store.sessions) sessions.set(session.token, { userId: session.userId, expiresAt: session.expiresAt });
   httpServer.listen(port, host, () => {
     console.log(`🍅 ${serverName} em http://${host}:${port}`);
   });
