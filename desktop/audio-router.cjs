@@ -11,14 +11,20 @@ async function pactl(args) {
   return stdout.trim();
 }
 
-async function pactlJson(subject) {
-  const output = await pactl(['-f', 'json', 'list', subject]);
-  return output ? JSON.parse(output) : [];
-}
-
 async function pipewireGraph() {
   const { stdout = '' } = await execFileAsync('pw-dump', [], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   return JSON.parse(stdout);
+}
+
+function staleModuleIds(output) {
+  return String(output ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.split(/\s+/))
+    .filter((columns) => columns.slice(1).join(' ').includes(BUS_NAME) || columns.slice(1).join(' ').includes(SOURCE_NAME))
+    .map(([id]) => id)
+    .filter(Boolean);
 }
 
 function isCallAudio(input) {
@@ -67,12 +73,13 @@ class ScreenAudioRouter {
   }
 
   async cleanupStaleModules() {
-    const modules = await pactlJson('modules').catch(() => []);
-    const stale = modules.filter((module) => {
-      const args = String(module.argument ?? module.args ?? '');
-      return args.includes(BUS_NAME) || args.includes(SOURCE_NAME);
-    });
-    for (const module of stale.reverse()) await pactl(['unload-module', String(module.index)]).catch(() => undefined);
+    // pipewire-pulse 1.6 não inclui `index` no JSON de módulos. O código
+    // anterior tentava descarregar `undefined`, deixando fontes antigas com
+    // o mesmo nome. A captura podia então abrir uma dessas fontes suspensas
+    // e a live ficava muda. O formato short preserva o ID real do módulo.
+    const modules = await pactl(['list', 'short', 'modules']).catch(() => '');
+    const stale = staleModuleIds(modules);
+    for (const moduleId of stale.reverse()) await pactl(['unload-module', moduleId]).catch(() => undefined);
   }
 
   async prepare() {
@@ -162,4 +169,4 @@ class ScreenAudioRouter {
   }
 }
 
-module.exports = { ScreenAudioRouter, activePipewireLinks, isCallAudio };
+module.exports = { ScreenAudioRouter, activePipewireLinks, isCallAudio, staleModuleIds };

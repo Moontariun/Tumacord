@@ -328,6 +328,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
   const currentVoiceChannel = snapshot.channels.find((channel) => channel.id === voice.channelId);
   const selectedMembers = selectedChannel?.type === 'voice' ? snapshot.voiceRooms[selectedChannel.id] ?? [] : [];
+  const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
 
   return <div className="app-shell">
     <nav className="server-rail" aria-label="Servidor Tumacord">
@@ -374,13 +375,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         {selectedChannel?.type === 'voice'
           ? <CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} setUserVolume={setUserVolume} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} />
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
-        {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={selectedMembers} userVolumes={userVolumes} setUserVolume={setUserVolume} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
+        {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} volumeMembers={voice.members} currentUserId={session.user.id} userVolumes={userVolumes} setUserVolume={setUserVolume} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
-    {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
-    {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
+    {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
+    {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
     {profileUser && <ProfileModal user={snapshot.onlineUsers.find((candidate) => candidate.id === profileUser.id) ?? (profileUser.id === session.user.id ? session.user : profileUser)} own={profileUser.id === session.user.id} serverUrl={session.serverUrl} token={session.token} onClose={() => setProfileUser(null)} onSaved={(updated) => { const nextSession = { ...session, user: updated }; saveSession(nextSession); onSessionChange(nextSession); setProfileUser(updated); showToast('Perfil atualizado.'); }} />}
     {toast && <div className="toast">{toast}</div>}
   </div>;
@@ -679,9 +680,41 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
   return audioOnly ? <audio ref={ref as React.RefObject<HTMLAudioElement>} autoPlay /> : <video ref={ref as React.RefObject<HTMLVideoElement>} autoPlay playsInline />;
 }
 
-function MemberList({ users, voiceMembers, userVolumes, setUserVolume, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; userVolumes: Record<string, number>; setUserVolume: (userId: string, volume: number) => void; serverUrl: string; onProfile: (user: PublicUser) => void }) {
-  const hostIds = useMemo(() => new Set(voiceMembers.filter((member) => member.isHost).map((member) => member.id)), [voiceMembers]);
-  return <aside className="member-list"><header><h3>Online</h3><span>{users.length}</span></header><div className="member-list-scroll">{users.map((user) => { const voice = voiceMembers.find((member) => member.id === user.id); const volume = Math.max(0, Math.min(2, userVolumes[user.id] ?? 1)); return <div className={`member-row ${voice?.speaking ? 'speaking' : ''} ${voice?.screen ? 'is-streaming' : ''}`} key={user.id}><button className="member-profile" onClick={() => onProfile(user)}><Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online /><span className="member-copy"><strong>{user.username}</strong><small>{voice ? (voice.pingMs < 9999 ? `Na call · ${voice.pingMs} ms` : 'Na call') : 'Disponível'}</small></span></button><span className="member-badges">{voice?.screen && <span className="member-live"><span className="live-dot" /> AO VIVO</span>}{hostIds.has(user.id) && <span className="member-host" title="Host da call"><Icon name="host" /></span>}</span>{voice && <label className="member-volume" title={`Volume de ${user.username}: ${Math.round(volume * 100)}%`}><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => setUserVolume(user.id, Number(event.target.value))} aria-label={`Volume de ${user.username} (até 200%)`} /><output>{Math.round(volume * 100)}%</output></label>}</div>; })}</div></aside>;
+function MemberList({ users, voiceMembers, volumeMembers, currentUserId, userVolumes, setUserVolume, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; volumeMembers: VoiceState[]; currentUserId: string; userVolumes: Record<string, number>; setUserVolume: (userId: string, volume: number) => void; serverUrl: string; onProfile: (user: PublicUser) => void }) {
+  const voiceByUser = useMemo(() => new Map(voiceMembers.map((member) => [member.id, member])), [voiceMembers]);
+  const audibleUsers = useMemo(() => new Set(volumeMembers.map((member) => member.id)), [volumeMembers]);
+  const inCall = users.filter((user) => voiceByUser.has(user.id));
+  const available = users.filter((user) => !voiceByUser.has(user.id));
+  const renderMember = (user: PublicUser) => {
+    const voice = voiceByUser.get(user.id);
+    const volume = Math.max(0, Math.min(2, userVolumes[user.id] ?? 1));
+    const self = user.id === currentUserId;
+    return <article className={`member-row ${voice?.speaking ? 'speaking' : ''} ${voice?.screen ? 'is-streaming' : ''} ${voice ? 'in-call' : 'available'}`} key={user.id}>
+      <div className="member-row-main">
+        <button className="member-profile" onClick={() => onProfile(user)}>
+          <Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online />
+          <span className="member-copy">
+            <span className="member-name"><strong>{user.username}</strong>{self && <em>Você</em>}</span>
+            <small><i className={voice ? 'voice-presence' : ''} />{voice ? (voice.pingMs < 9999 ? `Na chamada · ${voice.pingMs} ms` : 'Na chamada') : 'Online agora'}</small>
+          </span>
+        </button>
+        <span className="member-badges">
+          {voice?.screen && <span className="member-live"><span className="live-dot" /> AO VIVO</span>}
+          {voice?.isHost && <span className="member-host" title="Host da chamada"><Icon name="host" /></span>}
+        </span>
+      </div>
+      {voice && !self && audibleUsers.has(user.id) && <div className="member-row-audio"><span>Volume</span><label className="member-volume" title={`Volume de ${user.username}: ${Math.round(volume * 100)}%`}><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => setUserVolume(user.id, Number(event.target.value))} aria-label={`Volume de ${user.username} (até 200%)`} /><output>{Math.round(volume * 100)}%</output></label></div>}
+      {voice && self && <div className="member-self-state"><Icon name={voice.muted ? 'micOff' : 'mic'} /><span>{voice.muted ? 'Seu microfone está silenciado' : 'Você está na chamada'}</span></div>}
+    </article>;
+  };
+  return <aside className="member-list">
+    <header><div><small>Presença</small><h3>Pessoas online</h3></div><span title={`${users.length} online`}>{users.length}</span></header>
+    <div className="member-list-scroll">
+      {inCall.length > 0 && <section className="member-section"><div className="member-section-title"><span>Na chamada</span><b>{inCall.length}</b></div>{inCall.map(renderMember)}</section>}
+      {available.length > 0 && <section className="member-section"><div className="member-section-title"><span>Disponíveis</span><b>{available.length}</b></div>{available.map(renderMember)}</section>}
+      {!users.length && <div className="member-list-empty"><Icon name="users" /><strong>Ninguém por aqui</strong><span>Seus amigos aparecem quando entram.</span></div>}
+    </div>
+  </aside>;
 }
 
 function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user: PublicUser; own: boolean; serverUrl: string; token: string; onClose: () => void; onSaved: (user: PublicUser) => void }) {
@@ -756,14 +789,14 @@ function DeviceSelect({ label, value, devices, onChange }: { label: string; valu
   return <label className="setting-label">{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Padrão do sistema</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${label} ${index + 1}`}</option>)}</select></label>;
 }
 
-function ShareSetupModal({ initialQuality, onContinue, onClose }: { initialQuality: StreamQuality; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {
+function ShareSetupModal({ initialQuality, busy, onContinue, onClose }: { initialQuality: StreamQuality; busy: boolean; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {
   const [includeAudio, setIncludeAudio] = useState(true);
   const [selectedQuality, setSelectedQuality] = useState<StreamQuality>(initialQuality);
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="share-setup"><button className="modal-close" onClick={onClose}><Icon name="close" /></button><span className="modal-eyebrow">Nova transmissão</span><h2>Como você quer transmitir?</h2><p>Defina a qualidade e o áudio primeiro. A tela ou janela será escolhida na próxima etapa.</p><div className="quality-cards">{qualityOptions.map(([value, option]) => <button key={value} className={selectedQuality === value ? 'selected' : ''} onClick={() => setSelectedQuality(value)}><Icon name="screen" /><span><strong>{option.label.split(' · ')[0]}</strong><small>{option.label.split(' · ')[1] ?? 'Qualidade original'}</small></span></button>)}</div><label className="share-audio-card"><input type="checkbox" checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} /><span><strong>Compartilhar áudio</strong><small>Inclui o som do sistema, mantendo Tumacord e Discord fora da live.</small></span></label><button className="primary-button share-continue" onClick={() => onContinue(includeAudio, selectedQuality)}>Continuar para escolher a tela <Icon name="chevron" /></button></div></div>;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="share-setup"><button className="modal-close" disabled={busy} onClick={onClose}><Icon name="close" /></button><span className="modal-eyebrow">Nova transmissão</span><h2>Como você quer transmitir?</h2><p>Defina a qualidade e o áudio primeiro. A tela ou janela será escolhida uma única vez na próxima etapa.</p><div className="quality-cards">{qualityOptions.map(([value, option]) => <button key={value} disabled={busy} className={selectedQuality === value ? 'selected' : ''} onClick={() => setSelectedQuality(value)}><Icon name="screen" /><span><strong>{option.label.split(' · ')[0]}</strong><small>{option.label.split(' · ')[1] ?? 'Qualidade original'}</small></span></button>)}</div><label className="share-audio-card"><input type="checkbox" disabled={busy} checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} /><span><strong>Compartilhar áudio</strong><small>Inclui o som do sistema, mantendo Tumacord e Discord fora da live.</small></span></label><button className="primary-button share-continue" disabled={busy} onClick={() => onContinue(includeAudio, selectedQuality)}>{busy ? 'Abrindo o seletor…' : 'Continuar para escolher a tela'} {!busy && <Icon name="chevron" />}</button></div></div>;
 }
 
-function SourcePicker({ sources, onSelect, onBack, onClose }: { sources: DesktopSource[]; onSelect: (id: string, kind: DesktopSource['kind']) => void; onBack: () => void; onClose: () => void }) {
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="source-picker"><header><div><span className="modal-eyebrow">Nova transmissão</span><h2>Escolha uma tela ou janela</h2><p>A transmissão começa imediatamente após a escolha.</p></div><div className="source-header-actions"><button onClick={onBack}>Voltar</button><button className="icon-button" onClick={onClose}><Icon name="close" /></button></div></header><div className="source-grid">{sources.map((source) => <button key={source.id} onClick={() => onSelect(source.id, source.kind)}><span className="source-thumbnail"><img src={source.thumbnail} alt="" />{source.kind === 'screen' && <small>TELA INTEIRA</small>}</span><strong>{source.name}</strong></button>)}</div></div></div>;
+function SourcePicker({ sources, busy, onSelect, onBack, onClose }: { sources: DesktopSource[]; busy: boolean; onSelect: (id: string, kind: DesktopSource['kind']) => void; onBack: () => void; onClose: () => void }) {
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="source-picker"><header><div><span className="modal-eyebrow">Nova transmissão</span><h2>Escolha uma tela ou janela</h2><p>Um clique inicia a transmissão; os demais cartões ficam bloqueados enquanto a captura abre.</p></div><div className="source-header-actions"><button disabled={busy} onClick={onBack}>Voltar</button><button className="icon-button" disabled={busy} onClick={onClose}><Icon name="close" /></button></div></header><div className="source-grid">{sources.map((source) => <button key={source.id} disabled={busy} onClick={() => onSelect(source.id, source.kind)}><span className="source-thumbnail"><img src={source.thumbnail} alt="" />{source.kind === 'screen' && <small>TELA INTEIRA</small>}</span><strong>{source.name}</strong></button>)}</div></div></div>;
 }
 
 function Avatar({ name, profile, serverUrl = '', small, large, online, imageOverride }: { name: string; profile?: UserProfile; serverUrl?: string; small?: boolean; large?: boolean; online?: boolean; imageOverride?: string }) {

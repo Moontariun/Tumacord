@@ -3,9 +3,10 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { activePipewireLinks, isCallAudio } = require('../desktop/audio-router.cjs') as {
+const { activePipewireLinks, isCallAudio, staleModuleIds } = require('../desktop/audio-router.cjs') as {
   activePipewireLinks: (graph: unknown[]) => Set<string>;
   isCallAudio: (input: unknown) => boolean;
+  staleModuleIds: (output: string) => string[];
 };
 
 test('mantém Discord fora do barramento da transmissão', () => {
@@ -27,4 +28,13 @@ test('usa os links ativos do grafo PipeWire em vez de confiar em cache antigo', 
   ]);
   assert.deepEqual([...links], ['42:77']);
   assert.equal(links.has('12:77'), false);
+});
+
+test('remove módulos antigos usando os IDs reais do formato short do PipeWire', () => {
+  const output = [
+    '536870916\tmodule-null-sink\tsink_name=tumacord_stream_bus rate=48000',
+    '536870917\tmodule-remap-source\tmaster=tumacord_stream_bus.monitor source_name=tumacord_stream_source',
+    '536870920\tmodule-always-sink\t',
+  ].join('\n');
+  assert.deepEqual(staleModuleIds(output), ['536870916', '536870917']);
 });

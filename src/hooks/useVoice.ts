@@ -170,13 +170,13 @@ async function captureIsolatedScreenAudio(deviceName: string): Promise<MediaStre
   let device: MediaDeviceInfo | undefined;
   // PipeWire notifica a entrada virtual de forma assíncrona. Estas tentativas
   // curtas evitam obrigar o usuário a fechar e abrir o seletor novamente.
-  for (let attempt = 0; attempt < 8 && !device; attempt += 1) {
+  for (let attempt = 0; attempt < 24 && !device; attempt += 1) {
     const devices = await navigator.mediaDevices.enumerateDevices();
     device = devices.find((candidate) => candidate.kind === 'audioinput' && (
       normalizedDeviceName(candidate.label).includes(wanted)
       || normalizedDeviceName(candidate.label).includes('tumacordstreamaudio')
     ));
-    if (!device) await new Promise((resolve) => window.setTimeout(resolve, 100));
+    if (!device) await new Promise((resolve) => window.setTimeout(resolve, 125));
   }
   if (!device) throw new Error('A fonte virtual de áudio do Tumacord não apareceu no PipeWire.');
   return navigator.mediaDevices.getUserMedia({
@@ -209,6 +209,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
   const [showShareSetup, setShowShareSetup] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
   const [peerHealth, setPeerHealth] = useState<Record<string, PeerHealth>>({});
   const peers = useRef(new Map<string, PeerConnectionState>());
   const localStreams = useRef(new Map<'microphone' | 'camera' | 'screen', MediaStream>());
@@ -224,6 +225,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const missingScreenSince = useRef(new Map<string, number>());
   const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
   const pendingShareOptions = useRef<{ includeAudio: boolean; quality: StreamQuality }>({ includeAudio: true, quality: 'balanced' });
+  const shareListing = useRef(false);
+  const shareCapture = useRef(false);
   const screenAudioEndedRef = useRef<(endedTrack: MediaStreamTrack) => void>(() => undefined);
 
   const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
@@ -942,25 +945,29 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   const requestScreenShare = async () => {
     if (screenOn) return stopStream('screen');
+    if (shareListing.current || shareCapture.current) return;
     setShowShareSetup(true);
   };
 
   const prepareScreenShare = async (includeAudio: boolean, selectedQuality: StreamQuality) => {
+    if (shareListing.current || shareCapture.current) return;
+    shareListing.current = true;
+    setShareBusy(true);
     pendingShareOptions.current = { includeAudio, quality: selectedQuality };
     setQuality(selectedQuality);
-    if (window.tumacordDesktop) {
-      try {
+    try {
+      if (window.tumacordDesktop) {
         const sources = await window.tumacordDesktop.getSources();
         if (!sources.length) throw new Error('Nenhuma tela ou janela foi encontrada.');
         setDesktopSources(sources);
         setShowShareSetup(false);
-        setShowSourcePicker(true);
-      } catch (error) {
-        onError(error instanceof Error ? error.message : 'Não consegui listar as telas disponíveis.');
+        // No Wayland/PipeWire, getSources já abre o seletor do sistema e
+        // devolve somente a fonte escolhida. Começar direto evita pedir a
+        // mesma tela novamente em um segundo seletor.
+        if (sources.length === 1) await shareDesktopSource(sources[0].id, sources[0].kind);
+        else setShowSourcePicker(true);
+        return;
       }
-      return;
-    }
-    try {
       const config = QUALITY[selectedQuality];
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } },
@@ -972,11 +979,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setShowShareSetup(false);
       await attachStream('screen', stream, selectedQuality);
     } catch (error) {
-      if ((error as DOMException).name !== 'NotAllowedError') onError('Não consegui compartilhar a tela.');
+      if ((error as DOMException).name !== 'NotAllowedError') onError(error instanceof Error ? error.message : 'Não consegui compartilhar a tela.');
+    } finally {
+      shareListing.current = false;
+      if (!shareCapture.current) setShareBusy(false);
     }
   };
 
-  const shareDesktopSource = async (sourceId: string, _sourceKind: DesktopSource['kind']) => {
+  async function shareDesktopSource(sourceId: string, _sourceKind: DesktopSource['kind']): Promise<void> {
+    if (shareCapture.current) return;
+    shareCapture.current = true;
+    setShareBusy(true);
+    setShowShareSetup(false);
+    setShowSourcePicker(false);
     const { includeAudio, quality: selectedQuality } = pendingShareOptions.current;
     setQuality(selectedQuality);
     const config = QUALITY[selectedQuality];
@@ -998,16 +1013,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           throw new Error(prepared.error ?? 'PipeWire indisponível');
         }
       }
-      // O vídeo e o áudio são capturados separadamente no Linux. Assim o
-      // portal só cuida da imagem, enquanto o som vem da fonte virtual já
-      // filtrada que exclui Tumacord/Discord.
-      if (window.tumacordDesktop) window.tumacordDesktop.selectDesktopSource(sourceId, false);
-      capturedDisplay = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } },
+      // A fonte já foi escolhida pelo usuário. chromeMediaSourceId captura
+      // diretamente essa escolha e não abre outro portal do PipeWire.
+      capturedDisplay = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        selfBrowserSurface: 'exclude',
-        systemAudio: 'exclude',
-      } as DisplayMediaStreamOptions);
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            maxWidth: config.width,
+            maxHeight: config.height,
+            maxFrameRate: config.frameRate,
+          },
+        } as unknown as MediaTrackConstraints,
+      });
       const stream = new MediaStream([
         ...capturedDisplay.getVideoTracks(),
         ...(capturedAudio?.getAudioTracks() ?? []),
@@ -1020,8 +1039,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
       screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
       onError(`Não consegui iniciar a transmissão${includeAudio ? ' com áudio isolado' : ''}: ${error instanceof Error ? error.message : 'captura indisponível'}`);
+      if (desktopSources.length > 1) setShowSourcePicker(true);
+      else setShowShareSetup(true);
+    } finally {
+      shareCapture.current = false;
+      if (!shareListing.current) setShareBusy(false);
     }
-  };
+  }
 
   const changeQuality = async (next: StreamQuality) => {
     setQuality(next);
@@ -1047,7 +1071,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     peerHealth, recoverPeer, recoverAllPeers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
-    showShareSetup, setShowShareSetup, prepareScreenShare, shareDesktopSource,
+    showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource,
     localCamera: localStreams.current.get('camera'),
     localScreen: localStreams.current.get('screen'),
     user,
