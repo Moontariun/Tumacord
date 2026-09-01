@@ -6,8 +6,8 @@ import gtcrnWasmPath from '@sapphi-red/web-noise-suppressor/gtcrn.wasm?url';
 import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
-import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate } from '../lib/rtcPolicy';
-import { activePathMetrics, adaptScreenBitrate, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
+import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio } from '../lib/rtcPolicy';
+import { activePathMetrics, adaptScreenBitrate, inboundAudioMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
 
 export type StreamQuality = 'source' | 'ultra60' | 'ultra30' | 'high' | 'balanced' | 'data';
 
@@ -29,13 +29,23 @@ interface PeerConnectionState {
   pendingCandidates: RTCIceCandidateInit[];
   recoveryAttempts: number;
   recoveryTimer?: number;
+  mutedAudioTimers: Map<string, number>;
   screenBitrate?: number;
   healthyScreenSamples: number;
   lastScreenBytes?: number;
   lastScreenPackets?: number;
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
+  inboundVoice: Map<string, { packets?: number; stalled: number }>;
+  lastVoiceRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
+}
+
+function closePeerState(state: PeerConnectionState): void {
+  if (state.recoveryTimer) window.clearTimeout(state.recoveryTimer);
+  for (const timer of state.mutedAudioTimers.values()) window.clearTimeout(timer);
+  state.mutedAudioTimers.clear();
+  state.pc.close();
 }
 
 export type PeerHealth = 'connecting' | 'connected' | 'recovering' | 'failed';
@@ -200,6 +210,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const membersRef = useRef<VoiceState[]>([]);
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
+  const mutedRef = useRef(false);
+  const deafenedRef = useRef(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
   const [quality, setQuality] = useState<StreamQuality>('balanced');
@@ -223,10 +235,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean) => void>(() => undefined);
   const recoveryCooldown = useRef(new Map<string, number>());
   const missingScreenSince = useRef(new Map<string, number>());
-  const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
+  const missingVoiceSince = useRef(new Map<string, number>());
+  const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; notified?: boolean; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
   const pendingShareOptions = useRef<{ includeAudio: boolean; quality: StreamQuality }>({ includeAudio: true, quality: 'balanced' });
   const shareListing = useRef(false);
   const shareCapture = useRef(false);
+  const screenAudioEnabled = useRef(false);
+  const screenAudioHealthCheck = useRef(false);
   const screenAudioEndedRef = useRef<(endedTrack: MediaStreamTrack) => void>(() => undefined);
 
   const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
@@ -341,10 +356,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       needsNegotiation: false,
       pendingCandidates: [],
       recoveryAttempts: 0,
+      mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
       stalledScreenSamples: 0,
       lastScreenRecoveryAt: 0,
+      inboundVoice: new Map(),
+      lastVoiceRecoveryAt: 0,
       remoteStreams: new Map(),
     };
     peers.current.set(peerId, state);
@@ -354,12 +372,37 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     pc.onnegotiationneeded = () => void negotiateRef.current(peerId);
     pc.ontrack = (event) => {
       for (const stream of event.streams) state.remoteStreams.set(stream.id, stream);
-      event.track.onmute = refreshRemote;
+      const stream = event.streams[0];
+      const clearMutedAudioTimer = () => {
+        const timer = state.mutedAudioTimers.get(event.track.id);
+        if (timer) window.clearTimeout(timer);
+        state.mutedAudioTimers.delete(event.track.id);
+      };
+      event.track.onmute = () => {
+        refreshRemote();
+        if (event.track.kind !== 'audio') return;
+        clearMutedAudioTimer();
+        state.mutedAudioTimers.set(event.track.id, window.setTimeout(() => {
+          state.mutedAudioTimers.delete(event.track.id);
+          if (peers.current.get(peerId) !== state || !event.track.muted) return;
+          const member = membersRef.current.find((candidate) => candidate.socketId === peerId);
+          const meta = stream ? streamMeta.current.get(`${peerId}:${stream.id}`) : undefined;
+          const screen = meta === 'screen' || Boolean(stream?.getVideoTracks().length && member?.screen);
+          if (shouldRecoverMutedAudio({
+            trackMuted: event.track.muted,
+            remoteMuted: member?.muted ?? true,
+            screen,
+            screenAudioExpected: member?.screenAudio ?? false,
+          })) recoverPeerRef.current(peerId, screen ? 'áudio da live interrompido' : 'áudio da call interrompido', true);
+        }, 4_000));
+      };
       event.track.onunmute = () => {
+        clearMutedAudioTimer();
         updatePeerHealth(peerId, 'connected');
         refreshRemote();
       };
       event.track.onended = () => {
+        clearMutedAudioTimer();
         for (const [streamId, stream] of state.remoteStreams) {
           if (stream.getTracks().every((track) => track.readyState === 'ended')) state.remoteStreams.delete(streamId);
         }
@@ -432,9 +475,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const previous = peers.current.get(peerId);
     const remoteUser = previous?.user ?? membersRef.current.find((member) => member.socketId === peerId);
     const attempt = Math.min(6, (previous?.recoveryAttempts ?? 0) + 1);
-    if (previous?.recoveryTimer) window.clearTimeout(previous.recoveryTimer);
     peers.current.delete(peerId);
-    previous?.pc.close();
+    if (previous) closePeerState(previous);
     for (const key of [...streamMeta.current.keys()]) if (key.startsWith(`${peerId}:`)) streamMeta.current.delete(key);
     refreshRemote();
     updatePeerHealth(peerId, 'recovering');
@@ -461,6 +503,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     recovery.timer = window.setTimeout(async () => {
       if (!recovery.enabled || localStreams.current.get('screen') !== screen) return;
       try {
+        const prepared = await window.tumacordDesktop?.prepareScreenAudio();
+        if (window.tumacordDesktop && !prepared?.ok) throw new Error(prepared?.error ?? 'O PipeWire não recriou o barramento da live.');
+        if (prepared?.deviceName) recovery.deviceName = prepared.deviceName;
         const replacement = await captureIsolatedScreenAudio(recovery.deviceName);
         const newTrack = replacement.getAudioTracks()[0];
         if (!newTrack) throw new Error('Faixa de áudio não apareceu.');
@@ -478,13 +523,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           if (!sender) void negotiateRef.current(peerId);
         }
         recovery.attempts = 0;
+        recovery.notified = false;
+        screenAudioEnabled.current = true;
+        publishState({ screenAudio: true });
       } catch {
         recovery.attempts += 1;
-        if (recovery.attempts < 5) screenAudioEndedRef.current(endedTrack);
-        else onError('O áudio da live caiu e não conseguiu se recuperar. O vídeo continua; pare e inicie a live para tentar novamente.');
+        if (recovery.attempts >= 5 && !recovery.notified) {
+          recovery.notified = true;
+          onError('O áudio da live está sendo reconstruído automaticamente; o vídeo continua ativo.');
+        }
+        screenAudioEndedRef.current(endedTrack);
       }
     }, delay);
-  }, [onError, sendStreamMeta]);
+  }, [onError, publishState, sendStreamMeta]);
   screenAudioEndedRef.current = recoverScreenAudio;
 
   const stopStream = useCallback(async (kind: 'camera' | 'screen') => {
@@ -504,13 +555,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       publishState({ camera: false });
     } else {
       screenAudioRecovery.current.enabled = false;
+      screenAudioEnabled.current = false;
       screenAudioRecovery.current.attempts = 0;
       if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
       screenAudioRecovery.current.timer = undefined;
       setScreenOn(false);
       setShowShareSetup(false);
       setShowSourcePicker(false);
-      publishState({ screen: false });
+      publishState({ screen: false, screenAudio: false });
       await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     }
     playSound(kind === 'screen' ? 'streamStop' : 'notification');
@@ -547,7 +599,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     } else {
       setScreenOn(true);
       setShowSourcePicker(false);
-      publishState({ screen: true });
+      screenAudioEnabled.current = stream.getAudioTracks().some((track) => track.readyState === 'live');
+      publishState({ screen: true, screenAudio: screenAudioEnabled.current });
     }
     playSound(kind === 'screen' ? 'streamStart' : 'notification');
   }, [negotiate, publishState, quality, sendStreamMeta, stopStream]);
@@ -591,7 +644,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     microphoneProcessing.current = nextProcessing;
     const newTrack = stream.getAudioTracks()[0];
     if ('contentHint' in newTrack) newTrack.contentHint = 'speech';
-    newTrack.enabled = !muted;
+    newTrack.enabled = !mutedRef.current;
     for (const state of peers.current.values()) {
       const oldTrack = old?.getAudioTracks()[0];
       const sender = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
@@ -605,23 +658,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     await onDevicesChanged();
     if (channelRef.current) startSpeakingMonitor(stream);
     return stream;
-  }, [muted, onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, startSpeakingMonitor]);
+  }, [onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, startSpeakingMonitor]);
 
   const join = useCallback(async (nextChannelId: string) => {
     if (!socket) return;
     try {
       await ensureMicrophone();
     } catch {
+      mutedRef.current = true;
       setMuted(true);
       onError('Microfone indisponível. Você entrou mutado; confira as permissões nas configurações.');
     }
     if (channelRef.current) {
       const previousPeers = [...peers.current.values()];
       peers.current.clear();
-      previousPeers.forEach(({ recoveryTimer, pc }) => {
-        if (recoveryTimer) window.clearTimeout(recoveryTimer);
-        pc.close();
-      });
+      previousPeers.forEach(closePeerState);
       setRemoteMedia([]);
       setPeerHealth({});
     }
@@ -638,15 +689,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         void negotiate(peer.socketId);
       }
       publishState({
-        muted,
-        deafened,
+        muted: mutedRef.current,
+        deafened: deafenedRef.current,
         camera: localStreams.current.has('camera'),
         screen: localStreams.current.has('screen'),
+        screenAudio: screenAudioEnabled.current,
         speaking: false,
       });
       playSound('join');
     });
-  }, [createPeer, deafened, ensureMicrophone, muted, negotiate, onError, publishState, socket, startSpeakingMonitor]);
+  }, [createPeer, ensureMicrophone, negotiate, onError, publishState, socket, startSpeakingMonitor]);
 
   const leave = useCallback(() => {
     const wasInCall = Boolean(channelRef.current);
@@ -654,10 +706,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket?.emit('voice:leave');
     const previousPeers = [...peers.current.values()];
     peers.current.clear();
-    previousPeers.forEach(({ recoveryTimer, pc }) => {
-      if (recoveryTimer) window.clearTimeout(recoveryTimer);
-      pc.close();
-    });
+    previousPeers.forEach(closePeerState);
     for (const stream of localStreams.current.values()) stream.getTracks().forEach((track) => track.stop());
     localStreams.current.clear();
     const processing = microphoneProcessing.current;
@@ -672,6 +721,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     setPeerHealth({});
     setCameraOn(false);
     setScreenOn(false);
+    screenAudioEnabled.current = false;
     if (wasInCall) playSound('leave');
   }, [socket, stopSpeakingMonitor]);
 
@@ -689,8 +739,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const onPeerLeft = (peerId: string) => {
       const peer = peers.current.get(peerId);
       peers.current.delete(peerId);
-      if (peer?.recoveryTimer) window.clearTimeout(peer.recoveryTimer);
-      peer?.pc.close();
+      if (peer) closePeerState(peer);
       for (const key of [...streamMeta.current.keys()]) if (key.startsWith(`${peerId}:`)) streamMeta.current.delete(key);
       updatePeerHealth(peerId);
       refreshRemote();
@@ -702,10 +751,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       // O estado vem das trilhas reais, não de um valor React possivelmente
       // antigo durante uma reconexão rápida.
       publishState({
-        muted,
-        deafened,
+        muted: mutedRef.current,
+        deafened: deafenedRef.current,
         camera: localStreams.current.has('camera'),
         screen: localStreams.current.has('screen'),
+        screenAudio: screenAudioEnabled.current,
         speaking: speakingRef.current,
       });
       if (shouldInitiateRecovery(selfId.current, peer.socketId)) void negotiateRef.current(peer.socketId);
@@ -794,7 +844,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       socket.off('voice:host-handoff', onHandoff);
       socket.off('disconnect', onDisconnect);
     };
-  }, [createPeer, deafened, dynamicHosting, flushPendingCandidates, muted, onHostHandoff, publishState, recoverPeer, refreshRemote, socket, updatePeerHealth]);
+  }, [createPeer, dynamicHosting, flushPendingCandidates, onHostHandoff, publishState, recoverPeer, refreshRemote, socket, updatePeerHealth]);
 
   const leaveRef = useRef(leave);
   leaveRef.current = leave;
@@ -802,16 +852,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // P2P antigo para o novo troca o socket, mas deve preservar a tela/câmera.
   useEffect(() => () => leaveRef.current(), []);
 
+  const joinRef = useRef(join);
+  joinRef.current = join;
   useEffect(() => {
     if (!socket) return;
     const rejoinAfterReconnect = () => {
       const activeChannel = channelRef.current;
-      if (activeChannel) void join(activeChannel);
+      if (activeChannel) void joinRef.current(activeChannel);
     };
     socket.on('connect', rejoinAfterReconnect);
-    if (socket.connected && channelRef.current) void join(channelRef.current);
+    if (socket.connected && channelRef.current) void joinRef.current(channelRef.current);
     return () => { socket.off('connect', rejoinAfterReconnect); };
-  }, [join, socket]);
+  }, [socket]);
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -821,6 +873,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       running = true;
       const samples: number[] = [];
       const stalledPeers: string[] = [];
+      const stalledVoicePeers = new Set<string>();
       try {
         for (const [peerId, state] of peers.current) {
           const report = await state.pc.getStats().catch(() => null);
@@ -829,6 +882,30 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           report.forEach((stat) => stats.push(stat as unknown as RtcStatLike));
           const path = activePathMetrics(stats);
           if (path.rttMs !== undefined) samples.push(path.rttMs);
+
+          const remoteMember = membersRef.current.find((member) => member.socketId === peerId);
+          for (const receiver of state.pc.getReceivers().filter((candidate) => candidate.track?.kind === 'audio')) {
+            const receiverStream = [...state.remoteStreams.values()].find((stream) => stream.getTracks().some((track) => track.id === receiver.track.id));
+            const meta = receiverStream ? streamMeta.current.get(`${peerId}:${receiverStream.id}`) : undefined;
+            const isScreenAudio = meta === 'screen' || Boolean(receiverStream?.getVideoTracks().length && remoteMember?.screen);
+            if (isScreenAudio || remoteMember?.muted !== false) {
+              state.inboundVoice.delete(receiver.track.id);
+              continue;
+            }
+            const receiverReport = await receiver.getStats().catch(() => null);
+            const receiverStats: RtcStatLike[] = [];
+            receiverReport?.forEach((stat) => receiverStats.push(stat as unknown as RtcStatLike));
+            const inbound = inboundAudioMetrics(receiverStats);
+            if (inbound.packetsReceived === undefined) continue;
+            const previous = state.inboundVoice.get(receiver.track.id) ?? { stalled: 0 };
+            const stalled = previous.packets !== undefined && inbound.packetsReceived <= previous.packets ? previous.stalled + 1 : 0;
+            state.inboundVoice.set(receiver.track.id, { packets: inbound.packetsReceived, stalled });
+            const now = Date.now();
+            if (stalled >= 4 && now - state.lastVoiceRecoveryAt >= 15_000) {
+              state.lastVoiceRecoveryAt = now;
+              stalledVoicePeers.add(peerId);
+            }
+          }
 
           const screen = localStreams.current.get('screen');
           const screenTrack = screen?.getVideoTracks().find((track) => track.readyState === 'live');
@@ -872,6 +949,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         }
         socket.emit('voice:latency', median(samples) ?? 9999);
         for (const peerId of stalledPeers) recoverPeerRef.current(peerId, 'live local sem tráfego', true);
+        for (const peerId of stalledVoicePeers) recoverPeerRef.current(peerId, 'áudio remoto sem tráfego RTP', true);
       } finally {
         running = false;
       }
@@ -888,13 +966,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   useEffect(() => {
     if (!channelId) return;
-    const inspectExpectedScreens = () => {
+    const inspectExpectedMedia = () => {
       const now = Date.now();
-      const expected = new Set(membersRef.current.filter((member) => member.socketId !== selfId.current && member.screen).map((member) => member.socketId));
-      for (const peerId of [...missingScreenSince.current.keys()]) if (!expected.has(peerId)) missingScreenSince.current.delete(peerId);
-      for (const peerId of expected) {
-        const hasLiveScreen = remoteMedia.some((media) => media.peerId === peerId && media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
-        if (hasLiveScreen) {
+      const expectedScreens = new Map(membersRef.current
+        .filter((member) => member.socketId !== selfId.current && member.screen)
+        .map((member) => [member.socketId, member]));
+      for (const peerId of [...missingScreenSince.current.keys()]) if (!expectedScreens.has(peerId)) missingScreenSince.current.delete(peerId);
+      for (const [peerId, member] of expectedScreens) {
+        const screenMedia = remoteMedia.find((media) => media.peerId === peerId && media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
+        const hasExpectedAudio = !member.screenAudio || Boolean(screenMedia?.stream.getAudioTracks().some((track) => track.readyState === 'live'));
+        if (screenMedia && hasExpectedAudio) {
           missingScreenSince.current.delete(peerId);
           continue;
         }
@@ -903,19 +984,56 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const lastRecovery = recoveryCooldown.current.get(peerId) ?? 0;
         if (now - missingSince >= 5_000 && now - lastRecovery >= 8_000) {
           missingScreenSince.current.set(peerId, now);
-          recoverPeer(peerId, 'live anunciada sem trilha de vídeo', true);
+          recoverPeer(peerId, screenMedia ? 'live anunciada sem trilha de áudio' : 'live anunciada sem trilha de vídeo', true);
+        }
+      }
+
+      const expectedVoices = new Set(membersRef.current
+        .filter((member) => member.socketId !== selfId.current && !member.muted)
+        .map((member) => member.socketId));
+      for (const peerId of [...missingVoiceSince.current.keys()]) if (!expectedVoices.has(peerId)) missingVoiceSince.current.delete(peerId);
+      for (const peerId of expectedVoices) {
+        const hasVoice = remoteMedia.some((media) => media.peerId === peerId && media.kind === 'audio' && media.stream.getAudioTracks().some((track) => track.readyState === 'live'));
+        if (hasVoice) {
+          missingVoiceSince.current.delete(peerId);
+          continue;
+        }
+        const missingSince = missingVoiceSince.current.get(peerId) ?? now;
+        missingVoiceSince.current.set(peerId, missingSince);
+        const lastRecovery = recoveryCooldown.current.get(peerId) ?? 0;
+        if (now - missingSince >= 5_000 && now - lastRecovery >= 8_000) {
+          missingVoiceSince.current.set(peerId, now);
+          recoverPeer(peerId, 'participante sem trilha de voz', true);
         }
       }
     };
-    inspectExpectedScreens();
-    const timer = window.setInterval(inspectExpectedScreens, 2_000);
+    inspectExpectedMedia();
+    const timer = window.setInterval(inspectExpectedMedia, 2_000);
     return () => window.clearInterval(timer);
   }, [channelId, recoverPeer, remoteMedia]);
 
+  useEffect(() => {
+    if (!screenOn || !screenAudioEnabled.current || !window.tumacordDesktop) return;
+    const keepScreenAudioHealthy = async () => {
+      if (screenAudioHealthCheck.current || !screenAudioRecovery.current.enabled) return;
+      screenAudioHealthCheck.current = true;
+      try {
+        const prepared = await window.tumacordDesktop?.prepareScreenAudio();
+        if (prepared?.ok && prepared.deviceName) screenAudioRecovery.current.deviceName = prepared.deviceName;
+      } finally {
+        screenAudioHealthCheck.current = false;
+      }
+    };
+    void keepScreenAudioHealthy();
+    const timer = window.setInterval(() => void keepScreenAudioHealthy(), 4_000);
+    return () => window.clearInterval(timer);
+  }, [screenOn]);
+
   const toggleMute = async () => {
-    const next = !muted;
+    const next = !mutedRef.current;
     if (!next && !localStreams.current.has('microphone')) await ensureMicrophone().catch(() => onError('Não consegui abrir o microfone.'));
     localStreams.current.get('microphone')?.getAudioTracks().forEach((track) => { track.enabled = !next; });
+    mutedRef.current = next;
     setMuted(next);
     publishState({ muted: next, speaking: false });
     if (next && speakingRef.current) {
@@ -925,7 +1043,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   };
 
   const toggleDeafen = () => {
-    const next = !deafened;
+    const next = !deafenedRef.current;
+    deafenedRef.current = next;
     setDeafened(next);
     publishState({ deafened: next });
     playSound(next ? 'mute' : 'unmute');

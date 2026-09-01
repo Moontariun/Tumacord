@@ -57,6 +57,7 @@ export interface VoiceState extends PublicUser {
   deafened: boolean;
   camera: boolean;
   screen: boolean;
+  screenAudio: boolean;
 }
 
 export interface ServerSnapshot {

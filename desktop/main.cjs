@@ -17,6 +17,7 @@ app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 
 const isDevelopment = Boolean(process.env.TUMACORD_WEB_URL);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let discovery;
 let mainWindow;
 let tray;
@@ -24,6 +25,15 @@ let pendingDesktopSource;
 let mediaFullscreenActive = false;
 let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
+let quittingAfterAudioCleanup = false;
+
+if (!hasSingleInstanceLock) app.quit();
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 function blockedCaptureSource(name) {
   return /\b(?:tumacord|discord)\b/i.test(name);
@@ -93,6 +103,10 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
+  // Remove módulos deixados por encerramento forçado ou atualização. Assim,
+  // reiniciar apenas o aplicativo basta para recuperar o áudio da live.
+  await screenAudioRouter.reset().catch(() => undefined);
   await startEmbeddedServer();
   discovery = new TumacordDiscovery((calls) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:calls-changed', calls);
@@ -192,7 +206,11 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (!hasSingleInstanceLock) return;
   discovery?.close();
-  void screenAudioRouter.stop();
+  if (quittingAfterAudioCleanup) return;
+  quittingAfterAudioCleanup = true;
+  event.preventDefault();
+  void screenAudioRouter.stop().finally(() => app.quit());
 });

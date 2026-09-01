@@ -95,8 +95,8 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   await join(viewer, 'call-geral');
   await join(outsider, 'jogos');
 
-  const screenState = waitForEvent<VoiceState[]>(viewer, 'voice:members', (members) => members.some((member) => member.socketId === streamer.id && member.screen));
-  streamer.emit('voice:state', { screen: true, camera: false });
+  const screenState = waitForEvent<VoiceState[]>(viewer, 'voice:members', (members) => members.some((member) => member.socketId === streamer.id && member.screen && member.screenAudio));
+  streamer.emit('voice:state', { screen: true, screenAudio: true, camera: false });
   await screenState;
 
   viewer.disconnect();
@@ -108,6 +108,7 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   await peerJoined;
   const streamerAfterRejoin = viewerRejoin.peers.find((member) => member.socketId === streamer.id);
   assert.equal(streamerAfterRejoin?.screen, true, 'o estado AO VIVO deve sobreviver à saída e volta do espectador');
+  assert.equal(streamerAfterRejoin?.screenAudio, true, 'a expectativa de áudio da live também deve sobreviver à reconexão');
 
   const metaReceived = waitForEvent<{ from: string; meta: { streamId: string; kind: string } }>(viewer, 'rtc:stream-meta');
   streamer.emit('rtc:stream-meta', { target: viewer.id, meta: { streamId: 'screen-stream-qa', kind: 'screen' } });

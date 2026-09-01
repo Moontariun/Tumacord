@@ -40,15 +40,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/professional-ui-server-v0.2.0/scripts/install-professional-ui.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/audio-lifecycle-stability-v0.2.1/scripts/install-professional-ui.sh | bash
 ```
 
-Este comando é específico da branch `feat/professional-ui-server-v0.2.0`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-feat-professional-ui-server-v0.2.0`). O instalador coloca a instalação em `~/.local/share/tumacord/app`, com atalho em `~/.local/bin/tumacord`; o AppImage não participa da instalação nem da atualização. Uma instalação anterior fica em `~/.local/share/tumacord/app.previous` para recuperação.
+Este comando é específico da branch `fix/audio-lifecycle-stability-v0.2.1`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-fix-audio-lifecycle-stability-v0.2.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/professional-ui-server-v0.2.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/audio-lifecycle-stability-v0.2.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.

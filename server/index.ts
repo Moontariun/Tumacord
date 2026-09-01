@@ -67,7 +67,7 @@ const profileSchema = z.object({
 });
 
 app.get('/api/health', (_request, response) => {
-  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.2.0' });
+  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.2.1' });
 });
 
 async function issueSession(user: StoredUser): Promise<string> {
@@ -383,7 +383,7 @@ io.on('connection', (socket) => {
 
   socket.on('voice:state', (patch: unknown) => {
     const channelId = rooms.roomOf(socket.id);
-    const parsed = z.object({ muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(), camera: z.boolean().optional(), screen: z.boolean().optional() }).safeParse(patch);
+    const parsed = z.object({ muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(), camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional() }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
     broadcastSnapshot();

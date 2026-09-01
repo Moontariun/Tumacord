@@ -14,6 +14,11 @@ export interface OutboundVideoMetrics {
   fractionLost?: number;
 }
 
+export interface InboundAudioMetrics {
+  bytesReceived?: number;
+  packetsReceived?: number;
+}
+
 export interface StreamAdaptationInput {
   targetBitrate: number;
   currentBitrate: number;
@@ -76,6 +81,15 @@ export function outboundVideoMetrics(stats: RtcStatLike[]): OutboundVideoMetrics
     bytesSent: finiteNumber(outbound.bytesSent),
     packetsSent: finiteNumber(outbound.packetsSent),
     fractionLost: finiteNumber(remote?.fractionLost),
+  };
+}
+
+export function inboundAudioMetrics(stats: RtcStatLike[]): InboundAudioMetrics {
+  const inbound = stats.filter((stat) => stat.type === 'inbound-rtp' && (stat.kind === 'audio' || stat.mediaType === 'audio') && stat.isRemote !== true);
+  if (!inbound.length) return {};
+  return {
+    bytesReceived: inbound.reduce((total, stat) => total + (finiteNumber(stat.bytesReceived) ?? 0), 0),
+    packetsReceived: inbound.reduce((total, stat) => total + (finiteNumber(stat.packetsReceived) ?? 0), 0),
   };
 }
 

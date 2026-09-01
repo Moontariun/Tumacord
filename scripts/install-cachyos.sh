@@ -49,19 +49,41 @@ fi
 
 icon_root="$HOME/.local/share/icons/hicolor"
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/tumacord"
-app_dir="$install_root/app"
-previous_dir="$install_root/app.previous"
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$install_root"
-next_dir="$(mktemp -d "$install_root/app.next.XXXXXX")"
-trap 'rm -rf -- "$next_dir"' EXIT
-cp -a "$compiled_app/." "$next_dir/"
-if [[ -d "$app_dir" ]]; then
-  rm -rf -- "$previous_dir"
-  mv -- "$app_dir" "$previous_dir"
+versions_dir="$install_root/versions"
+current_link="$install_root/current"
+previous_link="$install_root/previous"
+app_version="$(node -p "require('./package.json').version")"
+build_hash="$(sha256sum "$compiled_app/tumacord" | cut -c1-12)"
+version_dir="$versions_dir/${app_version}-${build_hash}"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$versions_dir"
+
+# Nunca substitui arquivos usados pela instância aberta. Cada build vive em
+# uma pasta imutável e somente o symlink `current` é trocado atomicamente.
+# Assim uma atualização durante uma call não mistura código/ASAR de versões.
+if [[ ! -d "$version_dir" ]]; then
+  next_dir="$(mktemp -d "$versions_dir/.next.XXXXXX")"
+  trap 'rm -rf -- "$next_dir"' EXIT
+  cp -a "$compiled_app/." "$next_dir/"
+  mv -- "$next_dir" "$version_dir"
+  trap - EXIT
 fi
-mv -- "$next_dir" "$app_dir"
-trap - EXIT
-ln -sfn "$app_dir/tumacord" "$HOME/.local/bin/tumacord"
+
+old_target=""
+if [[ -L "$current_link" ]]; then
+  old_target="$(readlink -f -- "$current_link" || true)"
+elif [[ -d "$install_root/app" ]]; then
+  # Migração da organização usada pelas builds 0.2.0 e anteriores.
+  old_target="$install_root/app"
+fi
+if [[ -n "$old_target" && "$old_target" != "$version_dir" ]]; then
+  ln -sfn -- "$old_target" "$previous_link"
+fi
+next_link="$install_root/.current.next"
+rm -f -- "$next_link"
+ln -s -- "$version_dir" "$next_link"
+mv -Tf -- "$next_link" "$current_link"
+rm -f -- "$HOME/.local/bin/tumacord"
+install -m755 "$project_dir/packaging/tumacord-launcher" "$HOME/.local/bin/tumacord"
 rm -f -- "$icon_root/scalable/apps/tumacord.svg"
 icon_hash="$(sha256sum "$project_dir/assets/tumacord-logo.png" | cut -c1-12)"
 kde_icon_name="tumacord-kde-${icon_hash}"
@@ -78,7 +100,7 @@ for icon_size in 16 24 32 48 64 96 128 256 512; do
 done
 install -m644 "$project_dir/packaging/tumacord.desktop" "$HOME/.local/share/applications/tumacord.desktop"
 sed -i "s/^Icon=.*/Icon=${kde_icon_name}/" "$HOME/.local/share/applications/tumacord.desktop"
-node -p "require('./package.json').version" > "$install_root/version"
+printf '%s\n' "$app_version" > "$install_root/version"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$icon_root" >/dev/null 2>&1 || true
@@ -90,5 +112,10 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 fi
 
 echo "Tumacord compilado do código-fonte e instalado com servidor e descoberta automática."
-echo "A instalação anterior, quando existente, ficou em $previous_dir para recuperação."
+if [[ -n "$old_target" && "$old_target" != "$version_dir" ]]; then
+  echo "A instalação anterior ficou apontada por $previous_link para recuperação."
+fi
+if pgrep -x tumacord >/dev/null 2>&1; then
+  echo "O Tumacord está aberto: a sessão atual não foi alterada. Feche e abra o app quando quiser aplicar a versão $app_version."
+fi
 echo "Procure por Tumacord no menu de aplicativos."

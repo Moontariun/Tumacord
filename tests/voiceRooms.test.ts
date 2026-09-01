@@ -22,8 +22,8 @@ test('o primeiro participante vira host e o menor ping assume sem recriar a sala
 test('estado de mídia atualiza sem alterar o host', () => {
   const rooms = new VoiceRooms();
   rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927' });
-  const members = rooms.update('call', 'socket-a', { muted: true, screen: true });
-  assert.deepEqual({ host: members[0].isHost, muted: members[0].muted, screen: members[0].screen }, { host: true, muted: true, screen: true });
+  const members = rooms.update('call', 'socket-a', { muted: true, screen: true, screenAudio: true });
+  assert.deepEqual({ host: members[0].isHost, muted: members[0].muted, screen: members[0].screen, screenAudio: members[0].screenAudio }, { host: true, muted: true, screen: true, screenAudio: true });
 });
 
 test('entrada ou retorno de outro usuário não apaga uma live existente', () => {
