@@ -18,14 +18,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 - câmera e compartilhamento de tela;
 - ao clicar em **Transmitir tela**, o Tumacord primeiro pede qualidade e áudio; só depois abre o seletor de tela/janela;
 - captura de áudio opcional por um barramento temporário do PipeWire: jogos, navegador e outros aplicativos entram na live, enquanto Tumacord, Discord e seus mecanismos de voz ficam de fora para não devolver a call pela transmissão;
-- perfis Fonte (1080p60), 2.5K (1440p60 e 1440p30), Alta (1080p30), Equilibrada (720p30) e Econômica (480p15), com ajuste adaptativo para manter a transmissão estável;
-- volume individual por participante e pela live, de 0 a 200%, com ganho real de até +10 dB e limitador contra estouro;
+- perfis Fonte (1080p60), 1440p (60 e 30 FPS), Alta (1080p30), Equilibrada (720p30) e Econômica (480p15), com ajuste adaptativo para manter a transmissão estável;
+- volume individual por participante e pela live, de 0 a 200%, com ganho real de até +18 dB e limitador contra estouro;
 - dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**;
+- ao abrir o chat durante uma live, ela continua tocando em uma miniatura móvel e redimensionável, preservando mute e volume;
 - layout responsivo para janela dividida: em meia tela a lista de membros recolhe, os controles compactam e múltiplas lives se empilham sem esmagar o vídeo;
 - indicador **AO VIVO** no nome de quem transmite, recuperação visível quando a mídia atrasa e opção de sair apenas da live sem abandonar a call;
 - mensagens mescladas entre os participantes online e guardadas localmente, de modo que alguém que entra depois recebe o histórico disponível;
 - anexos de até 25 MB com prévia leve, download manual e opção de manter os arquivos completos sincronizados neste PC;
-- perfis com avatar estático ou GIF, banner, descrição e cor personalizada;
+- perfis com avatar estático ou GIF, banner, descrição e cor personalizada, replicados entre os hosts pelo usuário e pela edição mais recente;
 - login com escolha entre **P2P automático** e **Servidor dedicado**;
 - opção **Continuar conectado**, inclusive após reiniciar o servidor dedicado;
 - feedbacks sonoros distintos para entrada, saída, mensagem, mute, início/fim de live e troca de host, com volume configurável;
@@ -42,15 +43,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/responsive-web-server-v0.3.0/scripts/install-professional-ui.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-v0.4.0.sh | bash
 ```
 
-Este comando é específico da branch `feat/responsive-web-server-v0.3.0`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-feat-responsive-web-server-v0.3.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+Este comando é específico da branch `release/p2p-media-profile-stability-v0.4.0`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-p2p-media-profile-stability-v0.4.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/responsive-web-server-v0.3.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.

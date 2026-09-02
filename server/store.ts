@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Channel, ChatMessage, UserProfile } from '../shared/types.js';
+import type { Channel, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
 
 export interface StoredUser {
   id: string;
@@ -24,6 +24,7 @@ interface StoredData {
   users: StoredUser[];
   channels: Channel[];
   messages: ChatMessage[];
+  profiles: ReplicatedProfile[];
   sessions: StoredSession[];
 }
 
@@ -36,8 +37,18 @@ const initialData = (): StoredData => ({
     { id: 'jogos', name: 'Jogos', type: 'voice' },
   ],
   messages: [],
+  profiles: [],
   sessions: [],
 });
+
+function profileKey(username: string): string {
+  return username.normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+}
+
+function profileTime(profile: UserProfile | undefined): number {
+  const value = profile?.updatedAt ? Date.parse(profile.updatedAt) : 0;
+  return Number.isFinite(value) ? value : 0;
+}
 
 export class JsonStore {
   private data: StoredData = initialData();
@@ -62,13 +73,27 @@ export class JsonStore {
         migratedLegacySessions = true;
         return [{ tokenHash: createHash('sha256').update(session.token, 'utf8').digest('hex'), userId: session.userId, expiresAt: session.expiresAt }];
       });
+      const users = parsed.users ?? [];
+      let migratedLegacyProfiles = false;
+      for (const user of users) {
+        if (!user.profile || user.profile.updatedAt) continue;
+        user.profile.updatedAt = user.createdAt || new Date(0).toISOString();
+        migratedLegacyProfiles = true;
+      }
+      const profiles = new Map<string, ReplicatedProfile>();
+      for (const entry of [...(parsed.profiles ?? []), ...users.filter((user) => user.profile).map((user) => ({ username: user.username, profile: user.profile! }))]) {
+        const key = profileKey(entry.username);
+        const current = profiles.get(key);
+        if (!current || profileTime(entry.profile) > profileTime(current.profile)) profiles.set(key, entry);
+      }
       this.data = {
-        users: parsed.users ?? [],
+        users,
         channels: parsed.channels?.length ? parsed.channels : initialData().channels,
         messages: parsed.messages ?? [],
+        profiles: [...profiles.values()],
         sessions,
       };
-      if (migratedLegacySessions) await this.save();
+      if (migratedLegacySessions || migratedLegacyProfiles || !parsed.profiles) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       await this.save();
@@ -78,9 +103,12 @@ export class JsonStore {
   get users(): readonly StoredUser[] { return this.data.users; }
   get channels(): readonly Channel[] { return this.data.channels; }
   get messages(): readonly ChatMessage[] { return this.data.messages; }
+  get profiles(): readonly ReplicatedProfile[] { return this.data.profiles; }
   get sessions(): readonly StoredSession[] { return this.data.sessions; }
 
   async addUser(user: StoredUser): Promise<void> {
+    const replicated = this.profileForUsername(user.username);
+    if (replicated && profileTime(replicated) > profileTime(user.profile)) user.profile = replicated;
     this.data.users.push(user);
     await this.save();
   }
@@ -114,8 +142,34 @@ export class JsonStore {
     const user = this.data.users.find((candidate) => candidate.id === userId);
     if (!user) return undefined;
     user.profile = profile;
+    const key = profileKey(user.username);
+    const index = this.data.profiles.findIndex((entry) => profileKey(entry.username) === key);
+    const replicated = { username: user.username, profile };
+    if (index < 0) this.data.profiles.push(replicated);
+    else this.data.profiles[index] = replicated;
     await this.save();
     return user;
+  }
+
+  profileForUsername(username: string): UserProfile | undefined {
+    return this.data.profiles.find((entry) => profileKey(entry.username) === profileKey(username))?.profile;
+  }
+
+  async mergeProfiles(profiles: readonly ReplicatedProfile[]): Promise<ReplicatedProfile[]> {
+    const changed: ReplicatedProfile[] = [];
+    for (const incoming of profiles) {
+      const key = profileKey(incoming.username);
+      const index = this.data.profiles.findIndex((entry) => profileKey(entry.username) === key);
+      const current = index < 0 ? undefined : this.data.profiles[index];
+      if (current && profileTime(incoming.profile) <= profileTime(current.profile)) continue;
+      const next = { username: incoming.username.trim(), profile: incoming.profile };
+      if (index < 0) this.data.profiles.push(next);
+      else this.data.profiles[index] = next;
+      for (const user of this.data.users) if (profileKey(user.username) === key) user.profile = incoming.profile;
+      changed.push(next);
+    }
+    if (changed.length) await this.save();
+    return changed;
   }
 
   async addChannel(channel: Channel): Promise<void> {

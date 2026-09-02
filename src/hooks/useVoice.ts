@@ -7,14 +7,14 @@ import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio } from '../lib/rtcPolicy';
-import { activePathMetrics, adaptScreenBitrate, inboundAudioMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
+import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
 
 export type StreamQuality = 'source' | 'ultra60' | 'ultra30' | 'high' | 'balanced' | 'data';
 
 const QUALITY: Record<StreamQuality, { label: string; width: number; height: number; frameRate: number; bitrate: number }> = {
   source: { label: 'Fonte · até 1080p60', width: 1920, height: 1080, frameRate: 60, bitrate: 8_000_000 },
-  ultra60: { label: '2.5K · 60 FPS', width: 2560, height: 1440, frameRate: 60, bitrate: 14_000_000 },
-  ultra30: { label: '2.5K · 30 FPS', width: 2560, height: 1440, frameRate: 30, bitrate: 10_000_000 },
+  ultra60: { label: '1440p · 60 FPS', width: 2560, height: 1440, frameRate: 60, bitrate: 14_000_000 },
+  ultra30: { label: '1440p · 30 FPS', width: 2560, height: 1440, frameRate: 30, bitrate: 10_000_000 },
   high: { label: 'Alta · 1080p30', width: 1920, height: 1080, frameRate: 30, bitrate: 5_000_000 },
   balanced: { label: 'Equilibrada · 720p30', width: 1280, height: 720, frameRate: 30, bitrate: 2_500_000 },
   data: { label: 'Econômica · 480p15', width: 854, height: 480, frameRate: 15, bitrate: 900_000 },
@@ -32,11 +32,19 @@ interface PeerConnectionState {
   mutedAudioTimers: Map<string, number>;
   screenBitrate?: number;
   healthyScreenSamples: number;
+  screenScale: number;
+  healthyEncoderSamples: number;
+  encoderPressureSamples: number;
+  lastFramesEncoded?: number;
+  lastTotalEncodeTime?: number;
+  receiverFrozenUntil: number;
   lastScreenBytes?: number;
   lastScreenPackets?: number;
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
   inboundVoice: Map<string, { packets?: number; stalled: number }>;
+  inboundScreen: Map<string, { bytes?: number; packets?: number; framesReceived?: number; framesDecoded?: number; freezeCount?: number; freezeDuration?: number; stalled: number }>;
+  lastScreenDecodeRecoveryAt: number;
   lastVoiceRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
 }
@@ -78,19 +86,24 @@ async function tuneVoiceSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
-async function tuneScreenSender(sender: RTCRtpSender, config: (typeof QUALITY)[StreamQuality], maxBitrate = config.bitrate): Promise<void> {
+function screenContentHint(config: (typeof QUALITY)[StreamQuality]): 'motion' | 'detail' {
+  return config.frameRate >= 30 ? 'motion' : 'detail';
+}
+
+async function tuneScreenSender(sender: RTCRtpSender, config: (typeof QUALITY)[StreamQuality], maxBitrate = config.bitrate, scale = 1): Promise<void> {
   const parameters = sender.getParameters();
   const current = parameters.encodings?.[0] ?? {};
   parameters.encodings = [{
     ...current,
     maxBitrate,
     maxFramerate: config.frameRate,
+    scaleResolutionDownBy: Math.min(2, Math.max(1, scale)),
     priority: 'high',
     networkPriority: 'high',
   } as RTCRtpEncodingParameters];
   // Keep the requested frame rate when possible; this avoids the browser
   // oscillating between a sharp but jerky stream and a blurry one.
-  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = config.frameRate >= 60 ? 'maintain-framerate' : 'balanced';
+  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = config.frameRate >= 30 ? 'maintain-framerate' : 'balanced';
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
@@ -359,9 +372,15 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
+      screenScale: 1,
+      healthyEncoderSamples: 0,
+      encoderPressureSamples: 0,
+      receiverFrozenUntil: 0,
       stalledScreenSamples: 0,
       lastScreenRecoveryAt: 0,
       inboundVoice: new Map(),
+      inboundScreen: new Map(),
+      lastScreenDecodeRecoveryAt: 0,
       lastVoiceRecoveryAt: 0,
       remoteStreams: new Map(),
     };
@@ -569,6 +588,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }, [negotiate, publishState]);
 
   const attachStream = useCallback(async (kind: 'camera' | 'screen', stream: MediaStream, screenQuality: StreamQuality = quality) => {
+    if (kind === 'screen') {
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenContentHint(QUALITY[screenQuality]);
+    }
     localStreams.current.set(kind, stream);
     for (const [peerId, state] of peers.current) {
       for (const track of stream.getTracks()) state.pc.addTrack(track, stream);
@@ -581,6 +604,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           await tuneScreenSender(sender, config);
           state.screenBitrate = config.bitrate;
           state.healthyScreenSamples = 0;
+          state.screenScale = 1;
+          state.healthyEncoderSamples = 0;
+          state.encoderPressureSamples = 0;
+          state.lastFramesEncoded = undefined;
+          state.lastTotalEncodeTime = undefined;
+          state.receiverFrozenUntil = 0;
           state.lastScreenBytes = undefined;
           state.lastScreenPackets = undefined;
           state.stalledScreenSamples = 0;
@@ -589,7 +618,6 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       void negotiate(peerId);
     }
     stream.getTracks().forEach((track) => {
-      if (kind === 'screen' && track.kind === 'video' && 'contentHint' in track) track.contentHint = 'detail';
       if (kind === 'screen' && track.kind === 'audio') track.onended = () => screenAudioEndedRef.current(track);
       else track.onended = () => void stopStream(kind);
     });
@@ -803,6 +831,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       streamMeta.current.set(`${from}:${meta.streamId}`, meta.kind);
       refreshRemote();
     };
+    const onStreamHealth = ({ from, frozen }: { from: string; frozen?: boolean }) => {
+      if (!frozen) return;
+      const state = peers.current.get(from);
+      if (state) state.receiverFrozenUntil = Date.now() + 8_000;
+    };
     const onResync = ({ from }: { from: string }) => recoverPeer(from, 'pedido do outro participante', false);
     const onHandoff = ({ channelId: handoffChannel, host }: { channelId: string; host: VoiceState }) => {
       if (!dynamicHosting) return;
@@ -829,6 +862,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket.on('rtc:answer', onAnswer);
     socket.on('rtc:ice', onIce);
     socket.on('rtc:stream-meta', onMeta);
+    socket.on('rtc:stream-health', onStreamHealth);
     socket.on('rtc:resync', onResync);
     socket.on('voice:host-handoff', onHandoff);
     socket.on('disconnect', onDisconnect);
@@ -840,6 +874,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       socket.off('rtc:answer', onAnswer);
       socket.off('rtc:ice', onIce);
       socket.off('rtc:stream-meta', onMeta);
+      socket.off('rtc:stream-health', onStreamHealth);
       socket.off('rtc:resync', onResync);
       socket.off('voice:host-handoff', onHandoff);
       socket.off('disconnect', onDisconnect);
@@ -874,6 +909,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const samples: number[] = [];
       const stalledPeers: string[] = [];
       const stalledVoicePeers = new Set<string>();
+      const stalledRemoteScreens = new Set<string>();
       try {
         for (const [peerId, state] of peers.current) {
           const report = await state.pc.getStats().catch(() => null);
@@ -907,6 +943,53 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             }
           }
 
+          for (const receiver of state.pc.getReceivers().filter((candidate) => candidate.track?.kind === 'video')) {
+            const receiverStream = [...state.remoteStreams.values()].find((stream) => stream.getTracks().some((track) => track.id === receiver.track.id));
+            const meta = receiverStream ? streamMeta.current.get(`${peerId}:${receiverStream.id}`) : undefined;
+            const isScreenVideo = meta === 'screen' || (meta === undefined && Boolean(receiverStream && remoteMember?.screen));
+            if (!isScreenVideo) {
+              state.inboundScreen.delete(receiver.track.id);
+              continue;
+            }
+            const receiverReport = await receiver.getStats().catch(() => null);
+            const receiverStats: RtcStatLike[] = [];
+            receiverReport?.forEach((stat) => receiverStats.push(stat as unknown as RtcStatLike));
+            const inbound = inboundVideoMetrics(receiverStats);
+            if (inbound.bytesReceived === undefined && inbound.packetsReceived === undefined) continue;
+            const previous = state.inboundScreen.get(receiver.track.id) ?? { stalled: 0 };
+            const trafficAdvanced = (inbound.bytesReceived !== undefined && previous.bytes !== undefined && inbound.bytesReceived > previous.bytes)
+              || (inbound.packetsReceived !== undefined && previous.packets !== undefined && inbound.packetsReceived > previous.packets);
+            const framesArrived = inbound.framesReceived !== undefined && previous.framesReceived !== undefined && inbound.framesReceived > previous.framesReceived;
+            const decodeAdvanced = inbound.framesDecoded !== undefined && previous.framesDecoded !== undefined && inbound.framesDecoded > previous.framesDecoded;
+            const freezeAdvanced = (inbound.freezeCount !== undefined && previous.freezeCount !== undefined && inbound.freezeCount > previous.freezeCount)
+              || (inbound.totalFreezesDuration !== undefined && previous.freezeDuration !== undefined && inbound.totalFreezesDuration > previous.freezeDuration + 0.25);
+            const decoderStalled = freezeAdvanced || (trafficAdvanced && framesArrived && !decodeAdvanced);
+            const transportStalled = previous.bytes !== undefined && previous.packets !== undefined
+              && inbound.bytesReceived !== undefined && inbound.packetsReceived !== undefined
+              && inbound.bytesReceived <= previous.bytes && inbound.packetsReceived <= previous.packets
+              && !receiver.track.muted;
+            const stalled = decoderStalled
+              ? previous.stalled + 2
+              : transportStalled
+                ? previous.stalled + 1
+                : 0;
+            state.inboundScreen.set(receiver.track.id, {
+              bytes: inbound.bytesReceived,
+              packets: inbound.packetsReceived,
+              framesReceived: inbound.framesReceived,
+              framesDecoded: inbound.framesDecoded,
+              freezeCount: inbound.freezeCount,
+              freezeDuration: inbound.totalFreezesDuration,
+              stalled,
+            });
+            if ((freezeAdvanced || stalled >= 2) && previous.stalled < 2) socket.emit('rtc:stream-health', { target: peerId, frozen: true });
+            const now = Date.now();
+            if (stalled >= 4 && now - state.lastScreenDecodeRecoveryAt >= 15_000) {
+              state.lastScreenDecodeRecoveryAt = now;
+              stalledRemoteScreens.add(peerId);
+            }
+          }
+
           const screen = localStreams.current.get('screen');
           const screenTrack = screen?.getVideoTracks().find((track) => track.readyState === 'live');
           const sender = screenTrack ? state.pc.getSenders().find((candidate) => candidate.track === screenTrack) : undefined;
@@ -916,7 +999,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           senderReport?.forEach((stat) => senderStats.push(stat as unknown as RtcStatLike));
           const outbound = outboundVideoMetrics(senderStats.length ? senderStats : stats);
           const config = QUALITY[qualityRef.current];
-          const decision = adaptScreenBitrate({
+          const bitrateDecision = adaptScreenBitrate({
             targetBitrate: config.bitrate,
             currentBitrate: state.screenBitrate ?? config.bitrate,
             healthySamples: state.healthyScreenSamples,
@@ -924,11 +1007,32 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             availableOutgoingBitrate: path.availableOutgoingBitrate,
             fractionLost: outbound.fractionLost,
           });
-          state.healthyScreenSamples = decision.healthySamples;
-          if (Math.abs(decision.bitrate - (state.screenBitrate ?? config.bitrate)) >= 50_000) {
-            state.screenBitrate = decision.bitrate;
-            await tuneScreenSender(sender, config, decision.bitrate);
-          }
+          const encodedFrames = outbound.framesEncoded;
+          const totalEncodeTime = outbound.totalEncodeTime;
+          const encodedDelta = encodedFrames !== undefined && state.lastFramesEncoded !== undefined ? encodedFrames - state.lastFramesEncoded : 0;
+          const encodeTimeDelta = totalEncodeTime !== undefined && state.lastTotalEncodeTime !== undefined ? totalEncodeTime - state.lastTotalEncodeTime : 0;
+          const averageEncodeMs = encodedDelta > 0 && encodeTimeDelta >= 0 ? (encodeTimeDelta * 1_000) / encodedDelta : undefined;
+          state.lastFramesEncoded = encodedFrames;
+          state.lastTotalEncodeTime = totalEncodeTime;
+          const receiverReportedFreeze = state.receiverFrozenUntil > Date.now();
+          const encoderDecision = adaptEncoderScale({
+            targetFps: config.frameRate,
+            currentScale: state.screenScale,
+            healthySamples: state.healthyEncoderSamples,
+            pressureSamples: state.encoderPressureSamples,
+            averageEncodeMs,
+            qualityLimitationReason: outbound.qualityLimitationReason,
+            receiverFrozen: receiverReportedFreeze,
+          });
+          if (receiverReportedFreeze) state.receiverFrozenUntil = 0;
+          const bitrateChanged = Math.abs(bitrateDecision.bitrate - (state.screenBitrate ?? config.bitrate)) >= 50_000;
+          const scaleChanged = Math.abs(encoderDecision.scale - state.screenScale) >= 0.01;
+          state.healthyScreenSamples = bitrateDecision.healthySamples;
+          state.screenBitrate = bitrateDecision.bitrate;
+          state.screenScale = encoderDecision.scale;
+          state.healthyEncoderSamples = encoderDecision.healthySamples;
+          state.encoderPressureSamples = encoderDecision.pressureSamples;
+          if (bitrateChanged || scaleChanged) await tuneScreenSender(sender, config, bitrateDecision.bitrate, encoderDecision.scale);
 
           if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
             state.stalledScreenSamples = state.lastScreenBytes !== undefined
@@ -950,6 +1054,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         socket.emit('voice:latency', median(samples) ?? 9999);
         for (const peerId of stalledPeers) recoverPeerRef.current(peerId, 'live local sem tráfego', true);
         for (const peerId of stalledVoicePeers) recoverPeerRef.current(peerId, 'áudio remoto sem tráfego RTP', true);
+        for (const peerId of stalledRemoteScreens) recoverPeerRef.current(peerId, 'decodificador da live congelado', true);
       } finally {
         running = false;
       }
@@ -1171,7 +1276,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const stream = localStreams.current.get('screen');
     if (!stream) return;
     const config = QUALITY[next];
-    await stream.getVideoTracks()[0]?.applyConstraints({ width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } }).catch(() => undefined);
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenContentHint(config);
+    await videoTrack?.applyConstraints({ width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } }).catch(() => undefined);
     for (const state of peers.current.values()) {
       const videoTrack = stream.getVideoTracks()[0];
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
@@ -1179,6 +1286,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       await tuneScreenSender(sender, config);
       state.screenBitrate = config.bitrate;
       state.healthyScreenSamples = 0;
+      state.screenScale = 1;
+      state.healthyEncoderSamples = 0;
+      state.encoderPressureSamples = 0;
+      state.lastFramesEncoded = undefined;
+      state.lastTotalEncodeTime = undefined;
+      state.receiverFrozenUntil = 0;
       state.lastScreenBytes = undefined;
       state.lastScreenPackets = undefined;
       state.stalledScreenSamples = 0;

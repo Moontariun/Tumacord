@@ -12,11 +12,43 @@ export interface OutboundVideoMetrics {
   bytesSent?: number;
   packetsSent?: number;
   fractionLost?: number;
+  framesEncoded?: number;
+  framesSent?: number;
+  framesPerSecond?: number;
+  totalEncodeTime?: number;
+  qualityLimitationReason?: string;
 }
 
 export interface InboundAudioMetrics {
   bytesReceived?: number;
   packetsReceived?: number;
+}
+
+export interface InboundVideoMetrics {
+  bytesReceived?: number;
+  packetsReceived?: number;
+  framesReceived?: number;
+  framesDecoded?: number;
+  framesPerSecond?: number;
+  freezeCount?: number;
+  totalFreezesDuration?: number;
+}
+
+export interface EncoderAdaptationInput {
+  targetFps: number;
+  currentScale: number;
+  healthySamples: number;
+  pressureSamples: number;
+  averageEncodeMs?: number;
+  qualityLimitationReason?: string;
+  receiverFrozen?: boolean;
+}
+
+export interface EncoderAdaptationResult {
+  scale: number;
+  healthySamples: number;
+  pressureSamples: number;
+  stressed: boolean;
 }
 
 export interface StreamAdaptationInput {
@@ -81,6 +113,11 @@ export function outboundVideoMetrics(stats: RtcStatLike[]): OutboundVideoMetrics
     bytesSent: finiteNumber(outbound.bytesSent),
     packetsSent: finiteNumber(outbound.packetsSent),
     fractionLost: finiteNumber(remote?.fractionLost),
+    framesEncoded: finiteNumber(outbound.framesEncoded),
+    framesSent: finiteNumber(outbound.framesSent),
+    framesPerSecond: finiteNumber(outbound.framesPerSecond),
+    totalEncodeTime: finiteNumber(outbound.totalEncodeTime),
+    qualityLimitationReason: typeof outbound.qualityLimitationReason === 'string' ? outbound.qualityLimitationReason : undefined,
   };
 }
 
@@ -90,6 +127,22 @@ export function inboundAudioMetrics(stats: RtcStatLike[]): InboundAudioMetrics {
   return {
     bytesReceived: inbound.reduce((total, stat) => total + (finiteNumber(stat.bytesReceived) ?? 0), 0),
     packetsReceived: inbound.reduce((total, stat) => total + (finiteNumber(stat.packetsReceived) ?? 0), 0),
+  };
+}
+
+export function inboundVideoMetrics(stats: RtcStatLike[]): InboundVideoMetrics {
+  const inbound = stats
+    .filter((stat) => stat.type === 'inbound-rtp' && (stat.kind === 'video' || stat.mediaType === 'video') && stat.isRemote !== true)
+    .sort((left, right) => (finiteNumber(right.bytesReceived) ?? 0) - (finiteNumber(left.bytesReceived) ?? 0))[0];
+  if (!inbound) return {};
+  return {
+    bytesReceived: finiteNumber(inbound.bytesReceived),
+    packetsReceived: finiteNumber(inbound.packetsReceived),
+    framesReceived: finiteNumber(inbound.framesReceived),
+    framesDecoded: finiteNumber(inbound.framesDecoded),
+    framesPerSecond: finiteNumber(inbound.framesPerSecond),
+    freezeCount: finiteNumber(inbound.freezeCount),
+    totalFreezesDuration: finiteNumber(inbound.totalFreezesDuration),
   };
 }
 
@@ -137,4 +190,41 @@ export function adaptScreenBitrate(input: StreamAdaptationInput): StreamAdaptati
     };
   }
   return { bitrate: roundedBitrate(current), healthySamples, congested: false };
+}
+
+function roundedScale(value: number): number {
+  return Math.round(Math.min(2, Math.max(1, value)) * 20) / 20;
+}
+
+// Bitrate adaptation handles the network. This second controller reacts only
+// to encoder/decoder pressure so a 1440p game can temporarily step down toward
+// 1080p/720p instead of preserving resolution while dropping most frames.
+export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptationResult {
+  const frameBudgetMs = 1_000 / Math.max(1, input.targetFps);
+  const encoderOverBudget = input.averageEncodeMs !== undefined && input.averageEncodeMs >= frameBudgetMs * 0.82;
+  const stressed = Boolean(input.receiverFrozen) || input.qualityLimitationReason === 'cpu' || encoderOverBudget;
+  const pressureSamples = stressed ? input.pressureSamples + 1 : Math.max(0, input.pressureSamples - 1);
+  const pressureThreshold = input.receiverFrozen ? 1 : 2;
+  if (stressed && pressureSamples >= pressureThreshold) {
+    return {
+      scale: roundedScale(Math.max(input.currentScale + 0.25, input.currentScale * 1.2)),
+      healthySamples: 0,
+      pressureSamples: 0,
+      stressed: true,
+    };
+  }
+
+  const healthy = !stressed
+    && (input.qualityLimitationReason === undefined || input.qualityLimitationReason === 'none')
+    && (input.averageEncodeMs === undefined || input.averageEncodeMs < frameBudgetMs * 0.55);
+  const healthySamples = healthy ? input.healthySamples + 1 : Math.max(0, input.healthySamples - 1);
+  if (input.currentScale > 1 && healthySamples >= 6) {
+    return {
+      scale: roundedScale(Math.max(1, input.currentScale - 0.15)),
+      healthySamples: 0,
+      pressureSamples,
+      stressed: false,
+    };
+  }
+  return { scale: roundedScale(input.currentScale), healthySamples, pressureSamples, stressed };
 }

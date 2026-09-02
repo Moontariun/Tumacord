@@ -83,17 +83,23 @@ const replicatedMessageSchema = z.object({
   attachment: attachmentSchema.optional(),
 });
 const replicatedChannelSchema = z.object({ id: z.string().min(1).max(80), name: z.string().min(1).max(32), type: z.enum(['text', 'voice']) });
-const syncBundleSchema = z.object({
-  channels: z.array(replicatedChannelSchema).max(100),
-  messages: z.array(replicatedMessageSchema).max(500),
-  availableAttachmentIds: z.array(z.string().uuid()).max(500).optional().default([]),
-});
 const profileMediaSchema = z.object({ id: z.string().uuid(), mimeType: z.string().regex(/^image\/(?:gif|png|jpeg|webp)$/) });
 const profileSchema = z.object({
   bio: z.string().trim().max(190).default(''),
   accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).default('#ff5c5c'),
   avatar: profileMediaSchema.optional(),
   banner: profileMediaSchema.optional(),
+  updatedAt: z.string().datetime().optional(),
+});
+const replicatedProfileSchema = z.object({
+  username: z.string().trim().min(1).max(24),
+  profile: profileSchema.extend({ updatedAt: z.string().datetime() }),
+});
+const syncBundleSchema = z.object({
+  channels: z.array(replicatedChannelSchema).max(100),
+  messages: z.array(replicatedMessageSchema).max(500),
+  profiles: z.array(replicatedProfileSchema).max(200).optional().default([]),
+  availableAttachmentIds: z.array(z.string().uuid()).max(500).optional().default([]),
 });
 
 app.get('/api/health', (_request, response) => {
@@ -186,7 +192,7 @@ function publicUser(user: StoredUser): PublicUser {
   return {
     id: user.id,
     username: user.username,
-    profile: user.profile,
+    profile: store.profileForUsername(user.username) ?? user.profile,
     ...(!p2pMode && user.normalizedUsername === adminUsername ? { isAdmin: true } : {}),
   };
 }
@@ -301,12 +307,25 @@ app.post('/api/profile/media', express.raw({ type: ['image/gif', 'image/png', 'i
 app.get('/api/profile/media/:id', async (request, response) => {
   const id = z.string().uuid().safeParse(request.params.id);
   if (!id.success || !(await store.hasAttachment(id.data))) return void response.status(404).end();
-  const media = store.users.flatMap((candidate) => [candidate.profile?.avatar, candidate.profile?.banner]).find((candidate) => candidate?.id === id.data);
+  const media = store.profiles.flatMap((candidate) => [candidate.profile.avatar, candidate.profile.banner]).find((candidate) => candidate?.id === id.data)
+    ?? store.users.flatMap((candidate) => [candidate.profile?.avatar, candidate.profile?.banner]).find((candidate) => candidate?.id === id.data);
   if (!media) return void response.status(404).end();
   const contents = await store.readAttachment(id.data);
   response.setHeader('content-type', media.mimeType);
   response.setHeader('cache-control', 'public, max-age=31536000, immutable');
   response.send(contents);
+});
+
+app.put('/api/profile/media/:id', express.raw({ type: ['image/gif', 'image/png', 'image/jpeg', 'image/webp'], limit: '6mb' }), async (request, response) => {
+  if (!httpUser(request)) return void response.status(401).json({ error: 'Sessão inválida.' });
+  const id = z.string().uuid().safeParse(request.params.id);
+  const mimeType = request.headers['content-type']?.split(';')[0] ?? '';
+  const parsedType = z.string().regex(/^image\/(?:gif|png|jpeg|webp)$/).safeParse(mimeType);
+  const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+  if (!id.success || !parsedType.success || !contents.length || contents.length > 6 * 1024 * 1024) return void response.status(400).json({ error: 'Mídia de perfil inválida.' });
+  if (await store.hasAttachment(id.data)) return void response.json({ ok: true, id: id.data, mimeType: parsedType.data, cached: true });
+  await store.saveAttachment(id.data, contents);
+  response.json({ ok: true, id: id.data, mimeType: parsedType.data });
 });
 
 app.put('/api/profile', async (request, response) => {
@@ -316,17 +335,10 @@ app.put('/api/profile', async (request, response) => {
   if (!parsed.success) return void response.status(400).json({ error: 'Perfil inválido.' });
   const referenced = [parsed.data.avatar, parsed.data.banner].filter(Boolean) as UserProfile['avatar'][];
   if ((await Promise.all(referenced.map((media) => store.hasAttachment(media!.id)))).some((exists) => !exists)) return void response.status(400).json({ error: 'Uma das imagens não chegou ao servidor.' });
-  const updated = await store.updateUserProfile(user.id, parsed.data);
+  const updated = await store.updateUserProfile(user.id, { ...parsed.data, updatedAt: new Date().toISOString() });
   if (!updated) return void response.status(404).json({ error: 'Usuário não encontrado.' });
   const nextUser = publicUser(updated);
-  for (const [socketId, connected] of connectedUsers) {
-    if (connected.id !== user.id) continue;
-    connectedUsers.set(socketId, nextUser);
-    const connectedSocket = io.sockets.sockets.get(socketId);
-    if (connectedSocket) connectedSocket.data.user = nextUser;
-  }
-  for (const channelId of rooms.updateUser(nextUser)) io.to(`voice:${channelId}`).emit('voice:members', rooms.members(channelId));
-  broadcastSnapshot();
+  refreshProfilePresence(new Set([updated.normalizedUsername]));
   response.json(nextUser);
 });
 
@@ -341,6 +353,7 @@ app.get('/api/local/sync', async (request, response) => {
   response.json({
     channels: availableChannels(),
     messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
+    profiles: store.profiles,
     availableAttachmentIds: await store.availableAttachmentIds(),
   });
 });
@@ -351,6 +364,7 @@ app.post('/api/local/sync', async (request, response) => {
   if (!parsed.success) return void response.status(400).json({ error: 'Histórico inválido.' });
   if (!p2pMode) await store.mergeChannels(parsed.data.channels);
   await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
+  await store.mergeProfiles(parsed.data.profiles);
   response.json({ ok: true });
 });
 
@@ -379,6 +393,22 @@ function broadcastSnapshot(): void {
   io.emit('server:snapshot', snapshot());
 }
 
+function refreshProfilePresence(normalizedUsernames: ReadonlySet<string>): void {
+  const changedRooms = new Set<string>();
+  for (const [socketId, connected] of connectedUsers) {
+    if (!normalizedUsernames.has(normalizeUsername(connected.username))) continue;
+    const stored = store.users.find((candidate) => candidate.normalizedUsername === normalizeUsername(connected.username));
+    if (!stored) continue;
+    const next = publicUser(stored);
+    connectedUsers.set(socketId, next);
+    const connectedSocket = io.sockets.sockets.get(socketId);
+    if (connectedSocket) connectedSocket.data.user = next;
+    for (const channelId of rooms.updateUser(next)) changedRooms.add(channelId);
+  }
+  for (const channelId of changedRooms) io.to(`voice:${channelId}`).emit('voice:members', rooms.members(channelId));
+  broadcastSnapshot();
+}
+
 io.use((socket, next) => {
   const user = authenticatedUser(socket.handshake.auth.token);
   if (!user) return next(new Error('unauthorized'));
@@ -403,7 +433,7 @@ io.on('connection', (socket) => {
       .safeParse(payload);
     if (!parsed.success || !channelIsAvailable(parsed.data.channelId, 'text')) return;
     if (parsed.data.attachment && !(await store.hasAttachment(parsed.data.attachment.id))) return;
-    const message = { id: randomUUID(), ...parsed.data, author: user, createdAt: new Date().toISOString() };
+    const message = { id: randomUUID(), ...parsed.data, author: socket.data.user as PublicUser, createdAt: new Date().toISOString() };
     await store.addMessage(message);
     io.emit('chat:message', message);
   });
@@ -413,12 +443,15 @@ io.on('connection', (socket) => {
     if (!parsed.success) return acknowledge?.({ ok: false });
     const addedChannels = p2pMode ? [] : await store.mergeChannels(parsed.data.channels);
     const addedMessages = await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
-    if (addedChannels.length) broadcastSnapshot();
+    const changedProfiles = await store.mergeProfiles(parsed.data.profiles);
+    if (changedProfiles.length) refreshProfilePresence(new Set(changedProfiles.map((entry) => normalizeUsername(entry.username))));
+    else if (addedChannels.length) broadcastSnapshot();
     if (addedMessages.length) io.emit('chat:sync:messages', addedMessages);
     acknowledge?.({
       ok: true,
       channels: availableChannels(),
       messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
+      profiles: store.profiles,
       availableAttachmentIds: await store.availableAttachmentIds(),
     });
   });
@@ -461,7 +494,7 @@ io.on('connection', (socket) => {
     }
     const existingPeers = rooms.members(channelId);
     socket.join(`voice:${channelId}`);
-    rooms.join(channelId, { ...user, socketId: socket.id, endpoint: endpointFor(socket.handshake.address) });
+    rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address) });
     acknowledge({ ok: true, selfId: socket.id, peers: existingPeers });
     // Participantes que já estavam na call mantêm câmera/tela locais. Este
     // aviso faz cada um recriar apenas o enlace P2P do usuário que voltou,
@@ -488,11 +521,11 @@ io.on('connection', (socket) => {
     io.to(`voice:${channelId}`).emit('voice:members', rooms.updatePing(channelId, socket.id, parsed.data));
   });
 
-  for (const event of ['rtc:offer', 'rtc:answer', 'rtc:ice', 'rtc:resync'] as const) {
+  for (const event of ['rtc:offer', 'rtc:answer', 'rtc:ice', 'rtc:resync', 'rtc:stream-health'] as const) {
     socket.on(event, (payload: { target?: unknown; [key: string]: unknown }) => {
       if (typeof payload?.target !== 'string' || !sameVoiceRoom(socket.id, payload.target)) return;
       const { target, ...forwarded } = payload;
-      io.to(target).emit(event, { ...forwarded, from: socket.id, user });
+      io.to(target).emit(event, { ...forwarded, from: socket.id, user: socket.data.user as PublicUser });
     });
   }
 

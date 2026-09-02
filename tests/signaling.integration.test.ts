@@ -90,6 +90,34 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   const outsider = await connect(url, outsiderToken);
   sockets.push(streamer, viewer, outsider);
 
+  const profileMediaId = 'd77c705a-aa6d-4236-80cd-cfaf26b37786';
+  const mediaUpload = await fetch(`${url}/api/profile/media/${profileMediaId}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${streamerToken}`, 'content-type': 'image/png' },
+    body: Buffer.from('perfil-qa'),
+  });
+  assert.equal(mediaUpload.status, 200);
+  const firstProfile = {
+    username: 'Streamer QA',
+    profile: {
+      bio: 'perfil sincronizado',
+      accentColor: '#d63545',
+      avatar: { id: profileMediaId, mimeType: 'image/png' },
+      updatedAt: '2026-09-02T12:00:00.000Z',
+    },
+  };
+  const profileSnapshot = waitForEvent<{ onlineUsers: Array<{ username: string; profile?: { bio: string } }> }>(viewer, 'server:snapshot', (snapshot) => snapshot.onlineUsers.some((member) => member.username === 'Streamer QA' && member.profile?.bio === 'perfil sincronizado'));
+  streamer.emit('chat:sync:push', { channels: [], messages: [], profiles: [firstProfile], availableAttachmentIds: [profileMediaId] });
+  await profileSnapshot;
+  const replicatedMedia = await fetch(`${url}/api/profile/media/${profileMediaId}`);
+  assert.equal(replicatedMedia.status, 200);
+
+  const olderProfile = { ...firstProfile, profile: { ...firstProfile.profile, bio: 'perfil antigo', updatedAt: '2026-09-02T11:00:00.000Z' } };
+  const syncResult = await new Promise<{ profiles: Array<{ username: string; profile: { bio: string } }> }>((resolve) => {
+    viewer.emit('chat:sync:push', { channels: [], messages: [], profiles: [olderProfile], availableAttachmentIds: [] }, resolve);
+  });
+  assert.equal(syncResult.profiles.find((entry) => entry.username === 'Streamer QA')?.profile.bio, 'perfil sincronizado', 'uma cópia antiga não pode substituir avatar ou perfil novos');
+
   const streamerJoin = await join(streamer, 'call-geral');
   assert.equal(streamerJoin.ok, true);
   await join(viewer, 'call-geral');
@@ -113,6 +141,10 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   const metaReceived = waitForEvent<{ from: string; meta: { streamId: string; kind: string } }>(viewer, 'rtc:stream-meta');
   streamer.emit('rtc:stream-meta', { target: viewer.id, meta: { streamId: 'screen-stream-qa', kind: 'screen' } });
   assert.deepEqual((await metaReceived).meta, { streamId: 'screen-stream-qa', kind: 'screen' });
+
+  const healthReceived = waitForEvent<{ from: string; frozen: boolean }>(streamer, 'rtc:stream-health', (payload) => payload.from === viewer.id && payload.frozen);
+  viewer.emit('rtc:stream-health', { target: streamer.id, frozen: true });
+  await healthReceived;
 
   const resyncReceived = waitForEvent<{ from: string }>(streamer, 'rtc:resync', (payload) => payload.from === viewer.id);
   viewer.emit('rtc:resync', { target: streamer.id });

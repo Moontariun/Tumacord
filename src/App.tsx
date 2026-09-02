@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { Icon } from './components/Icon';
@@ -6,7 +6,7 @@ import { useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
-import { cacheAttachment, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, resolveAttachment, uploadAttachment } from './lib/chatSync';
+import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
 import logoUrl from '../assets/tumacord-logo.png';
@@ -115,10 +115,19 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const [appFullscreen, setAppFullscreen] = useState(false);
   const [discoveredCalls, setDiscoveredCalls] = useState<DiscoveredCall[]>([]);
   const [profileUser, setProfileUser] = useState<PublicUser | null>(null);
+  const [streamVolume, setStreamVolumeState] = useState(() => {
+    const saved = Number(localStorage.getItem('tumacord.stream-volume') ?? 1);
+    return Number.isFinite(saved) ? Math.max(0, Math.min(2, saved)) : 1;
+  });
+  const [streamMuted, setStreamMutedState] = useState(() => localStorage.getItem('tumacord.stream-muted') === 'true');
+  const [miniLiveHidden, setMiniLiveHidden] = useState(false);
+  const [voiceMenuUserId, setVoiceMenuUserId] = useState<string | null>(null);
   const [userVolumes, setUserVolumes] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem('tumacord.user-volumes') ?? '{}') as Record<string, number>; } catch { return {}; }
   });
   const devices = useDevices();
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const toastTimer = useRef<number | null>(null);
   const resumedCall = useRef(false);
   const selectedChannelRef = useRef(selectedChannelId);
@@ -150,6 +159,17 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       localStorage.setItem('tumacord.user-volumes', JSON.stringify(next));
       return next;
     });
+  }, []);
+
+  const setStreamVolume = useCallback((volume: number) => {
+    const next = Math.max(0, Math.min(2, volume));
+    setStreamVolumeState(next);
+    localStorage.setItem('tumacord.stream-volume', String(next));
+  }, []);
+
+  const setStreamMuted = useCallback((muted: boolean) => {
+    setStreamMutedState(muted);
+    localStorage.setItem('tumacord.stream-muted', String(muted));
   }, []);
 
   const toggleAppFullscreen = useCallback(async () => {
@@ -199,6 +219,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
   useEffect(() => {
     const next = io(session.serverUrl, { auth: { token: session.token }, transports: ['websocket', 'polling'], reconnectionDelay: 500, reconnectionDelayMax: 3000 });
+    let recoveringPersistedSession = false;
     const mergeVisible = (incoming: ChatMessage[]) => {
       const visible = incoming.filter((item) => item.channelId === selectedChannelRef.current);
       if (!visible.length) return;
@@ -210,20 +231,57 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       if (syncFilesRef.current) for (const item of incoming) if (item.attachment) void cacheAttachment(next, item.attachment, session.serverUrl, session.token).catch(() => undefined);
     };
     const mergeBundle = (bundle: ChatSyncBundle) => {
-      void mirrorLocally(bundle.channels, bundle.messages);
+      void mirrorLocally(bundle.channels, bundle.messages, bundle.profiles ?? []);
+      void cacheProfileMedia(bundle, session.serverUrl);
       mergeVisible(bundle.messages);
     };
     const pushLocalHistory = async () => {
       const local = await loadLocalSyncBundle();
+      await publishProfileMedia(local, session.serverUrl, session.token);
       next.emit('chat:sync:push', local, (result: ChatSyncBundle & { ok?: boolean }) => { if (result?.ok !== false && result?.messages) mergeBundle(result); });
     };
     next.on('connect', () => { setConnected(true); void pushLocalHistory(); });
     next.on('disconnect', () => setConnected(false));
     next.on('connect_error', (error) => {
       setConnected(false);
+      if (session.connectionMode === 'p2p') {
+        if (recoveringPersistedSession) return;
+        if (!session.password) {
+          clearSession();
+          onLogout();
+          return;
+        }
+        recoveringPersistedSession = true;
+        void login('http://127.0.0.1:3927', session.user.username, session.password, session.resumeChannelId, true, 'p2p', session.rememberMe ?? true)
+          .then((recovered) => {
+            showToast('Sessão local recuperada automaticamente.');
+            onSessionChange(recovered);
+          })
+          .catch(() => {
+            recoveringPersistedSession = false;
+            if (error.message === 'unauthorized') {
+              clearSession();
+              onLogout();
+            }
+          });
+        return;
+      }
       if (error.message === 'unauthorized') { clearSession(); onLogout(); }
     });
-    next.on('server:snapshot', (incoming: ServerSnapshot) => { setSnapshot(incoming); void mirrorLocally(incoming.channels, []); });
+    next.on('server:snapshot', (incoming: ServerSnapshot) => {
+      setSnapshot(incoming);
+      const profiles = incoming.onlineUsers.filter((user) => user.profile?.updatedAt).map((user) => ({ username: user.username, profile: user.profile! }));
+      void mirrorLocally(incoming.channels, [], profiles);
+      void cacheProfileMedia({ channels: [], messages: [], profiles, availableAttachmentIds: [] }, session.serverUrl);
+      const currentSession = sessionRef.current;
+      const freshSelf = incoming.onlineUsers.find((user) => user.id === currentSession.user.id);
+      if (freshSelf?.profile?.updatedAt && freshSelf.profile.updatedAt > (currentSession.user.profile?.updatedAt ?? '')) {
+        const nextSession = { ...currentSession, user: freshSelf };
+        sessionRef.current = nextSession;
+        saveSession(nextSession);
+        onSessionChange(nextSession);
+      }
+    });
     next.on('chat:message', (incoming: ChatMessage) => {
       storeIncoming([incoming]);
       if (incoming.author.id !== session.user.id) playSound('message');
@@ -236,7 +294,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     });
     setSocket(next);
     return () => { next.disconnect(); setSocket(null); };
-  }, [onLogout, session.serverUrl, session.token, session.user.id]);
+  }, [onLogout, onSessionChange, session.connectionMode, session.password, session.rememberMe, session.resumeChannelId, session.serverUrl, session.token, session.user.id, session.user.username, showToast]);
 
   useEffect(() => {
     if (!window.tumacordDesktop) {
@@ -354,6 +412,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
   const currentUser = snapshot.onlineUsers.find((user) => user.id === session.user.id) ?? session.user;
   const isServerAdmin = session.connectionMode === 'server' && Boolean(currentUser.isAdmin);
+  const activeRemoteScreen = voice.remoteMedia.find((media) => media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
+  const browsingText = selectedChannel?.type !== 'voice';
+  const backgroundVoiceMedia = browsingText ? voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0) : [];
+  const activeScreenUserVolume = activeRemoteScreen?.user?.id ? Math.max(0, Math.min(2, userVolumes[activeRemoteScreen.user.id] ?? 1)) : 1;
+  useEffect(() => { setMiniLiveHidden(false); }, [activeRemoteScreen?.stream.id, selectedChannelId]);
+  useEffect(() => { setVoiceMenuUserId(null); }, [selectedChannelId, voice.channelId]);
 
   return <div className="app-shell">
     <nav className="server-rail" aria-label="Servidor Tumacord">
@@ -370,7 +434,19 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call da turma'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
-            {(snapshot.voiceRooms[channel.id] ?? []).map((member) => <div className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} key={member.socketId}><Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small /><span className="voice-member-copy"><strong>{member.username}</strong><small>{member.screen ? <><span className="live-dot" /> AO VIVO</> : member.pingMs < 9999 ? `${member.pingMs} ms` : 'na call'}</small></span><span className="voice-member-icons">{member.isHost && <Icon name="host" />}{member.muted && <Icon name="micOff" />}</span></div>)}
+            {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
+              const self = member.id === session.user.id;
+              const canAdjustVolume = !self && voice.members.some((candidate) => candidate.id === member.id);
+              const memberVolume = Math.max(0, Math.min(2, userVolumes[member.id] ?? 1));
+              return <div className="voice-member-entry" key={member.socketId}>
+                <button className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => { if (canAdjustVolume) setVoiceMenuUserId((current) => current === member.id ? null : member.id); else setProfileUser(member); }} title={canAdjustVolume ? `Ajustar volume de ${member.username}` : `Ver perfil de ${member.username}`}>
+                  <Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small />
+                  <span className="voice-member-copy"><strong>{member.username}</strong><small>{member.screen ? <><span className="live-dot" /> AO VIVO</> : member.pingMs < 9999 ? `${member.pingMs} ms` : 'na call'}</small></span>
+                  <span className="voice-member-icons">{member.isHost && <Icon name="host" />}{member.muted && <Icon name="micOff" />}</span>
+                </button>
+                {voiceMenuUserId === member.id && canAdjustVolume && <VoiceMemberVolume member={member} volume={memberVolume} onVolume={(volume) => setUserVolume(member.id, volume)} onProfile={() => setProfileUser(member)} onClose={() => setVoiceMenuUserId(null)} />}
+              </div>;
+            })}
           </div>)}
         </ChannelGroup>
       </div>
@@ -399,11 +475,14 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       </header>
       <div className="content-row">
         {selectedChannel?.type === 'voice'
-          ? <CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} setUserVolume={setUserVolume} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} />
+          ? <CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} />
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
-        {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} volumeMembers={voice.members} currentUserId={session.user.id} userVolumes={userVolumes} setUserVolume={setUserVolume} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
+        {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
+
+    {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly />)}
+    {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={Math.min(2, streamVolume * activeScreenUserVolume)} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} />}
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
@@ -489,9 +568,7 @@ interface VoiceViewModel {
   user: { id: string; username: string };
 }
 
-function CallView({ voice, channel, members, speakerId, userVolumes, setUserVolume, serverUrl, p2pMode, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; setUserVolume: (userId: string, volume: number) => void; serverUrl: string; p2pMode: boolean; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
-  const [streamVolume, setStreamVolume] = useState(1);
-  const [streamMuted, setStreamMuted] = useState(false);
+function CallView({ voice, channel, members, speakerId, userVolumes, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, p2pMode, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; p2pMode: boolean; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
   const [hiddenScreenUsers, setHiddenScreenUsers] = useState<Set<string>>(() => new Set());
   const inThisCall = voice.channelId === channel.id;
@@ -559,10 +636,46 @@ function CallView({ voice, channel, members, speakerId, userVolumes, setUserVolu
         </>}
       </div>
       <div className="call-viewer-tools">
-        {visibleVideoMedia.some((media) => media.kind === 'screen') && <label className="stream-audio-controls"><button type="button" onClick={() => setStreamMuted((muted) => !muted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>Live</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></label>}
+        {visibleVideoMedia.some((media) => media.kind === 'screen') && <label className="stream-audio-controls"><button type="button" onClick={() => setStreamMuted(!streamMuted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>Live</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></label>}
       </div>
     </div>
   </main>;
+}
+
+function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolume, onMute, onOpen, onClose }: { media: RemoteMedia; speakerId: string; muted: boolean; volume: number; rawVolume: number; onVolume: (volume: number) => void; onMute: () => void; onOpen: () => void; onClose: () => void }) {
+  const frame = useRef<HTMLElement>(null);
+  const drag = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('button, input')) return;
+    const bounds = frame.current?.getBoundingClientRect();
+    if (!bounds) return;
+    drag.current = { offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+  const moveDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!drag.current || !frame.current) return;
+    const bounds = frame.current.getBoundingClientRect();
+    setPosition({
+      x: Math.max(8, Math.min(window.innerWidth - bounds.width - 8, event.clientX - drag.current.offsetX)),
+      y: Math.max(8, Math.min(window.innerHeight - bounds.height - 8, event.clientY - drag.current.offsetY)),
+    });
+  };
+  const endDrag = () => { drag.current = null; };
+  return <aside ref={frame} className="floating-live" style={position ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto' } : undefined}>
+    <header onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
+      <span><i className="live-dot" /><strong>{media.user?.username ?? 'Live da call'}</strong><small>AO VIVO · arraste para mover</small></span>
+      <button onClick={onClose} title="Fechar miniatura"><Icon name="close" /></button>
+    </header>
+    <button className="floating-live-video" onDoubleClick={onOpen} title="Clique duas vezes para voltar à call"><MediaElement stream={media.stream} muted={muted} volume={volume} speakerId={speakerId} /></button>
+    <footer>
+      <button onClick={onMute} title={muted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={muted ? 'volumeOff' : 'volume'} /></button>
+      <input type="range" min="0" max="2" step="0.01" value={muted ? 0 : rawVolume} onChange={(event) => onVolume(Number(event.target.value))} aria-label="Volume da mini-live" />
+      <output>{muted ? 0 : Math.round(rawVolume * 100)}%</output>
+      <button className="floating-live-open" onClick={onOpen}><Icon name="voice" /> Voltar à call</button>
+    </footer>
+  </aside>;
 }
 
 function ControlButton({ icon, label, active, danger, accent, onClick }: { icon: Parameters<typeof Icon>[0]['name']; label: string; active?: boolean; danger?: boolean; accent?: boolean; onClick: () => void }) {
@@ -713,14 +826,20 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
   return audioOnly ? <audio ref={ref as React.RefObject<HTMLAudioElement>} autoPlay /> : <video ref={ref as React.RefObject<HTMLVideoElement>} autoPlay playsInline />;
 }
 
-function MemberList({ users, voiceMembers, volumeMembers, currentUserId, userVolumes, setUserVolume, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; volumeMembers: VoiceState[]; currentUserId: string; userVolumes: Record<string, number>; setUserVolume: (userId: string, volume: number) => void; serverUrl: string; onProfile: (user: PublicUser) => void }) {
+function VoiceMemberVolume({ member, volume, onVolume, onProfile, onClose }: { member: VoiceState; volume: number; onVolume: (volume: number) => void; onProfile: () => void; onClose: () => void }) {
+  return <div className="voice-volume-popover">
+    <header><div><strong>{member.username}</strong><small>{member.pingMs < 9999 ? `${member.pingMs} ms` : 'Na chamada'}</small></div><button onClick={onClose} title="Fechar"><Icon name="close" /></button></header>
+    <label><span><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /> Volume individual</span><output>{Math.round(volume * 100)}%</output><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => onVolume(Number(event.target.value))} aria-label={`Volume de ${member.username}`} /></label>
+    <button className="voice-volume-profile" onClick={onProfile}>Ver perfil</button>
+  </div>;
+}
+
+function MemberList({ users, voiceMembers, currentUserId, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; currentUserId: string; serverUrl: string; onProfile: (user: PublicUser) => void }) {
   const voiceByUser = useMemo(() => new Map(voiceMembers.map((member) => [member.id, member])), [voiceMembers]);
-  const audibleUsers = useMemo(() => new Set(volumeMembers.map((member) => member.id)), [volumeMembers]);
   const inCall = users.filter((user) => voiceByUser.has(user.id));
   const available = users.filter((user) => !voiceByUser.has(user.id));
   const renderMember = (user: PublicUser) => {
     const voice = voiceByUser.get(user.id);
-    const volume = Math.max(0, Math.min(2, userVolumes[user.id] ?? 1));
     const self = user.id === currentUserId;
     return <article className={`member-row ${voice?.speaking ? 'speaking' : ''} ${voice?.screen ? 'is-streaming' : ''} ${voice ? 'in-call' : 'available'}`} key={user.id}>
       <div className="member-row-main">
@@ -728,16 +847,13 @@ function MemberList({ users, voiceMembers, volumeMembers, currentUserId, userVol
           <Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online />
           <span className="member-copy">
             <span className="member-name"><strong>{user.username}</strong>{self && <em>Você</em>}</span>
-            <small><i className={voice ? 'voice-presence' : ''} />{voice ? (voice.pingMs < 9999 ? `Na chamada · ${voice.pingMs} ms` : 'Na chamada') : 'Online agora'}</small>
+            <small><i className={voice ? 'voice-presence' : ''} /><span>{voice ? (voice.pingMs < 9999 ? `Na chamada · ${voice.pingMs} ms` : 'Na chamada') : 'Online agora'}</span>{voice?.screen && <em className="member-inline-live">AO VIVO</em>}</small>
           </span>
         </button>
         <span className="member-badges">
-          {voice?.screen && <span className="member-live"><span className="live-dot" /> AO VIVO</span>}
           {voice?.isHost && <span className="member-host" title="Host da chamada"><Icon name="host" /></span>}
         </span>
       </div>
-      {voice && !self && audibleUsers.has(user.id) && <div className="member-row-audio"><span>Volume</span><label className="member-volume" title={`Volume de ${user.username}: ${Math.round(volume * 100)}%`}><Icon name={volume === 0 ? 'volumeOff' : 'volume'} /><input type="range" min="0" max="2" step="0.01" value={volume} onChange={(event) => setUserVolume(user.id, Number(event.target.value))} aria-label={`Volume de ${user.username} (até 200%)`} /><output>{Math.round(volume * 100)}%</output></label></div>}
-      {voice && self && <div className="member-self-state"><Icon name={voice.muted ? 'micOff' : 'mic'} /><span>{voice.muted ? 'Seu microfone está silenciado' : 'Você está na chamada'}</span></div>}
     </article>;
   };
   return <aside className="member-list">

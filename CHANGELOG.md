@@ -1,5 +1,19 @@
 # Histórico de versões
 
+## 0.4.0 — estabilidade de mídia, sessão e perfis distribuídos
+
+- transmissão 1440p prioriza movimento e FPS, com adaptação conjunta de bitrate e resolução quando o encoder, a rede ou o decodificador ficam pressionados;
+- receptores detectam live congelada, avisam o transmissor e reconstroem somente o enlace afetado, sem reiniciar a call;
+- VA-API é habilitado em AMD/Intel no Linux; NVIDIA usa o caminho validado pelo Chromium e o fallback adaptativo, sem forçar flags experimentais;
+- avatar, banner, bio e cor são replicados entre os computadores online, incluindo os arquivos, e a edição mais recente substitui cópias antigas;
+- retorno de um espectador republica metadados e mantém o estado AO VIVO do transmissor;
+- saídas virtuais `default` e `communications` do Chromium foram consolidadas em uma única opção funcional “Padrão do sistema”;
+- todas as qualidades de alta resolução agora usam a nomenclatura 1440p;
+- encerramento do UDP de descoberta tornou-se idempotente, eliminando `ERR_SOCKET_DGRAM_NOT_RUNNING` ao fechar.
+- sessão P2P persistida se recupera silenciosamente no host local quando o host anterior deixa de existir;
+- live continua em uma miniatura móvel sobre o chat, sem perder o áudio nem os volumes escolhidos;
+- controles da call e lista de pessoas foram reorganizados para não se sobrepor em Full HD ou janela dividida; o volume individual abre somente ao clicar no participante da call.
+
 ## 0.3.0 — interface responsiva e servidor web seguro
 
 - palco de vídeo elástico, sem corte ao redimensionar ou dividir a janela, com controles e tipografia retrabalhados;
@@ -11,6 +25,7 @@
 - painel de administração para `Moontariun` por padrão, configurável pelo host;
 - nova marca de tomate/telefone fornecida para o projeto, com fundo realmente transparente, ícones coloridos do KDE regenerados e variante branca exclusiva para a bandeja;
 - número da versão visível no login, configurações e diagnóstico administrativo;
+- encerramento idempotente do socket de descoberta, sem a janela `ERR_SOCKET_DGRAM_NOT_RUNNING` ao sair;
 - testes integrados dos dois modos, autenticação, autorização, sinalização de áudio da tela e entrega web.
 
 ## 0.2.1 — ciclo de áudio e reconexão

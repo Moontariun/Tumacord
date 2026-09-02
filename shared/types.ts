@@ -16,6 +16,12 @@ export interface UserProfile {
   accentColor: string;
   avatar?: ProfileMedia;
   banner?: ProfileMedia;
+  updatedAt?: string;
+}
+
+export interface ReplicatedProfile {
+  username: string;
+  profile: UserProfile;
 }
 
 export interface PublicUser {
@@ -45,6 +51,7 @@ export interface ChatMessage {
 export interface ChatSyncBundle {
   channels: Channel[];
   messages: ChatMessage[];
+  profiles: ReplicatedProfile[];
   availableAttachmentIds: string[];
 }
 

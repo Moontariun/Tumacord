@@ -9,9 +9,19 @@ export interface DevicePreferences {
 
 const KEY = 'tumacord.devices';
 
+export function normalizeSpeakerId(value: unknown): string {
+  if (typeof value !== 'string' || value === 'default' || value === 'communications') return '';
+  return value;
+}
+
+export function visibleAudioOutputs<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'>>(devices: readonly T[]): T[] {
+  return devices.filter((device) => device.kind === 'audiooutput' && normalizeSpeakerId(device.deviceId) !== '');
+}
+
 function savedPreferences(): DevicePreferences {
   try {
-    return { microphoneId: '', cameraId: '', speakerId: '', noiseSuppression: true, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const saved = { microphoneId: '', cameraId: '', speakerId: '', noiseSuppression: true, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    return { ...saved, speakerId: normalizeSpeakerId(saved.speakerId) };
   } catch {
     return { microphoneId: '', cameraId: '', speakerId: '', noiseSuppression: true };
   }
@@ -33,8 +43,9 @@ export function useDevices() {
   }, [refresh]);
 
   const setPreferences = (next: DevicePreferences) => {
-    setPreferencesState(next);
-    localStorage.setItem(KEY, JSON.stringify(next));
+    const normalized = { ...next, speakerId: normalizeSpeakerId(next.speakerId) };
+    setPreferencesState(normalized);
+    localStorage.setItem(KEY, JSON.stringify(normalized));
   };
 
   return {
@@ -44,6 +55,6 @@ export function useDevices() {
     refresh,
     microphones: devices.filter((device) => device.kind === 'audioinput'),
     cameras: devices.filter((device) => device.kind === 'videoinput'),
-    speakers: devices.filter((device) => device.kind === 'audiooutput'),
+    speakers: visibleAudioOutputs(devices),
   };
 }

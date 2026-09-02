@@ -3,6 +3,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { TumacordDiscovery } = require('./discovery.cjs');
 const { ScreenAudioRouter } = require('./audio-router.cjs');
+const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
 // isso para manter a voz da call fora do áudio compartilhado.
@@ -12,7 +13,8 @@ process.env['PULSE_PROP_media.role'] = 'phone';
 
 // PipeWire é o caminho nativo de captura no Wayland. Expor os IPs de interface
 // permite que o ICE enxergue o adaptador virtual do ZeroTier.
-app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,WaylandWindowDecorations');
+const gpuVendors = detectLinuxGpuVendors();
+app.commandLine.appendSwitch('enable-features', streamingFeatures(process.platform, gpuVendors).join(','));
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 
@@ -216,9 +218,9 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', (event) => {
   if (!hasSingleInstanceLock) return;
-  discovery?.close();
   if (quittingAfterAudioCleanup) return;
   quittingAfterAudioCleanup = true;
+  discovery?.close();
   event.preventDefault();
   void screenAudioRouter.stop().finally(() => app.quit());
 });

@@ -1,10 +1,10 @@
 import type { Socket } from 'socket.io-client';
-import type { Channel, ChatAttachment, ChatMessage, ChatSyncBundle } from '../../shared/types';
+import type { Channel, ChatAttachment, ChatMessage, ChatSyncBundle, ProfileMedia, ReplicatedProfile } from '../../shared/types';
 
 const LOCAL_SERVER = 'http://127.0.0.1:3927';
 
 function emptyBundle(): ChatSyncBundle {
-  return { channels: [], messages: [], availableAttachmentIds: [] };
+  return { channels: [], messages: [], profiles: [], availableAttachmentIds: [] };
 }
 
 export async function loadLocalSyncBundle(): Promise<ChatSyncBundle> {
@@ -12,18 +12,19 @@ export async function loadLocalSyncBundle(): Promise<ChatSyncBundle> {
   try {
     const response = await fetch(`${LOCAL_SERVER}/api/local/sync`);
     if (!response.ok) return emptyBundle();
-    return await response.json() as ChatSyncBundle;
+    const bundle = await response.json() as Partial<ChatSyncBundle>;
+    return { channels: bundle.channels ?? [], messages: bundle.messages ?? [], profiles: bundle.profiles ?? [], availableAttachmentIds: bundle.availableAttachmentIds ?? [] };
   } catch {
     return emptyBundle();
   }
 }
 
-export async function mirrorLocally(channels: Channel[], messages: ChatMessage[]): Promise<void> {
-  if (!window.tumacordDesktop || (!channels.length && !messages.length)) return;
+export async function mirrorLocally(channels: Channel[], messages: ChatMessage[], profiles: ReplicatedProfile[] = []): Promise<void> {
+  if (!window.tumacordDesktop || (!channels.length && !messages.length && !profiles.length)) return;
   await fetch(`${LOCAL_SERVER}/api/local/sync`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ channels, messages, availableAttachmentIds: [] }),
+    body: JSON.stringify({ channels, messages, profiles, availableAttachmentIds: [] }),
   }).catch(() => undefined);
 }
 
@@ -48,6 +49,35 @@ async function localAttachment(id: string): Promise<Blob | null> {
     const response = await fetch(`${LOCAL_SERVER}/api/local/attachments/${id}`);
     return response.ok ? response.blob() : null;
   } catch { return null; }
+}
+
+function profileMedia(profiles: readonly ReplicatedProfile[]): ProfileMedia[] {
+  return [...new Map(profiles.flatMap((entry) => [entry.profile.avatar, entry.profile.banner]).filter((media): media is ProfileMedia => Boolean(media)).map((media) => [media.id, media])).values()];
+}
+
+export async function publishProfileMedia(bundle: ChatSyncBundle, serverUrl: string, token: string): Promise<void> {
+  if (!window.tumacordDesktop) return;
+  await Promise.all(profileMedia(bundle.profiles).map(async (media) => {
+    const existing = await fetch(`${serverUrl}/api/profile/media/${media.id}`, { method: 'HEAD' }).catch(() => null);
+    if (existing?.ok) return;
+    const contents = await localAttachment(media.id);
+    if (!contents) return;
+    await fetch(`${serverUrl}/api/profile/media/${media.id}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': media.mimeType },
+      body: contents,
+    }).catch(() => undefined);
+  }));
+}
+
+export async function cacheProfileMedia(bundle: ChatSyncBundle, serverUrl: string): Promise<void> {
+  if (!window.tumacordDesktop) return;
+  await Promise.all(profileMedia(bundle.profiles).map(async (media) => {
+    if (await hasLocalAttachment(media.id)) return;
+    const response = await fetch(`${serverUrl}/api/profile/media/${media.id}`).catch(() => null);
+    if (!response?.ok) return;
+    await saveAttachmentLocally(media.id, await response.blob()).catch(() => undefined);
+  }));
 }
 
 function findPeerAttachment(socket: Socket, attachmentId: string): Promise<string | null> {

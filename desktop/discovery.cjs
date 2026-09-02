@@ -6,6 +6,10 @@ const PORT = 3928;
 const GROUP = '239.255.42.99';
 const MAGIC = 'tumacord-discovery-v1';
 
+function socketStopped(error) {
+  return error?.code === 'ERR_SOCKET_DGRAM_NOT_RUNNING';
+}
+
 function ipv4ToNumber(address) {
   return address.split('.').reduce((value, octet) => ((value << 8) | Number(octet)) >>> 0, 0);
 }
@@ -23,15 +27,22 @@ function broadcastAddresses() {
 }
 
 class TumacordDiscovery {
-  constructor(onChange) {
+  constructor(onChange, { createSocket = dgram.createSocket } = {}) {
     this.hostId = randomUUID();
     this.onChange = onChange;
     this.calls = new Map();
     this.hosting = null;
-    this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
-    this.socket.on('error', (error) => console.warn('Tumacord discovery:', error.message));
+    this.closed = false;
+    this.socket = createSocket({ type: 'udp4', reuseAddr: true });
+    this.socket.on('error', (error) => {
+      if (!this.closed && !socketStopped(error)) console.warn('Tumacord discovery:', error.message);
+    });
     this.socket.on('message', (buffer, remote) => this.onMessage(buffer, remote));
     this.socket.bind(PORT, '0.0.0.0', () => {
+      if (this.closed) {
+        this.closeSocket();
+        return;
+      }
       this.socket.setBroadcast(true);
       this.socket.setMulticastTTL(8);
       for (const entry of interfaces()) {
@@ -48,6 +59,7 @@ class TumacordDiscovery {
   }
 
   setHosting(details) {
+    if (this.closed) return;
     this.hosting = details ? { ...details, hostId: this.hostId, port: 3927 } : null;
     if (this.hosting) this.broadcast({ type: 'advertise', ...this.hosting });
   }
@@ -57,17 +69,26 @@ class TumacordDiscovery {
   }
 
   probe() {
+    if (this.closed) return;
     this.broadcast({ type: 'probe', nonce: randomUUID(), probeSentAt: Date.now() });
   }
 
   broadcast(payload) {
+    if (this.closed) return;
     const packet = Buffer.from(JSON.stringify({ magic: MAGIC, ...payload }));
     for (const target of [...broadcastAddresses(), GROUP]) {
-      this.socket.send(packet, PORT, target, () => undefined);
+      try {
+        this.socket.send(packet, PORT, target, (error) => {
+          if (error && !this.closed && !socketStopped(error)) console.warn('Tumacord discovery:', error.message);
+        });
+      } catch (error) {
+        if (!this.closed && !socketStopped(error)) console.warn('Tumacord discovery:', error.message);
+      }
     }
   }
 
   onMessage(buffer, remote) {
+    if (this.closed) return;
     let message;
     try { message = JSON.parse(buffer.toString('utf8')); } catch { return; }
     if (message.magic !== MAGIC) return;
@@ -104,8 +125,20 @@ class TumacordDiscovery {
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
     clearInterval(this.timer);
-    this.socket.close();
+    this.hosting = null;
+    this.calls.clear();
+    this.closeSocket();
+  }
+
+  closeSocket() {
+    try {
+      this.socket.close();
+    } catch (error) {
+      if (!socketStopped(error)) throw error;
+    }
   }
 }
 
