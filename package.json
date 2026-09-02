@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -65,6 +65,7 @@
       "dist-web/**/*",
       "dist-server/**/*",
       "assets/tumacord-logo.png",
+      "assets/tumacord-tray.png",
       "assets/icons/**/*",
       "package.json"
     ],

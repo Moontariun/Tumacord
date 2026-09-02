@@ -44,12 +44,12 @@ export function clearSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
 }
 
-async function authenticate(path: 'login' | 'register', serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
+async function authenticate(path: 'login' | 'register', serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true, serverKey = ''): Promise<SavedSession> {
   const normalizedUrl = serverUrl.trim().replace(/\/$/, '');
   const response = await fetch(`${normalizedUrl}/api/auth/${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password, ...(allowCreate ? { allowCreate: true } : {}) }),
+    body: JSON.stringify({ username, password, ...(allowCreate ? { allowCreate: true } : {}), ...(serverKey.trim() ? { serverKey: serverKey.trim() } : {}) }),
   });
   const body = await response.json() as SessionResponse & { error?: string };
   if (!response.ok) throw new Error(body.error || 'Não foi possível entrar.');
@@ -61,10 +61,10 @@ async function authenticate(path: 'login' | 'register', serverUrl: string, usern
   return saved;
 }
 
-export function login(serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
-  return authenticate('login', serverUrl, username, password, resumeChannelId, allowCreate, connectionMode, rememberMe);
+export function login(serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true, serverKey = ''): Promise<SavedSession> {
+  return authenticate('login', serverUrl, username, password, resumeChannelId, allowCreate, connectionMode, rememberMe, serverKey);
 }
 
-export function register(serverUrl: string, username: string, password: string, resumeChannelId?: string, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true): Promise<SavedSession> {
-  return authenticate('register', serverUrl, username, password, resumeChannelId, false, connectionMode, rememberMe);
+export function register(serverUrl: string, username: string, password: string, resumeChannelId?: string, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true, serverKey = ''): Promise<SavedSession> {
+  return authenticate('register', serverUrl, username, password, resumeChannelId, false, connectionMode, rememberMe, serverKey);
 }

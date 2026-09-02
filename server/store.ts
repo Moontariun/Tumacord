@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Channel, ChatMessage, UserProfile } from '../shared/types.js';
@@ -12,7 +13,9 @@ export interface StoredUser {
 }
 
 export interface StoredSession {
-  token: string;
+  tokenHash?: string;
+  /** Compatibilidade de leitura com sessões gravadas antes da versão 0.3. */
+  token?: string;
   userId: string;
   expiresAt: number;
 }
@@ -52,12 +55,20 @@ export class JsonStore {
     await mkdir(this.attachmentsDirectory, { recursive: true });
     try {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<StoredData>;
+      let migratedLegacySessions = false;
+      const sessions = (parsed.sessions ?? []).flatMap((session) => {
+        if (session.tokenHash) return [session];
+        if (!session.token) return [];
+        migratedLegacySessions = true;
+        return [{ tokenHash: createHash('sha256').update(session.token, 'utf8').digest('hex'), userId: session.userId, expiresAt: session.expiresAt }];
+      });
       this.data = {
         users: parsed.users ?? [],
         channels: parsed.channels?.length ? parsed.channels : initialData().channels,
         messages: parsed.messages ?? [],
-        sessions: parsed.sessions ?? [],
+        sessions,
       };
+      if (migratedLegacySessions) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       await this.save();
@@ -75,14 +86,18 @@ export class JsonStore {
   }
 
   async addSession(session: StoredSession): Promise<void> {
-    this.data.sessions = this.data.sessions.filter((candidate) => candidate.token !== session.token && candidate.expiresAt > Date.now());
+    const sessionKey = session.tokenHash ?? session.token;
+    this.data.sessions = this.data.sessions.filter((candidate) => (candidate.tokenHash ?? candidate.token) !== sessionKey && candidate.expiresAt > Date.now());
     this.data.sessions.push(session);
     if (this.data.sessions.length > 500) this.data.sessions.splice(0, this.data.sessions.length - 500);
     await this.save();
   }
 
-  async removeSession(token: string): Promise<void> {
-    const next = this.data.sessions.filter((candidate) => candidate.token !== token);
+  async removeSession(tokenHash: string): Promise<void> {
+    const next = this.data.sessions.filter((candidate) => {
+      const candidateHash = candidate.tokenHash ?? (candidate.token ? createHash('sha256').update(candidate.token, 'utf8').digest('hex') : '');
+      return candidateHash !== tokenHash;
+    });
     if (next.length === this.data.sessions.length) return;
     this.data.sessions = next;
     await this.save();

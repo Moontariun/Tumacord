@@ -5,7 +5,7 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 ## O que já funciona
 
 - cadastro e login explícitos com usuário + senha;
-- um único espaço da turma, com canais de texto e voz, mensagens persistidas e presença online;
+- no modo P2P, um único canal de texto e uma única call, sem botões ou canais redundantes;
 - call de baixa latência em malha WebRTC;
 - descoberta automática de calls na rede local/ZeroTier, sem copiar IP;
 - servidor completo embutido em toda instalação;
@@ -29,8 +29,10 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 - login com escolha entre **P2P automático** e **Servidor dedicado**;
 - opção **Continuar conectado**, inclusive após reiniciar o servidor dedicado;
 - feedbacks sonoros distintos para entrada, saída, mensagem, mute, início/fim de live e troca de host, com volume configurável;
-- aplicativo Electron instalável no CachyOS/Arch e cliente web opcional;
+- aplicativo Electron instalável no CachyOS/Arch e cliente web servido pelo contêiner dedicado;
 - ícone no menu de aplicativos e na bandeja do KDE, com atalho para abrir ou sair;
+- versão instalada visível no login e nas configurações;
+- painel administrativo no modo servidor para o usuário configurado (por padrão, `Moontariun`);
 - interface original inspirada na organização familiar de apps de comunidade, sem copiar a marca do Discord.
 
 ## Instalação no CachyOS
@@ -40,15 +42,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/audio-lifecycle-stability-v0.2.1/scripts/install-professional-ui.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/responsive-web-server-v0.3.0/scripts/install-professional-ui.sh | bash
 ```
 
-Este comando é específico da branch `fix/audio-lifecycle-stability-v0.2.1`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-fix-audio-lifecycle-stability-v0.2.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+Este comando é específico da branch `feat/responsive-web-server-v0.3.0`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-feat-responsive-web-server-v0.3.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/fix/audio-lifecycle-stability-v0.2.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/feat/responsive-web-server-v0.3.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -92,13 +94,17 @@ Se houver firewall, libere TCP `3927` (sinalização), UDP `3928` (descoberta) e
 
 ## Servidor dedicado com Docker
 
-Na tela de login, selecione **Servidor dedicado** e informe o endereço, por exemplo `http://10.0.0.20:4600`. Para subir o servidor:
+O contêiner dedicado mantém as contas e mensagens, faz a sinalização WebRTC e também hospeda a interface web. O servidor embutido do modo P2P não publica a versão web. Antes da primeira inicialização, crie a chave da turma:
 
 ```bash
+cp .env.example .env
+# edite TUMACORD_SERVER_ACCESS_KEY no arquivo .env
 docker compose up -d --build
 ```
 
-O arquivo `docker-compose.yml` publica a porta TCP `4600`, executa o processo como usuário sem privilégios, verifica a saúde do serviço, limita os logs e mantém contas, sessões, perfis, mensagens e anexos no volume `tumacord-data`. Para acompanhar:
+Abra `http://IP-DO-SERVIDOR:4600` no navegador ou selecione **Servidor dedicado** no app e informe esse endereço e a chave. A primeira entrada com uma combinação local de usuário e senha cria a conta correspondente no servidor; as entradas seguintes autenticam essa conta. O usuário definido por `TUMACORD_ADMIN_USERNAME` — `Moontariun` por padrão — recebe o painel de administração apenas nesse modo.
+
+O arquivo `docker-compose.yml` publica a porta TCP `4600`, executa o processo como usuário sem privilégios, verifica a saúde do serviço, limita os logs e mantém contas, sessões, perfis, mensagens e anexos no volume `tumacord-data`. Senhas usam `scrypt`, tokens são armazenados somente como hashes SHA-256, a chave da turma é comparada em tempo constante e voz, câmera e tela usam DTLS-SRTP do WebRTC. Para acompanhar:
 
 ```bash
 docker compose logs -f tumacord-server
@@ -111,6 +117,8 @@ curl http://127.0.0.1:4600/api/health
 ```
 
 Nesse modo não há troca dinâmica do endereço do host: o contêiner mantém a sinalização e os dados, enquanto voz, câmera e tela continuam trafegando diretamente entre os participantes por WebRTC.
+
+Em uma rede ZeroTier privada, o túnel da rede já protege o tráfego até o servidor. Se a porta `4600` for exposta fora dessa rede, configure também `TUMACORD_TLS_CERT_FILE` e `TUMACORD_TLS_KEY_FILE` com caminhos de certificado e chave dentro da pasta `certs`; assim, login, chat e sinalização usam HTTPS/WSS. A chave da turma não substitui HTTPS em uma rede pública.
 
 ## Áudio da transmissão no CachyOS
 
@@ -151,10 +159,10 @@ npm run build
 
 Todo push e pull request executa `.github/workflows/release.yml`, repete testes e tipagem, compila o AppImage opcional e o guarda como artefato. As tags Git `v*` também publicam o AppImage e o pacote `.tar.gz` na Release correspondente.
 
-O servidor embutido P2P fica em `http://0.0.0.0:3927`; a imagem Docker usa `4600`. O modo de desenvolvimento da interface usa `http://localhost:5173`.
+O servidor embutido P2P fica em `http://0.0.0.0:3927`, mas não serve páginas web. A imagem Docker usa `4600` e entrega API, sinalização e interface web. O modo de desenvolvimento da interface usa `http://localhost:5173`.
 
 ## Limites intencionais
 
-O Tumacord usa malha P2P, ótima para uma turma pequena (aproximadamente 2–8 pessoas, dependendo do upload do host de cada stream). Uma sala grande precisaria de um SFU como mediasoup ou LiveKit. Não há recuperação de senha, moderação avançada ou criptografia ponta a ponta adicional — escolhas conscientes para manter este projeto pessoal simples.
+O Tumacord usa malha WebRTC, ótima para uma turma pequena (aproximadamente 2–8 pessoas, dependendo do upload de quem transmite). Uma sala grande precisaria de um SFU como mediasoup ou LiveKit. Não há recuperação de senha nem moderação avançada; a mídia é cifrada pelo próprio WebRTC, mas o chat armazenado no servidor não possui criptografia ponta a ponta adicional.
 
 Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre os computadores online, não é um banco global com consenso: mensagens disponíveis nos pares são preservadas, mas apagar ou editar mensagens distribuídas ainda não faz parte desta versão. Arquivos só permanecem garantidos enquanto o host atual ou algum participante que os sincronizou estiver disponível.

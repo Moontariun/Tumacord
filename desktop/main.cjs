@@ -44,9 +44,16 @@ async function startEmbeddedServer() {
   process.env.HOST = '0.0.0.0';
   process.env.PORT = process.env.PORT || '3927';
   process.env.DATA_DIR = path.join(app.getPath('userData'), 'server-data');
-  process.env.WEB_DIR = app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked/dist-web')
-    : path.join(__dirname, '../dist-web');
+  // A instalação desktop carrega a interface direto do bundle local. O
+  // servidor embutido existe somente para descoberta/sinalização P2P e não
+  // publica mais uma cópia web na rede.
+  process.env.TUMACORD_P2P_MODE = '1';
+  process.env.TUMACORD_SERVE_WEB = '0';
+  // Variáveis destinadas a um contêiner dedicado não podem acidentalmente
+  // bloquear ou transformar o servidor pessoal iniciado junto do desktop.
+  process.env.SERVER_ACCESS_KEY = '';
+  process.env.TLS_CERT_FILE = '';
+  process.env.TLS_KEY_FILE = '';
   const entry = app.isPackaged
     ? path.join(process.resourcesPath, 'app.asar.unpacked/dist-server/server-bundle.cjs')
     : path.join(__dirname, '../dist-server/server-bundle.cjs');
@@ -88,9 +95,10 @@ async function createWindow() {
 
 function createTray() {
   if (tray) return;
-  const iconPath = path.join(__dirname, '../assets/tumacord-logo.png');
+  const iconPath = path.join(__dirname, '../assets/tumacord-tray.png');
   const source = nativeImage.createFromPath(iconPath);
-  // Um ícone pequeno evita que o mascote fique borrado na bandeja do KDE.
+  // A bandeja usa uma marca branca própria para permanecer legível nos temas
+  // escuros do KDE; o menu de aplicativos continua usando a versão colorida.
   const icon = source.isEmpty() ? source : source.resize({ width: 32, height: 32 });
   tray = new Tray(icon);
   tray.setToolTip('Tumacord');

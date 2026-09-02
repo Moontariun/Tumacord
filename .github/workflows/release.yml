@@ -32,10 +32,20 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      - name: Auditar dependências de produção
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Validar projeto
         run: |
           npm run typecheck
           npm test
+
+      - name: Validar servidor dedicado Docker
+        env:
+          TUMACORD_SERVER_ACCESS_KEY: chave-apenas-para-validacao-ci
+        run: |
+          docker compose config --quiet
+          docker build --tag tumacord-server:ci .
 
       - name: Gerar pacote portátil opcional
         run: npm run package:linux

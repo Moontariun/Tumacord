@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import path from 'node:path';
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
-import type { Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
-import { createToken, hashPassword, normalizeUsername, verifyPassword } from './auth.js';
+import packageMetadata from '../package.json' with { type: 'json' };
+import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
+import { createToken, hashPassword, hashToken, normalizeUsername, verifyPassword, verifySecret } from './auth.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -17,16 +19,43 @@ const port = Number(process.env.PORT ?? 3927);
 const serverName = process.env.SERVER_NAME?.trim() || 'Tumacord da Turma';
 const dataDirectory = process.env.DATA_DIR ?? './data';
 const sessionTtl = Number(process.env.SESSION_TTL_DAYS ?? 30) * 86_400_000;
+const serverVersion = packageMetadata.version;
+const startedAt = new Date();
+const p2pMode = process.env.TUMACORD_P2P_MODE === '1';
+const serveWeb = process.env.TUMACORD_SERVE_WEB !== '0';
+const serverAccessKey = process.env.SERVER_ACCESS_KEY?.trim() ?? '';
+const adminUsername = normalizeUsername(process.env.ADMIN_USERNAME?.trim() || 'Moontariun');
+const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
+const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
+if (Boolean(tlsCertificateFile) !== Boolean(tlsKeyFile)) throw new Error('TLS_CERT_FILE e TLS_KEY_FILE precisam ser configurados juntos.');
+const tlsEnabled = Boolean(tlsCertificateFile && tlsKeyFile);
 const store = new JsonStore(dataDirectory);
 const storeReady = store.load();
 
 const app = express();
-const httpServer = createServer(app);
+const httpServer = tlsEnabled
+  ? createHttpsServer({ cert: readFileSync(tlsCertificateFile!), key: readFileSync(tlsKeyFile!) }, app)
+  : createHttpServer(app);
 const io = new Server(httpServer, { cors: { origin: true, credentials: false }, maxHttpBufferSize: 4e6 });
 const rooms = new VoiceRooms();
 const handoffRooms = new Set<string>();
 const sessions = new Map<string, { userId: string; expiresAt: number }>();
 const connectedUsers = new Map<string, PublicUser>();
+const p2pTextChannelId = 'geral';
+const p2pVoiceChannelId = 'call-geral';
+
+function availableChannels(): Channel[] {
+  if (!p2pMode) return [...store.channels];
+  const text = store.channels.find((channel) => channel.id === p2pTextChannelId && channel.type === 'text')
+    ?? store.channels.find((channel) => channel.type === 'text');
+  const voice = store.channels.find((channel) => channel.id === p2pVoiceChannelId && channel.type === 'voice')
+    ?? store.channels.find((channel) => channel.type === 'voice');
+  return [text, voice].filter((channel): channel is Channel => Boolean(channel));
+}
+
+function channelIsAvailable(channelId: string, type?: Channel['type']): boolean {
+  return availableChannels().some((channel) => channel.id === channelId && (!type || channel.type === type));
+}
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors());
@@ -35,6 +64,7 @@ app.use(express.json({ limit: '8mb' }));
 const credentialsInput = z.object({
   username: z.string().trim().min(2).max(24).regex(/^[\p{L}\p{N}_. -]+$/u),
   password: z.string().min(4).max(128),
+  serverKey: z.string().max(256).optional().default(''),
 });
 const loginInput = credentialsInput.extend({ allowCreate: z.boolean().optional() });
 const attachmentSchema = z.object({
@@ -67,14 +97,27 @@ const profileSchema = z.object({
 });
 
 app.get('/api/health', (_request, response) => {
-  response.json({ ok: true, name: serverName, users: connectedUsers.size, version: '0.2.1' });
+  response.json({
+    ok: true,
+    name: serverName,
+    users: connectedUsers.size,
+    version: serverVersion,
+    mode: p2pMode ? 'p2p' : 'server',
+    web: serveWeb,
+    security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
+  });
 });
+
+function hasServerAccess(serverKey: string): boolean {
+  return !serverAccessKey || verifySecret(serverKey, serverAccessKey);
+}
 
 async function issueSession(user: StoredUser): Promise<string> {
   const token = createToken();
   const session = { userId: user.id, expiresAt: Date.now() + sessionTtl };
-  sessions.set(token, session);
-  await store.addSession({ token, ...session });
+  const tokenHash = hashToken(token);
+  sessions.set(tokenHash, session);
+  await store.addSession({ tokenHash, ...session });
   return token;
 }
 
@@ -82,6 +125,10 @@ app.post('/api/auth/register', async (request, response) => {
   const parsed = credentialsInput.safeParse(request.body);
   if (!parsed.success) {
     response.status(400).json({ error: 'Use um nome de 2–24 caracteres e uma senha de pelo menos 4.' });
+    return;
+  }
+  if (!hasServerAccess(parsed.data.serverKey)) {
+    response.status(403).json({ error: 'Chave do servidor incorreta.' });
     return;
   }
   const normalizedUsername = normalizeUsername(parsed.data.username);
@@ -106,13 +153,19 @@ app.post('/api/auth/login', async (request, response) => {
     response.status(400).json({ error: 'Use um nome de 2–24 caracteres e uma senha de pelo menos 4.' });
     return;
   }
+  if (!hasServerAccess(parsed.data.serverKey)) {
+    response.status(403).json({ error: 'Chave do servidor incorreta.' });
+    return;
+  }
   const normalizedUsername = normalizeUsername(parsed.data.username);
   let user = store.users.find((candidate) => candidate.normalizedUsername === normalizedUsername);
+  let created = false;
   if (!user && !parsed.data.allowCreate) {
     response.status(404).json({ error: 'Conta não encontrada. Clique em “Criar conta” para se cadastrar.' });
     return;
   }
   if (!user) {
+    created = true;
     user = {
       id: randomUUID(),
       username: parsed.data.username.trim(),
@@ -126,19 +179,25 @@ app.post('/api/auth/login', async (request, response) => {
     response.status(401).json({ error: 'Senha incorreta.' });
     return;
   }
-  response.json({ token: await issueSession(user), user: publicUser(user), serverName, created: false });
+  response.json({ token: await issueSession(user), user: publicUser(user), serverName, created });
 });
 
 function publicUser(user: StoredUser): PublicUser {
-  return { id: user.id, username: user.username, profile: user.profile };
+  return {
+    id: user.id,
+    username: user.username,
+    profile: user.profile,
+    ...(!p2pMode && user.normalizedUsername === adminUsername ? { isAdmin: true } : {}),
+  };
 }
 
 function authenticatedUser(token: unknown): PublicUser | undefined {
   if (typeof token !== 'string') return undefined;
-  const session = sessions.get(token);
+  const tokenHash = hashToken(token);
+  const session = sessions.get(tokenHash);
   if (!session || session.expiresAt < Date.now()) {
-    sessions.delete(token);
-    void store.removeSession(token);
+    sessions.delete(tokenHash);
+    void store.removeSession(tokenHash);
     return undefined;
   }
   const user = store.users.find((candidate) => candidate.id === session.userId);
@@ -149,6 +208,38 @@ function httpUser(request: express.Request): PublicUser | undefined {
   const authorization = request.headers.authorization;
   return authenticatedUser(authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined);
 }
+
+function adminOverview(): AdminOverview {
+  return {
+    serverName,
+    version: serverVersion,
+    startedAt: startedAt.toISOString(),
+    uptimeSeconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
+    onlineUsers: [...new Map([...connectedUsers.values()].map((user) => [user.id, user])).values()],
+    channels: availableChannels(),
+    voiceRooms: rooms.snapshot(),
+    security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
+  };
+}
+
+app.get('/api/admin/overview', (request, response) => {
+  const user = httpUser(request);
+  if (!user?.isAdmin) return void response.status(403).json({ error: 'Acesso exclusivo do administrador do servidor.' });
+  response.json(adminOverview());
+});
+
+app.post('/api/admin/users/:id/disconnect', (request, response) => {
+  const admin = httpUser(request);
+  if (!admin?.isAdmin) return void response.status(403).json({ error: 'Acesso exclusivo do administrador do servidor.' });
+  if (request.params.id === admin.id) return void response.status(400).json({ error: 'O administrador não pode desconectar a própria sessão por este painel.' });
+  let disconnected = 0;
+  for (const [socketId, user] of connectedUsers) {
+    if (user.id !== request.params.id) continue;
+    io.sockets.sockets.get(socketId)?.disconnect(true);
+    disconnected += 1;
+  }
+  response.json({ ok: true, disconnected });
+});
 
 function isLoopbackRequest(request: express.Request): boolean {
   const address = request.socket.remoteAddress?.replace(/^::ffff:/, '') ?? '';
@@ -248,8 +339,8 @@ app.get('/api/peer/attachments/:id', async (request, response) => {
 app.get('/api/local/sync', async (request, response) => {
   if (!isLoopbackRequest(request)) return void response.status(403).json({ error: 'Disponível apenas localmente.' });
   response.json({
-    channels: [...store.channels],
-    messages: store.messages.slice(-500),
+    channels: availableChannels(),
+    messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
     availableAttachmentIds: await store.availableAttachmentIds(),
   });
 });
@@ -258,8 +349,8 @@ app.post('/api/local/sync', async (request, response) => {
   if (!isLoopbackRequest(request)) return void response.status(403).json({ error: 'Disponível apenas localmente.' });
   const parsed = syncBundleSchema.safeParse(request.body);
   if (!parsed.success) return void response.status(400).json({ error: 'Histórico inválido.' });
-  await store.mergeChannels(parsed.data.channels);
-  await store.mergeMessages(parsed.data.messages);
+  if (!p2pMode) await store.mergeChannels(parsed.data.channels);
+  await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
   response.json({ ok: true });
 });
 
@@ -281,7 +372,7 @@ app.get('/api/local/attachments/:id', async (request, response) => {
 
 function snapshot(): ServerSnapshot {
   const uniqueUsers = [...new Map([...connectedUsers.values()].map((user) => [user.id, user])).values()];
-  return { serverName, channels: [...store.channels], onlineUsers: uniqueUsers, voiceRooms: rooms.snapshot() };
+  return { serverName, channels: availableChannels(), onlineUsers: uniqueUsers, voiceRooms: rooms.snapshot() };
 }
 
 function broadcastSnapshot(): void {
@@ -303,14 +394,14 @@ io.on('connection', (socket) => {
 
   socket.on('chat:history', (channelId: unknown, acknowledge: (messages: unknown[]) => void) => {
     if (typeof channelId !== 'string') return acknowledge([]);
-    acknowledge(store.messages.filter((message) => message.channelId === channelId).slice(-500));
+    acknowledge(channelIsAvailable(channelId, 'text') ? store.messages.filter((message) => message.channelId === channelId).slice(-500) : []);
   });
 
   socket.on('chat:send', async (payload: unknown) => {
     const parsed = z.object({ channelId: z.string(), body: z.string().trim().max(2000).default(''), attachment: attachmentSchema.optional() })
       .refine((value) => Boolean(value.body || value.attachment), { message: 'Mensagem vazia.' })
       .safeParse(payload);
-    if (!parsed.success || !store.channels.some((channel) => channel.id === parsed.data.channelId && channel.type === 'text')) return;
+    if (!parsed.success || !channelIsAvailable(parsed.data.channelId, 'text')) return;
     if (parsed.data.attachment && !(await store.hasAttachment(parsed.data.attachment.id))) return;
     const message = { id: randomUUID(), ...parsed.data, author: user, createdAt: new Date().toISOString() };
     await store.addMessage(message);
@@ -320,14 +411,14 @@ io.on('connection', (socket) => {
   socket.on('chat:sync:push', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
     const parsed = syncBundleSchema.safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
-    const addedChannels = await store.mergeChannels(parsed.data.channels);
-    const addedMessages = await store.mergeMessages(parsed.data.messages);
+    const addedChannels = p2pMode ? [] : await store.mergeChannels(parsed.data.channels);
+    const addedMessages = await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
     if (addedChannels.length) broadcastSnapshot();
     if (addedMessages.length) io.emit('chat:sync:messages', addedMessages);
     acknowledge?.({
       ok: true,
-      channels: [...store.channels],
-      messages: store.messages.slice(-500),
+      channels: availableChannels(),
+      messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
       availableAttachmentIds: await store.availableAttachmentIds(),
     });
   });
@@ -349,6 +440,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('channel:create', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    if (p2pMode) return acknowledge?.({ ok: false, error: 'O modo P2P possui somente uma conversa e uma call.' });
     const parsed = z.object({ name: z.string().trim().min(1).max(32), type: z.enum(['text', 'voice']) }).safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
     const slug = parsed.data.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || randomUUID().slice(0, 8);
@@ -360,7 +452,7 @@ io.on('connection', (socket) => {
 
   socket.on('voice:join', (input: unknown, acknowledge: (result: unknown) => void) => {
     const channelId = typeof input === 'string' ? input : z.object({ channelId: z.string() }).safeParse(input).data?.channelId;
-    if (typeof channelId !== 'string' || !store.channels.some((channel) => channel.id === channelId && channel.type === 'voice')) return;
+    if (typeof channelId !== 'string' || !channelIsAvailable(channelId, 'voice')) return;
     const previousChannels = rooms.leaveEverywhere(socket.id);
     for (const previous of previousChannels) {
       socket.leave(`voice:${previous}`);
@@ -451,7 +543,7 @@ function leaveVoice(socketId: string): void {
 }
 
 const webDirectory = path.resolve(process.env.WEB_DIR ?? './dist-web');
-if (existsSync(webDirectory)) {
+if (serveWeb && existsSync(webDirectory)) {
   app.use(express.static(webDirectory));
   app.use((request, response, next) => {
     if (request.method !== 'GET' || request.path.startsWith('/api/')) return next();
@@ -461,9 +553,12 @@ if (existsSync(webDirectory)) {
 
 storeReady.then(async () => {
   await store.pruneSessions();
-  for (const session of store.sessions) sessions.set(session.token, { userId: session.userId, expiresAt: session.expiresAt });
+  for (const storedSession of store.sessions) {
+    const storedTokenHash = storedSession.tokenHash ?? (storedSession.token ? hashToken(storedSession.token) : '');
+    if (storedTokenHash) sessions.set(storedTokenHash, { userId: storedSession.userId, expiresAt: storedSession.expiresAt });
+  }
   httpServer.listen(port, host, () => {
-    console.log(`🍅 ${serverName} em http://${host}:${port}`);
+    console.log(`Tumacord ${p2pMode ? 'P2P' : 'Server'} em ${tlsEnabled ? 'https' : 'http'}://${host}:${port}${serveWeb ? ' (web ativo)' : ''}`);
   });
 }).catch((error) => {
   console.error('Falha ao iniciar o servidor Tumacord:', error);

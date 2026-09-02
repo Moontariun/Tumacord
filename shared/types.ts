@@ -22,6 +22,7 @@ export interface PublicUser {
   id: string;
   username: string;
   profile?: UserProfile;
+  isAdmin?: boolean;
 }
 
 export interface ChatAttachment {
@@ -65,6 +66,21 @@ export interface ServerSnapshot {
   channels: Channel[];
   onlineUsers: PublicUser[];
   voiceRooms: Record<string, VoiceState[]>;
+}
+
+export interface AdminOverview {
+  serverName: string;
+  version: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  onlineUsers: PublicUser[];
+  channels: Channel[];
+  voiceRooms: Record<string, VoiceState[]>;
+  security: {
+    accessKeyRequired: boolean;
+    tls: boolean;
+    media: 'DTLS-SRTP';
+  };
 }
 
 export interface StreamMeta {

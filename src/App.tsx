@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
+import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { Icon } from './components/Icon';
 import { useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
@@ -10,6 +10,9 @@ import { cacheAttachment, downloadBlob, formatFileSize, hasLocalAttachment, load
 import { volumeToGain } from './lib/audioGain';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
 import logoUrl from '../assets/tumacord-logo.png';
+import packageMetadata from '../package.json';
+
+const APP_VERSION = packageMetadata.version;
 
 function App() {
   const [session, setSession] = useState<SavedSession | null>(() => loadSession());
@@ -31,13 +34,14 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     const saved = defaultServerUrl();
     return saved.endsWith(':3927') ? 'http://127.0.0.1:4600' : saved;
   });
+  const [serverKey, setServerKey] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [connectionMode, setConnectionMode] = useState<'p2p' | 'server'>('p2p');
+  const [connectionMode, setConnectionMode] = useState<'p2p' | 'server'>(() => window.tumacordDesktop ? 'p2p' : 'server');
   const [rememberMe, setRememberMe] = useState(true);
   const isDesktop = Boolean(window.tumacordDesktop);
 
@@ -55,8 +59,8 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     const target = connectionMode === 'p2p' && isDesktop ? 'http://127.0.0.1:3927' : serverUrl;
     try {
       const authenticated = mode === 'register'
-        ? await register(target, username, password, undefined, connectionMode, rememberMe)
-        : await login(target, username, password, undefined, false, connectionMode, rememberMe);
+        ? await register(target, username, password, undefined, connectionMode, rememberMe, serverKey)
+        : await login(target, username, password, undefined, connectionMode === 'server', connectionMode, rememberMe, serverKey);
       onLogin(authenticated);
       playSound('connect');
     }
@@ -67,14 +71,18 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   return <main className="login-page">
     <div className="login-glow glow-one" /><div className="login-glow glow-two" />
     <form className="login-card" onSubmit={submit}>
-      <img className="login-logo" src={logoUrl} alt="Tomate mascote do Tumacord" />
+      <img className="login-logo" src={logoUrl} alt="Marca do Tumacord" />
       <div className="brand-title">Tuma<span>cord</span></div>
       <p>{mode === 'register' ? 'Crie sua conta e entre na turma.' : 'Entre e o Tumacord encontra a turma sozinho.'}</p>
       <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
-        <button type="button" className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')}><Icon name="users" /><span><strong>P2P automático</strong><small>ZeroTier/LAN, host dinâmico</small></span></button>
+        <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'ZeroTier/LAN, host dinâmico' : 'Disponível no aplicativo'}</small></span></button>
         <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
       </div>
-      {connectionMode === 'server' && <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="http://10.x.x.x:4600" required /></label>}
+      {connectionMode === 'server' && <div className="server-login-fields">
+        <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
+        <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
+        <p className="server-security-note"><Icon name="shield" /><span><strong>Conexão protegida</strong><small>HTTPS/WSS quando configurado; voz, câmera e tela usam WebRTC criptografado.</small></span></p>
+      </div>}
       <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Como a turma te chama?" required /></label>
       <label>Senha <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••" required /></label>
       {mode === 'register' && <label>Confirmar senha <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Repita a senha" required /></label>}
@@ -82,7 +90,8 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       {error && <div className="form-error">{error}</div>}
       <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar no Tumacord'}</button>
       <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
-      <small>{connectionMode === 'p2p' ? 'As calls da rede aparecem dentro do app; ninguém precisa copiar IP.' : 'O servidor dedicado mantém todos no mesmo endereço e usa a porta 4600 por padrão.'}</small>
+      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para a turma. As calls da rede aparecem dentro do app; ninguém precisa copiar IP.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
+      <div className="app-version" title={`Versão instalada: ${APP_VERSION}`}>Tumacord v{APP_VERSION}</div>
     </form>
   </main>;
 }
@@ -98,6 +107,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const [syncFiles, setSyncFiles] = useState(() => localStorage.getItem('tumacord.sync-files') === 'true');
   const [connected, setConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [memberListOpen, setMemberListOpen] = useState(true);
   const [toast, setToast] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(readSoundEnabled);
@@ -249,15 +259,28 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   }, [toggleAppFullscreen]);
 
   const voice = useVoice({ socket, user: session.user, preferences: devices.preferences, onError: showToast, onDevicesChanged: devices.refresh, onHostHandoff: handleHostHandoff, dynamicHosting: session.connectionMode !== 'server' });
-  const selectedChannel = snapshot.channels.find((channel) => channel.id === selectedChannelId) ?? snapshot.channels[0];
+  const visibleChannels = useMemo(() => {
+    if (session.connectionMode === 'server') return snapshot.channels;
+    const text = snapshot.channels.find((channel) => channel.id === 'geral' && channel.type === 'text')
+      ?? snapshot.channels.find((channel) => channel.type === 'text');
+    const voiceChannel = snapshot.channels.find((channel) => channel.id === 'call-geral' && channel.type === 'voice')
+      ?? snapshot.channels.find((channel) => channel.type === 'voice');
+    return [text, voiceChannel].filter((channel): channel is Channel => Boolean(channel));
+  }, [session.connectionMode, snapshot.channels]);
+  const selectedChannel = visibleChannels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0];
+
+  useEffect(() => {
+    if (!visibleChannels.length || visibleChannels.some((channel) => channel.id === selectedChannelId)) return;
+    setSelectedChannelId(visibleChannels[0].id);
+  }, [selectedChannelId, visibleChannels]);
 
   useEffect(() => {
     const resume = session.resumeChannelId;
-    if (!resume || resumedCall.current || !connected || !snapshot.channels.some((channel) => channel.id === resume)) return;
+    if (!resume || resumedCall.current || !connected || !visibleChannels.some((channel) => channel.id === resume)) return;
     resumedCall.current = true;
     setSelectedChannelId(resume);
     void voice.join(resume);
-  }, [connected, session.resumeChannelId, snapshot.channels, voice]);
+  }, [connected, session.resumeChannelId, visibleChannels, voice]);
 
   const selfVoiceState = voice.members.find((member) => member.id === session.user.id);
   useEffect(() => {
@@ -329,6 +352,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const currentVoiceChannel = snapshot.channels.find((channel) => channel.id === voice.channelId);
   const selectedMembers = selectedChannel?.type === 'voice' ? snapshot.voiceRooms[selectedChannel.id] ?? [] : [];
   const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
+  const currentUser = snapshot.onlineUsers.find((user) => user.id === session.user.id) ?? session.user;
+  const isServerAdmin = session.connectionMode === 'server' && Boolean(currentUser.isAdmin);
 
   return <div className="app-shell">
     <nav className="server-rail" aria-label="Servidor Tumacord">
@@ -339,11 +364,11 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       <header className="server-header"><span>{snapshot.serverName}</span></header>
       <div className="channel-scroll">
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
-        <ChannelGroup title="Canais de texto" onAdd={() => createChannel('text')}>
-          {snapshot.channels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
+          {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
         </ChannelGroup>
-        <ChannelGroup title="Canais de voz" onAdd={() => createChannel('voice')}>
-          {snapshot.channels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call da turma'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
+          {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
             {(snapshot.voiceRooms[channel.id] ?? []).map((member) => <div className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} key={member.socketId}><Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small /><span className="voice-member-copy"><strong>{member.username}</strong><small>{member.screen ? <><span className="live-dot" /> AO VIVO</> : member.pingMs < 9999 ? `${member.pingMs} ms` : 'na call'}</small></span><span className="voice-member-icons">{member.isHost && <Icon name="host" />}{member.muted && <Icon name="micOff" />}</span></div>)}
           </div>)}
@@ -368,6 +393,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa da turma sem complicação.</span>}
         <div className="topbar-spacer" />
         <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : 'Host dinâmico pela rede local/ZeroTier'}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
+        {isServerAdmin && <button className="admin-toolbar-button" onClick={() => setAdminOpen(true)} title="Painel administrativo"><Icon name="shield" /></button>}
         <button className={memberListOpen ? 'toolbar-active' : ''} onClick={() => setMemberListOpen((value) => !value)} title="Membros"><Icon name="users" /></button>
         <button onClick={() => void toggleAppFullscreen()} title={appFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}><Icon name={appFullscreen ? 'minimize' : 'maximize'} /></button>
       </header>
@@ -380,6 +406,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     </section>
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
     {profileUser && <ProfileModal user={snapshot.onlineUsers.find((candidate) => candidate.id === profileUser.id) ?? (profileUser.id === session.user.id ? session.user : profileUser)} own={profileUser.id === session.user.id} serverUrl={session.serverUrl} token={session.token} onClose={() => setProfileUser(null)} onSaved={(updated) => { const nextSession = { ...session, user: updated }; saveSession(nextSession); onSessionChange(nextSession); setProfileUser(updated); showToast('Perfil atualizado.'); }} />}
@@ -387,8 +414,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   </div>;
 }
 
-function ChannelGroup({ title, onAdd, children }: { title: string; onAdd: () => void; children: React.ReactNode }) {
-  return <section className="channel-group"><div className="group-title"><span>{title}</span><button onClick={onAdd} title="Criar canal"><Icon name="plus" /></button></div>{children}</section>;
+function ChannelGroup({ title, onAdd, children }: { title: string; onAdd?: () => void; children: React.ReactNode }) {
+  return <section className="channel-group"><div className="group-title"><span>{title}</span>{onAdd && <button onClick={onAdd} title="Criar canal"><Icon name="plus" /></button>}</div>{children}</section>;
 }
 
 function ChannelButton({ channel, selected, connected, onClick }: { channel: Channel; selected: boolean; connected?: boolean; onClick: () => void }) {
@@ -518,16 +545,22 @@ function CallView({ voice, channel, members, speakerId, userVolumes, setUserVolu
     </div>
     {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly />)}
     <div className="call-footer">
-      {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /> Reconectar</button></div>}
-      {inThisCall && voice.screenOn && <label className="quality-picker"><span><i /> Qualidade ao vivo</span><select value={voice.quality} onChange={(event) => { const next = event.target.value as StreamQuality; void voice.setQuality(next).then(() => onNotice(`Live ajustada para ${qualityOptions.find(([value]) => value === next)?.[1].label ?? next}.`)); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
-      {visibleVideoMedia.some((media) => media.kind === 'screen') && <div className="stream-audio-controls"><button onClick={() => setStreamMuted((muted) => !muted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /></div>}
-      {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
-        <ControlButton icon={voice.muted ? 'micOff' : 'mic'} label={voice.muted ? 'Ativar microfone' : 'Silenciar'} active={voice.muted} danger onClick={() => void voice.toggleMute()} />
-        <ControlButton icon="headphones" label={voice.deafened ? 'Ouvir' : 'Ensurdecer'} active={voice.deafened} danger onClick={voice.toggleDeafen} />
-        <ControlButton icon="camera" label={voice.cameraOn ? 'Parar vídeo' : 'Câmera'} active={voice.cameraOn} onClick={() => void voice.toggleCamera()} />
-        <ControlButton icon="screen" label={voice.screenOn ? 'Parar stream' : 'Transmitir tela'} active={voice.screenOn} accent onClick={() => void voice.requestScreenShare()} />
-        <ControlButton icon="phoneOff" label="Sair" danger active onClick={voice.leave} />
-      </>}
+      <div className="call-status-tools">
+        {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /><span>Reconectar</span></button></div>}
+        {inThisCall && voice.screenOn && <label className="quality-picker"><span><i /> Qualidade ao vivo</span><select value={voice.quality} onChange={(event) => { const next = event.target.value as StreamQuality; void voice.setQuality(next).then(() => onNotice(`Live ajustada para ${qualityOptions.find(([value]) => value === next)?.[1].label ?? next}.`)); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
+      </div>
+      <div className="call-primary-controls">
+        {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
+          <ControlButton icon={voice.muted ? 'micOff' : 'mic'} label={voice.muted ? 'Ativar microfone' : 'Silenciar'} active={voice.muted} danger onClick={() => void voice.toggleMute()} />
+          <ControlButton icon="headphones" label={voice.deafened ? 'Ouvir' : 'Ensurdecer'} active={voice.deafened} danger onClick={voice.toggleDeafen} />
+          <ControlButton icon="camera" label={voice.cameraOn ? 'Parar vídeo' : 'Câmera'} active={voice.cameraOn} onClick={() => void voice.toggleCamera()} />
+          <ControlButton icon="screen" label={voice.screenOn ? 'Parar stream' : 'Transmitir tela'} active={voice.screenOn} accent onClick={() => void voice.requestScreenShare()} />
+          <ControlButton icon="phoneOff" label="Sair" danger active onClick={voice.leave} />
+        </>}
+      </div>
+      <div className="call-viewer-tools">
+        {visibleVideoMedia.some((media) => media.kind === 'screen') && <label className="stream-audio-controls"><button type="button" onClick={() => setStreamMuted((muted) => !muted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>Live</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></label>}
+      </div>
     </div>
   </main>;
 }
@@ -717,6 +750,66 @@ function MemberList({ users, voiceMembers, volumeMembers, currentUserId, userVol
   </aside>;
 }
 
+function AdminModal({ serverUrl, token, currentUserId, onClose, onNotice }: { serverUrl: string; token: string; currentUserId: string; onClose: () => void; onNotice: (message: string) => void }) {
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(`${serverUrl}/api/admin/overview`, { headers: { authorization: `Bearer ${token}` } });
+      const body = await response.json() as AdminOverview & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'Não foi possível carregar o painel.');
+      setOverview(body);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Não foi possível carregar o painel.');
+    } finally {
+      setLoading(false);
+    }
+  }, [serverUrl, token]);
+  useEffect(() => { void load(); }, [load]);
+  const disconnectUser = async (user: PublicUser) => {
+    if (!window.confirm(`Desconectar ${user.username} do servidor agora?`)) return;
+    setDisconnecting(user.id);
+    try {
+      const response = await fetch(`${serverUrl}/api/admin/users/${encodeURIComponent(user.id)}/disconnect`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'Não foi possível desconectar o usuário.');
+      onNotice(`${user.username} foi desconectado do servidor.`);
+      window.setTimeout(() => void load(), 250);
+    } catch (caught) {
+      onNotice(caught instanceof Error ? caught.message : 'Não foi possível desconectar o usuário.');
+    } finally {
+      setDisconnecting(null);
+    }
+  };
+  const activeCalls = overview ? Object.values(overview.voiceRooms).filter((members) => members.length > 0).length : 0;
+  const uptime = overview ? formatUptime(overview.uptimeSeconds) : '—';
+  return <div className="modal-backdrop admin-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="admin-modal">
+    <header><div><span className="modal-eyebrow">Servidor dedicado</span><h1>Painel administrativo</h1><p>Visão operacional reservada ao usuário Moontariun.</p></div><div className="admin-header-actions"><button onClick={() => void load()} disabled={loading}><Icon name="refresh" /> Atualizar</button><button className="modal-close" onClick={onClose}><Icon name="close" /></button></div></header>
+    {error && <div className="form-error admin-error">{error}</div>}
+    {loading && !overview ? <div className="admin-loading">Carregando estado do servidor…</div> : overview && <div className="admin-content">
+      <div className="admin-stats"><article><span>Online agora</span><strong>{overview.onlineUsers.length}</strong></article><article><span>Calls ativas</span><strong>{activeCalls}</strong></article><article><span>Canais</span><strong>{overview.channels.length}</strong></article><article><span>Tempo ativo</span><strong>{uptime}</strong></article></div>
+      <div className="admin-security"><span className={overview.security.accessKeyRequired ? 'secure' : 'warning'}><Icon name="shield" />{overview.security.accessKeyRequired ? 'Chave de acesso ativa' : 'Sem chave de acesso'}</span><span className={overview.security.tls ? 'secure' : 'neutral'}>{overview.security.tls ? 'HTTPS/WSS ativo' : 'HTTP na rede privada'}</span><span className="secure">Mídia {overview.security.media}</span><small>Versão {overview.version} · iniciado em {new Date(overview.startedAt).toLocaleString('pt-BR')}</small></div>
+      <div className="admin-columns">
+        <section className="admin-section"><div className="admin-section-title"><div><small>Estrutura</small><h2>Canais</h2></div><b>{overview.channels.length}</b></div><div className="admin-list">{overview.channels.map((channel) => { const participants = channel.type === 'voice' ? overview.voiceRooms[channel.id]?.length ?? 0 : undefined; return <article key={channel.id}><span className="admin-list-icon"><Icon name={channel.type === 'voice' ? 'voice' : 'hash'} /></span><div><strong>{channel.name}</strong><small>{channel.type === 'voice' ? `${participants} na call` : 'Canal de texto'}</small></div></article>; })}</div></section>
+        <section className="admin-section"><div className="admin-section-title"><div><small>Presença</small><h2>Usuários conectados</h2></div><b>{overview.onlineUsers.length}</b></div><div className="admin-list admin-user-list">{overview.onlineUsers.map((user) => { const inVoice = Object.values(overview.voiceRooms).flat().find((member) => member.id === user.id); return <article key={user.id}><Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online /><div><strong>{user.username}{user.isAdmin && <em>Admin</em>}</strong><small>{inVoice ? `Na call · ${inVoice.pingMs < 9999 ? `${inVoice.pingMs} ms` : 'conectado'}` : 'No servidor'}</small></div>{user.id !== currentUserId && <button disabled={disconnecting === user.id} onClick={() => void disconnectUser(user)}>{disconnecting === user.id ? 'Saindo…' : 'Desconectar'}</button>}</article>; })}{!overview.onlineUsers.length && <p>Nenhum usuário conectado.</p>}</div></section>
+      </div>
+    </div>}
+  </section></div>;
+}
+
+function formatUptime(totalSeconds: number): string {
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}min`;
+  return `${Math.max(0, minutes)}min`;
+}
+
 function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user: PublicUser; own: boolean; serverUrl: string; token: string; onClose: () => void; onSaved: (user: PublicUser) => void }) {
   const initial = user.profile ?? { bio: '', accentColor: '#ff5c5c' };
   const [bio, setBio] = useState(initial.bio);
@@ -771,7 +864,7 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
-    <aside><h2>Configurações</h2><button className="selected">Voz e vídeo</button><button onClick={onLogout}>Sair da conta</button></aside>
+    <aside><h2>Configurações</h2><button className="selected">Voz e vídeo</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
     <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
       <DeviceSelect label="Dispositivo de entrada" value={devices.preferences.microphoneId} devices={devices.microphones} onChange={(value) => update('microphoneId', value)} />
       <DeviceSelect label="Dispositivo de saída" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />

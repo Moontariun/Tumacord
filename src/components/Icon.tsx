@@ -18,6 +18,7 @@ import {
   RefreshCw,
   ScreenShare,
   Server,
+  ShieldCheck,
   Send,
   Settings,
   Shrink,
@@ -29,7 +30,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export type IconName = 'hash' | 'voice' | 'mic' | 'micOff' | 'headphones' | 'camera' | 'screen' | 'settings' | 'phoneOff' | 'plus' | 'users' | 'send' | 'host' | 'close' | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand' | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server' | 'refresh';
+export type IconName = 'hash' | 'voice' | 'mic' | 'micOff' | 'headphones' | 'camera' | 'screen' | 'settings' | 'phoneOff' | 'plus' | 'users' | 'send' | 'host' | 'close' | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand' | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server' | 'shield' | 'refresh';
 
 const icons: Record<IconName, LucideIcon> = {
   hash: Hash,
@@ -40,6 +41,7 @@ const icons: Record<IconName, LucideIcon> = {
   camera: Video,
   screen: ScreenShare,
   server: Server,
+  shield: ShieldCheck,
   settings: Settings,
   phoneOff: PhoneOff,
   plus: Plus,

@@ -10,11 +10,17 @@ services:
       SERVER_NAME: Tumacord da Turma
       DATA_DIR: /data
       WEB_DIR: /app/dist-web
+      TUMACORD_SERVE_WEB: 1
+      SERVER_ACCESS_KEY: ${TUMACORD_SERVER_ACCESS_KEY:?Defina TUMACORD_SERVER_ACCESS_KEY no arquivo .env}
+      ADMIN_USERNAME: ${TUMACORD_ADMIN_USERNAME:-Moontariun}
+      TLS_CERT_FILE: ${TUMACORD_TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TUMACORD_TLS_KEY_FILE:-}
       SESSION_TTL_DAYS: 30
     ports:
       - "4600:4600"
     volumes:
       - tumacord-data:/data
+      - ./certs:/certs:ro
     stop_grace_period: 10s
     logging:
       options:

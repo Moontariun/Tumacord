@@ -84,7 +84,8 @@ ln -s -- "$version_dir" "$next_link"
 mv -Tf -- "$next_link" "$current_link"
 rm -f -- "$HOME/.local/bin/tumacord"
 install -m755 "$project_dir/packaging/tumacord-launcher" "$HOME/.local/bin/tumacord"
-rm -f -- "$icon_root/scalable/apps/tumacord.svg"
+mkdir -p "$icon_root/scalable/apps"
+rm -f -- "$icon_root/scalable/apps/tumacord.svg" "$icon_root"/scalable/apps/tumacord-kde-*.svg
 icon_hash="$(sha256sum "$project_dir/assets/tumacord-logo.png" | cut -c1-12)"
 kde_icon_name="tumacord-kde-${icon_hash}"
 for icon_size in 16 24 32 48 64 96 128 256 512; do

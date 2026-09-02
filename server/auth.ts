@@ -1,4 +1,4 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCallback);
@@ -23,4 +23,14 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 export function createToken(): string {
   return randomBytes(32).toString('base64url');
+}
+
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+export function verifySecret(provided: string, expected: string): boolean {
+  const providedHash = Buffer.from(hashToken(provided), 'hex');
+  const expectedHash = Buffer.from(hashToken(expected), 'hex');
+  return timingSafeEqual(providedHash, expectedHash);
 }
