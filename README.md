@@ -16,9 +16,9 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 - microfone a 48 kHz com cancelamento de eco, supressão neural GTCRN em WebAssembly, corte de ruído grave, compressor de voz e ganho automático;
 - detecção e seleção de microfone, saída de áudio e câmera;
 - câmera e compartilhamento de tela;
-- ao clicar em **Transmitir tela**, o Tumacord primeiro pede qualidade e áudio; só depois abre o seletor de tela/janela;
+- ao clicar em **Transmitir tela**, o Tumacord primeiro pede qualidade e áudio e abre o seletor de tela/janela uma única vez;
 - captura de áudio opcional por um barramento temporário do PipeWire: jogos, navegador e outros aplicativos entram na live, enquanto Tumacord, Discord e seus mecanismos de voz ficam de fora para não devolver a call pela transmissão;
-- perfis Fonte (1080p60), 1440p (60 e 30 FPS), Alta (1080p30), Equilibrada (720p30) e Econômica (480p15), com ajuste adaptativo para manter a transmissão estável;
+- perfis 1080p60, 1440p60, 1440p30, 1080p30, 720p30 e 480p15, com preferência persistente e troca dinâmica durante a live sem recapturar nem selecionar a tela novamente;
 - volume individual por participante e pela live, de 0 a 200%, com ganho real de até +18 dB e limitador contra estouro;
 - dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**;
 - ao abrir o chat durante uma live, ela continua tocando em uma miniatura móvel e redimensionável, preservando mute e volume;
@@ -43,10 +43,10 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-v0.4.0.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-v0.5.0.sh | bash
 ```
 
-Este comando é específico da branch `release/p2p-media-profile-stability-v0.4.0`: ele baixa primeiro um script temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-p2p-media-profile-stability-v0.4.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+Este comando instala a v0.5.0 corrigida a partir da mesma branch de manutenção `release/p2p-media-profile-stability-v0.4.0`. A v0.4.0 anterior está marcada como afetada por falhas de transmissão e não deve mais ser usada. O script baixa primeiro um bootstrap temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-p2p-media-profile-stability-v0.4.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
@@ -134,6 +134,8 @@ No KDE/Wayland, mantenha também `xdg-desktop-portal` e `xdg-desktop-portal-kde`
 Quando o áudio é marcado, o Tumacord cria sozinho um barramento temporário, duplica para ele os aplicativos comuns e captura seu monitor. As saídas do próprio Tumacord, do Discord e do mecanismo de voz WebRTC são excluídas antes da captura. Assim, a pessoa que vê sua live recebe jogo, navegador e demais sons do sistema, mas não escuta a própria voz voltando pela transmissão. Ao encerrar a live, o barramento e todas as ligações são removidos automaticamente; não há ajuste manual no painel de áudio.
 
 Na captura pela janela do navegador, fora do aplicativo Electron, o comportamento depende do que o seletor do navegador e o portal do sistema disponibilizarem. O isolamento automático descrito acima é parte do aplicativo desktop para CachyOS.
+
+Se o processo gráfico do Electron cair repetidamente, o Tumacord registra somente o tipo da falha e reinicia uma sessão em modo gráfico seguro. Esse fallback vale para NVIDIA, AMD e Intel e não fica preso: na abertura seguinte a aceleração volta a ser testada. Para isolar manualmente um problema de driver, também é possível iniciar uma sessão com `TUMACORD_DISABLE_GPU=1 tumacord`; os eventos técnicos ficam em `logs/runtime-health.log` dentro do diretório de dados do aplicativo. Esse modo é diagnóstico/reserva, pois codificação por CPU pode reduzir a qualidade em salas maiores.
 
 Para evitar eco físico, use fones. O cancelamento de eco fica sempre habilitado no microfone. A opção **Supressão neural de ruído** ativa localmente o GTCRN, seguida de filtro passa-altas e compressor; se o AudioWorklet não puder iniciar, o Tumacord ativa automaticamente a supressão nativa do Chromium como reserva.
 

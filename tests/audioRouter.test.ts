@@ -110,3 +110,36 @@ test('serializa parar e preparar sem deixar módulos ativos sem monitoramento', 
   await router.stop();
   assert.equal(modules.size, 0);
 });
+
+test('falha transitória de uma porta não desmonta o barramento capturado', async () => {
+  let nextModule = 700;
+  let linkAttempts = 0;
+  const modules = new Set<string>();
+  const router = new ScreenAudioRouter({
+    intervalMs: 60_000,
+    retryDelayMs: 0,
+    pipewireGraph: async () => routingGraph,
+    pactl: async (args: string[]) => {
+      if (args[0] === 'load-module') {
+        const id = String(nextModule++);
+        modules.add(id);
+        return id;
+      }
+      if (args[0] === 'unload-module') modules.delete(args[1]);
+      return args.join(' ') === 'list short modules' ? '' : '';
+    },
+    execFile: async (command: string, args: string[]) => {
+      if (command === 'pw-link' && args[0] === '-L') {
+        linkAttempts += 1;
+        if (linkAttempts === 1) throw new Error('a porta desapareceu');
+      }
+      return { stdout: '' };
+    },
+  });
+
+  const prepared = await router.prepare();
+  assert.equal(prepared.ok, true);
+  assert.equal(router.active, true);
+  assert.equal(modules.size, 2, 'os módulos válidos não devem ser recriados por falha de uma porta');
+  await router.stop();
+});

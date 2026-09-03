@@ -122,6 +122,15 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   assert.equal(streamerJoin.ok, true);
   await join(viewer, 'call-geral');
   await join(outsider, 'jogos');
+  assert.equal((await join(outsider, 'canal-inexistente')).ok, false, 'join inválido precisa responder em vez de deixar a interface aguardando');
+  await join(outsider, 'jogos');
+
+  let malformedOffers = 0;
+  viewer.on('rtc:offer', () => { malformedOffers += 1; });
+  streamer.emit('rtc:offer', { target: viewer.id, sdp: { type: 'answer', sdp: 'tipo incompatível' } });
+  streamer.emit('rtc:stream-meta', { target: viewer.id, meta: { streamId: 'screen-invalid', kind: 'arquivo' } });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(malformedOffers, 0, 'payload RTC inválido não pode alcançar outro cliente');
 
   const screenState = waitForEvent<VoiceState[]>(viewer, 'voice:members', (members) => members.some((member) => member.socketId === streamer.id && member.screen && member.screenAudio));
   streamer.emit('voice:state', { screen: true, screenAudio: true, camera: false });
@@ -155,4 +164,30 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
   outsider.emit('rtc:resync', { target: streamer.id });
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(leakedAcrossRooms, false, 'sinalização nunca deve atravessar salas de voz');
+
+  await join(outsider, 'call-geral');
+  const normalMetrics = waitForEvent<VoiceState[]>(viewer, 'voice:members', (members) => {
+    const bySocket = new Map(members.map((member) => [member.socketId, member.pingMs]));
+    return bySocket.get(streamer.id) === 60 && bySocket.get(viewer.id) === 40 && bySocket.get(outsider.id) === 12;
+  });
+  streamer.emit('voice:latency', 60);
+  viewer.emit('voice:latency', 40);
+  outsider.emit('voice:latency', 12);
+  await normalMetrics;
+  const normalHandoff = waitForEvent<{ host: VoiceState }>(viewer, 'voice:host-handoff', (payload) => payload.host.socketId === outsider.id);
+  streamer.emit('voice:leave');
+  assert.equal((await normalHandoff).host.isHost, true, 'saída normal precisa eleger o mesmo vencedor para todos');
+
+  await join(streamer, 'call-geral');
+  const abruptMetrics = waitForEvent<VoiceState[]>(viewer, 'voice:members', (members) => {
+    const bySocket = new Map(members.map((member) => [member.socketId, member.pingMs]));
+    return bySocket.get(viewer.id) === 8 && bySocket.get(streamer.id) === 25;
+  });
+  viewer.emit('voice:latency', 8);
+  streamer.emit('voice:latency', 25);
+  await abruptMetrics;
+  const abruptHandoff = waitForEvent<{ host: VoiceState }>(viewer, 'voice:host-handoff', (payload) => payload.host.socketId === viewer.id);
+  outsider.disconnect();
+  sockets.splice(sockets.indexOf(outsider), 1);
+  assert.equal((await abruptHandoff).host.isHost, true, 'queda abrupta precisa eleger um único host entre os participantes restantes');
 });

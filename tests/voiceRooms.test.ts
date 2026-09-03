@@ -38,3 +38,13 @@ test('entrada ou retorno de outro usuário não apaga uma live existente', () =>
   const streamer = rooms.members('call').find((member) => member.id === 'a');
   assert.deepEqual({ screen: streamer?.screen, camera: streamer?.camera }, { screen: true, camera: true });
 });
+
+test('estado impossível de áudio/tela e fala/mute é normalizado', () => {
+  const rooms = new VoiceRooms();
+  rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927' });
+  rooms.update('call', 'socket-a', { screen: true, screenAudio: true, speaking: true });
+  const [muted] = rooms.update('call', 'socket-a', { muted: true });
+  assert.equal(muted.speaking, false);
+  const [stopped] = rooms.update('call', 'socket-a', { screen: false });
+  assert.equal(stopped.screenAudio, false);
+});

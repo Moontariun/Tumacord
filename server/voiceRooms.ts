@@ -58,7 +58,11 @@ export class VoiceRooms {
 
   update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
-    if (participant) Object.assign(participant, patch);
+    if (participant) {
+      Object.assign(participant, patch);
+      if (!participant.screen) participant.screenAudio = false;
+      if (participant.muted) participant.speaking = false;
+    }
     return this.members(channelId);
   }
 

@@ -24,7 +24,6 @@ interface Window {
   tumacordDesktop?: {
     isDesktop: true;
     getSources: () => Promise<DesktopSource[]>;
-    selectDesktopSource: (sourceId: string, includeAudio: boolean, audioDevice?: { deviceId: string; deviceName: string }) => void;
     prepareScreenAudio: () => Promise<{ ok: boolean; deviceId?: string; deviceName?: string; error?: string }>;
     stopScreenAudio: () => Promise<{ ok: boolean }>;
     discoverCalls: () => Promise<DiscoveredCall[]>;

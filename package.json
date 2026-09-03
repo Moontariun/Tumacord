@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -43,7 +43,7 @@
     "@vitejs/plugin-react": "^5.0.2",
     "concurrently": "^9.2.1",
     "cross-env": "^10.0.0",
-    "electron": "^37.4.0",
+    "electron": "^41.10.7",
     "electron-builder": "^26.0.12",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
@@ -81,7 +81,7 @@
     }
   },
   "allowScripts": {
-    "electron@37.10.3": true,
+    "electron@41.10.7": true,
     "esbuild@0.28.2": true
   }
 }

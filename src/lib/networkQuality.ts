@@ -37,6 +37,8 @@ export interface InboundVideoMetrics {
 export interface EncoderAdaptationInput {
   targetFps: number;
   currentScale: number;
+  minimumScale?: number;
+  maximumScale?: number;
   healthySamples: number;
   pressureSamples: number;
   averageEncodeMs?: number;
@@ -192,14 +194,16 @@ export function adaptScreenBitrate(input: StreamAdaptationInput): StreamAdaptati
   return { bitrate: roundedBitrate(current), healthySamples, congested: false };
 }
 
-function roundedScale(value: number): number {
-  return Math.round(Math.min(2, Math.max(1, value)) * 20) / 20;
+function roundedScale(value: number, minimum = 1, maximum = 2): number {
+  return Math.round(Math.min(Math.max(minimum, maximum), Math.max(minimum, value)) * 20) / 20;
 }
 
 // Bitrate adaptation handles the network. This second controller reacts only
 // to encoder/decoder pressure so a 1440p game can temporarily step down toward
 // 1080p/720p instead of preserving resolution while dropping most frames.
 export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptationResult {
+  const minimumScale = Math.max(1, input.minimumScale ?? 1);
+  const maximumScale = Math.max(minimumScale, input.maximumScale ?? 2);
   const frameBudgetMs = 1_000 / Math.max(1, input.targetFps);
   const encoderOverBudget = input.averageEncodeMs !== undefined && input.averageEncodeMs >= frameBudgetMs * 0.82;
   const stressed = Boolean(input.receiverFrozen) || input.qualityLimitationReason === 'cpu' || encoderOverBudget;
@@ -207,7 +211,7 @@ export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptat
   const pressureThreshold = input.receiverFrozen ? 1 : 2;
   if (stressed && pressureSamples >= pressureThreshold) {
     return {
-      scale: roundedScale(Math.max(input.currentScale + 0.25, input.currentScale * 1.2)),
+      scale: roundedScale(Math.max(input.currentScale + 0.25, input.currentScale * 1.2), minimumScale, maximumScale),
       healthySamples: 0,
       pressureSamples: 0,
       stressed: true,
@@ -218,13 +222,13 @@ export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptat
     && (input.qualityLimitationReason === undefined || input.qualityLimitationReason === 'none')
     && (input.averageEncodeMs === undefined || input.averageEncodeMs < frameBudgetMs * 0.55);
   const healthySamples = healthy ? input.healthySamples + 1 : Math.max(0, input.healthySamples - 1);
-  if (input.currentScale > 1 && healthySamples >= 6) {
+  if (input.currentScale > minimumScale && healthySamples >= 6) {
     return {
-      scale: roundedScale(Math.max(1, input.currentScale - 0.15)),
+      scale: roundedScale(Math.max(minimumScale, input.currentScale - 0.15), minimumScale, maximumScale),
       healthySamples: 0,
       pressureSamples,
       stressed: false,
     };
   }
-  return { scale: roundedScale(input.currentScale), healthySamples, pressureSamples, stressed };
+  return { scale: roundedScale(input.currentScale, minimumScale, maximumScale), healthySamples, pressureSamples, stressed };
 }

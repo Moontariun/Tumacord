@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Channel, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
+import type { Channel, ChatAttachment, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
+import { profileIsNewer } from '../shared/profileVersion.js';
 
 export interface StoredUser {
   id: string;
@@ -24,9 +25,12 @@ interface StoredData {
   users: StoredUser[];
   channels: Channel[];
   messages: ChatMessage[];
+  attachments: StoredAttachment[];
   profiles: ReplicatedProfile[];
   sessions: StoredSession[];
 }
+
+type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
 
 const initialData = (): StoredData => ({
   users: [],
@@ -37,17 +41,13 @@ const initialData = (): StoredData => ({
     { id: 'jogos', name: 'Jogos', type: 'voice' },
   ],
   messages: [],
+  attachments: [],
   profiles: [],
   sessions: [],
 });
 
 function profileKey(username: string): string {
   return username.normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
-}
-
-function profileTime(profile: UserProfile | undefined): number {
-  const value = profile?.updatedAt ? Date.parse(profile.updatedAt) : 0;
-  return Number.isFinite(value) ? value : 0;
 }
 
 export class JsonStore {
@@ -75,25 +75,41 @@ export class JsonStore {
       });
       const users = parsed.users ?? [];
       let migratedLegacyProfiles = false;
+      let repairedMissingProfileMedia = false;
       for (const user of users) {
-        if (!user.profile || user.profile.updatedAt) continue;
-        user.profile.updatedAt = user.createdAt || new Date(0).toISOString();
-        migratedLegacyProfiles = true;
+        if (!user.profile) continue;
+        if (!user.profile.updatedAt) {
+          user.profile.updatedAt = user.createdAt || new Date(0).toISOString();
+          migratedLegacyProfiles = true;
+        }
+        const repaired = await this.withExistingProfileMedia(user.profile);
+        user.profile = repaired.profile;
+        repairedMissingProfileMedia ||= repaired.changed;
       }
       const profiles = new Map<string, ReplicatedProfile>();
       for (const entry of [...(parsed.profiles ?? []), ...users.filter((user) => user.profile).map((user) => ({ username: user.username, profile: user.profile! }))]) {
+        const repaired = await this.withExistingProfileMedia(entry.profile);
+        repairedMissingProfileMedia ||= repaired.changed;
+        const safeEntry = { ...entry, profile: repaired.profile };
         const key = profileKey(entry.username);
         const current = profiles.get(key);
-        if (!current || profileTime(entry.profile) > profileTime(current.profile)) profiles.set(key, entry);
+        if (!current || profileIsNewer(safeEntry.profile, current.profile)) profiles.set(key, safeEntry);
+      }
+      const attachments = new Map<string, StoredAttachment>();
+      for (const attachment of parsed.attachments ?? []) attachments.set(attachment.id, attachment);
+      for (const message of parsed.messages ?? []) {
+        if (!message.attachment) continue;
+        attachments.set(message.attachment.id, this.storedAttachment(message.attachment));
       }
       this.data = {
         users,
         channels: parsed.channels?.length ? parsed.channels : initialData().channels,
         messages: parsed.messages ?? [],
+        attachments: [...attachments.values()],
         profiles: [...profiles.values()],
         sessions,
       };
-      if (migratedLegacySessions || migratedLegacyProfiles || !parsed.profiles) await this.save();
+      if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       await this.save();
@@ -103,12 +119,13 @@ export class JsonStore {
   get users(): readonly StoredUser[] { return this.data.users; }
   get channels(): readonly Channel[] { return this.data.channels; }
   get messages(): readonly ChatMessage[] { return this.data.messages; }
+  get attachments(): readonly StoredAttachment[] { return this.data.attachments; }
   get profiles(): readonly ReplicatedProfile[] { return this.data.profiles; }
   get sessions(): readonly StoredSession[] { return this.data.sessions; }
 
   async addUser(user: StoredUser): Promise<void> {
     const replicated = this.profileForUsername(user.username);
-    if (replicated && profileTime(replicated) > profileTime(user.profile)) user.profile = replicated;
+    if (replicated && profileIsNewer(replicated, user.profile)) user.profile = replicated;
     this.data.users.push(user);
     await this.save();
   }
@@ -158,10 +175,11 @@ export class JsonStore {
   async mergeProfiles(profiles: readonly ReplicatedProfile[]): Promise<ReplicatedProfile[]> {
     const changed: ReplicatedProfile[] = [];
     for (const incoming of profiles) {
+      if (!(await this.profileMediaExists(incoming.profile))) continue;
       const key = profileKey(incoming.username);
       const index = this.data.profiles.findIndex((entry) => profileKey(entry.username) === key);
       const current = index < 0 ? undefined : this.data.profiles[index];
-      if (current && profileTime(incoming.profile) <= profileTime(current.profile)) continue;
+      if (current && !profileIsNewer(incoming.profile, current.profile)) continue;
       const next = { username: incoming.username.trim(), profile: incoming.profile };
       if (index < 0) this.data.profiles.push(next);
       else this.data.profiles[index] = next;
@@ -181,13 +199,20 @@ export class JsonStore {
   async addMessage(message: ChatMessage): Promise<void> {
     if (this.data.messages.some((candidate) => candidate.id === message.id)) return;
     this.data.messages.push(message);
+    if (message.attachment) this.rememberAttachment(message.attachment);
     this.data.messages.sort((first, second) => first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id));
     if (this.data.messages.length > 2000) this.data.messages.splice(0, this.data.messages.length - 2000);
     await this.save();
   }
 
   async mergeChannels(channels: readonly Channel[]): Promise<Channel[]> {
-    const added = channels.filter((channel) => !this.data.channels.some((candidate) => candidate.id === channel.id));
+    const known = new Set(this.data.channels.map((channel) => channel.id));
+    const added: Channel[] = [];
+    for (const channel of channels) {
+      if (known.has(channel.id)) continue;
+      known.add(channel.id);
+      added.push(channel);
+    }
     if (!added.length) return [];
     this.data.channels.push(...added);
     await this.save();
@@ -196,7 +221,13 @@ export class JsonStore {
 
   async mergeMessages(messages: readonly ChatMessage[]): Promise<ChatMessage[]> {
     const known = new Set(this.data.messages.map((message) => message.id));
-    const added = messages.filter((message) => !known.has(message.id));
+    const added: ChatMessage[] = [];
+    for (const message of messages) {
+      if (known.has(message.id)) continue;
+      known.add(message.id);
+      added.push(message);
+      if (message.attachment) this.rememberAttachment(message.attachment);
+    }
     if (!added.length) return [];
     this.data.messages.push(...added);
     this.data.messages.sort((first, second) => first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id));
@@ -205,11 +236,19 @@ export class JsonStore {
     return added;
   }
 
-  async saveAttachment(id: string, contents: Buffer): Promise<void> {
+  async saveAttachment(id: string, contents: Buffer, metadata?: ChatAttachment): Promise<void> {
     const target = this.attachmentPath(id);
     const temporary = `${target}.next`;
     await writeFile(temporary, contents, { mode: 0o600 });
     await rename(temporary, target);
+    if (metadata) {
+      this.rememberAttachment({ ...metadata, id, size: contents.length });
+      await this.save();
+    }
+  }
+
+  attachmentForId(id: string): StoredAttachment | undefined {
+    return this.data.attachments.find((attachment) => attachment.id === id);
   }
 
   async hasAttachment(id: string): Promise<boolean> {
@@ -233,10 +272,52 @@ export class JsonStore {
     return path.join(this.attachmentsDirectory, id);
   }
 
+  private storedAttachment(attachment: ChatAttachment): StoredAttachment {
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+    };
+  }
+
+  private rememberAttachment(attachment: ChatAttachment): void {
+    const stored = this.storedAttachment(attachment);
+    const index = this.data.attachments.findIndex((candidate) => candidate.id === stored.id);
+    if (index < 0) this.data.attachments.push(stored);
+    else this.data.attachments[index] = stored;
+  }
+
+  private async profileMediaExists(profile: UserProfile): Promise<boolean> {
+    const media = [profile.avatar, profile.banner].filter((entry): entry is NonNullable<UserProfile['avatar']> => Boolean(entry));
+    return (await Promise.all(media.map((entry) => this.hasAttachment(entry.id)))).every(Boolean);
+  }
+
+  private async withExistingProfileMedia(profile: UserProfile): Promise<{ profile: UserProfile; changed: boolean }> {
+    const [avatarExists, bannerExists] = await Promise.all([
+      profile.avatar ? this.hasAttachment(profile.avatar.id) : Promise.resolve(false),
+      profile.banner ? this.hasAttachment(profile.banner.id) : Promise.resolve(false),
+    ]);
+    const changed = Boolean((profile.avatar && !avatarExists) || (profile.banner && !bannerExists));
+    if (!changed) return { profile, changed: false };
+    const { avatar: _avatar, banner: _banner, ...rest } = profile;
+    return {
+      profile: {
+        ...rest,
+        ...(avatarExists && profile.avatar ? { avatar: profile.avatar } : {}),
+        ...(bannerExists && profile.banner ? { banner: profile.banner } : {}),
+      },
+      changed: true,
+    };
+  }
+
   private save(): Promise<void> {
     const snapshot = JSON.stringify(this.data, null, 2);
     const temporary = `${this.file}.next`;
-    this.saveChain = this.saveChain.then(async () => {
+    // Uma falha transitória (disco desmontado, diretório recriado, etc.) não
+    // pode envenenar a fila: o próximo snapshot completo ainda precisa ter a
+    // chance de persistir o estado atual.
+    this.saveChain = this.saveChain.catch(() => undefined).then(async () => {
       await writeFile(temporary, snapshot, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, this.file);
     });

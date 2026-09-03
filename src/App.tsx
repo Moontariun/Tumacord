@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
+import { profileIsNewer } from '../shared/profileVersion';
 import { Icon } from './components/Icon';
 import { useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
@@ -129,6 +130,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const toastTimer = useRef<number | null>(null);
+  const handoffTimer = useRef<number | null>(null);
+  const handoffGeneration = useRef(0);
   const resumedCall = useRef(false);
   const selectedChannelRef = useRef(selectedChannelId);
   const syncFilesRef = useRef(syncFiles);
@@ -140,6 +143,11 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     playSound(sound ?? (text.toLocaleLowerCase('pt-BR').includes('falh') ? 'error' : 'notification'));
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(''), 5000);
+  }, []);
+  useEffect(() => () => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    if (handoffTimer.current) window.clearTimeout(handoffTimer.current);
+    handoffGeneration.current += 1;
   }, []);
 
   const changeSoundPreference = useCallback((enabled: boolean) => {
@@ -206,11 +214,16 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     const target = selfWillHost ? 'http://127.0.0.1:3927' : host.endpoint;
     showToast(selfWillHost ? 'O host saiu. Você tem o menor ping e está assumindo a call…' : `${host.username} tem o menor ping e está assumindo como host…`, 'host');
     const delay = selfWillHost ? 0 : abrupt ? 1100 : 800;
-    window.setTimeout(async () => {
+    const generation = ++handoffGeneration.current;
+    if (handoffTimer.current) window.clearTimeout(handoffTimer.current);
+    handoffTimer.current = window.setTimeout(async () => {
+      handoffTimer.current = null;
       if (!session.password) return onLogout();
       try {
-        onSessionChange(await login(target, session.user.username, session.password, channelId, true, 'p2p', session.rememberMe ?? true));
+        const migrated = await login(target, session.user.username, session.password, channelId, true, 'p2p', session.rememberMe ?? true);
+        if (generation === handoffGeneration.current) onSessionChange(migrated);
       } catch {
+        if (generation !== handoffGeneration.current) return;
         showToast('A troca automática de host falhou. Tentando localizar a call novamente…');
         onLogout();
       }
@@ -230,9 +243,18 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       mergeVisible(incoming);
       if (syncFilesRef.current) for (const item of incoming) if (item.attachment) void cacheAttachment(next, item.attachment, session.serverUrl, session.token).catch(() => undefined);
     };
+    const mirrorProfilesAfterMedia = (bundle: ChatSyncBundle) => {
+      if (!bundle.profiles?.length) return;
+      // O servidor local rejeita corretamente um perfil que aponte para uma
+      // imagem ausente. Baixamos os arquivos antes de persistir o JSON para
+      // não perder o perfil durante uma migração de host.
+      void cacheProfileMedia(bundle, session.serverUrl)
+        .then(() => mirrorLocally([], [], bundle.profiles ?? []))
+        .catch(() => undefined);
+    };
     const mergeBundle = (bundle: ChatSyncBundle) => {
-      void mirrorLocally(bundle.channels, bundle.messages, bundle.profiles ?? []);
-      void cacheProfileMedia(bundle, session.serverUrl);
+      void mirrorLocally(bundle.channels, bundle.messages);
+      mirrorProfilesAfterMedia(bundle);
       mergeVisible(bundle.messages);
     };
     const pushLocalHistory = async () => {
@@ -271,11 +293,11 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     next.on('server:snapshot', (incoming: ServerSnapshot) => {
       setSnapshot(incoming);
       const profiles = incoming.onlineUsers.filter((user) => user.profile?.updatedAt).map((user) => ({ username: user.username, profile: user.profile! }));
-      void mirrorLocally(incoming.channels, [], profiles);
-      void cacheProfileMedia({ channels: [], messages: [], profiles, availableAttachmentIds: [] }, session.serverUrl);
+      void mirrorLocally(incoming.channels, []);
+      mirrorProfilesAfterMedia({ channels: [], messages: [], profiles, availableAttachmentIds: [] });
       const currentSession = sessionRef.current;
       const freshSelf = incoming.onlineUsers.find((user) => user.id === currentSession.user.id);
-      if (freshSelf?.profile?.updatedAt && freshSelf.profile.updatedAt > (currentSession.user.profile?.updatedAt ?? '')) {
+      if (freshSelf?.profile?.updatedAt && profileIsNewer(freshSelf.profile, currentSession.user.profile)) {
         const nextSession = { ...currentSession, user: freshSelf };
         sessionRef.current = nextSession;
         saveSession(nextSession);
@@ -564,7 +586,7 @@ interface VoiceViewModel {
   toggleCamera: () => Promise<void>;
   requestScreenShare: () => Promise<void>;
   quality: StreamQuality;
-  setQuality: (quality: StreamQuality) => Promise<void>;
+  setQuality: (quality: StreamQuality) => Promise<boolean>;
   user: { id: string; username: string };
 }
 
@@ -624,7 +646,7 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
     <div className="call-footer">
       <div className="call-status-tools">
         {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /><span>Reconectar</span></button></div>}
-        {inThisCall && voice.screenOn && <label className="quality-picker"><span><i /> Qualidade ao vivo</span><select value={voice.quality} onChange={(event) => { const next = event.target.value as StreamQuality; void voice.setQuality(next).then(() => onNotice(`Live ajustada para ${qualityOptions.find(([value]) => value === next)?.[1].label ?? next}.`)); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
+        {inThisCall && voice.screenOn && <label className="quality-picker"><span><i /> Qualidade ao vivo</span><select value={voice.quality} onChange={(event) => { const next = event.target.value as StreamQuality; void voice.setQuality(next).then((applied) => { if (applied) onNotice(`Live ajustada para ${qualityOptions.find(([value]) => value === next)?.[1].label ?? next}.`); }); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
       </div>
       <div className="call-primary-controls">
         {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
@@ -871,18 +893,29 @@ function AdminModal({ serverUrl, token, currentUserId, onClose, onNotice }: { se
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const reloadTimer = useRef<number | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
+    };
+  }, []);
   const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
+    if (mounted.current) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const response = await fetch(`${serverUrl}/api/admin/overview`, { headers: { authorization: `Bearer ${token}` } });
       const body = await response.json() as AdminOverview & { error?: string };
       if (!response.ok) throw new Error(body.error ?? 'Não foi possível carregar o painel.');
-      setOverview(body);
+      if (mounted.current) setOverview(body);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Não foi possível carregar o painel.');
+      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Não foi possível carregar o painel.');
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   }, [serverUrl, token]);
   useEffect(() => { void load(); }, [load]);
@@ -893,12 +926,13 @@ function AdminModal({ serverUrl, token, currentUserId, onClose, onNotice }: { se
       const response = await fetch(`${serverUrl}/api/admin/users/${encodeURIComponent(user.id)}/disconnect`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
       const body = await response.json() as { error?: string };
       if (!response.ok) throw new Error(body.error ?? 'Não foi possível desconectar o usuário.');
+      if (!mounted.current) return;
       onNotice(`${user.username} foi desconectado do servidor.`);
-      window.setTimeout(() => void load(), 250);
+      reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; void load(); }, 250);
     } catch (caught) {
-      onNotice(caught instanceof Error ? caught.message : 'Não foi possível desconectar o usuário.');
+      if (mounted.current) onNotice(caught instanceof Error ? caught.message : 'Não foi possível desconectar o usuário.');
     } finally {
-      setDisconnecting(null);
+      if (mounted.current) setDisconnecting(null);
     }
   };
   const activeCalls = overview ? Object.values(overview.voiceRooms).filter((members) => members.length > 0).length : 0;
@@ -938,6 +972,11 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
   const [bannerPreview, setBannerPreview] = useState(() => profileMediaUrl(serverUrl, initial.banner));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const localPreviewUrls = useRef<{ avatar?: string; banner?: string }>({});
+  useEffect(() => () => {
+    if (localPreviewUrls.current.avatar) URL.revokeObjectURL(localPreviewUrls.current.avatar);
+    if (localPreviewUrls.current.banner) URL.revokeObjectURL(localPreviewUrls.current.banner);
+  }, []);
   const chooseImage = (file: File | undefined, kind: 'avatar' | 'banner') => {
     if (!file) return;
     if (!/^image\/(?:gif|png|jpeg|webp)$/.test(file.type) || file.size > 6 * 1024 * 1024) {
@@ -945,6 +984,8 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
       return;
     }
     const preview = URL.createObjectURL(file);
+    if (localPreviewUrls.current[kind]) URL.revokeObjectURL(localPreviewUrls.current[kind]!);
+    localPreviewUrls.current[kind] = preview;
     if (kind === 'avatar') { setAvatarFile(file); setAvatarPreview(preview); setAvatarRemoved(false); }
     else { setBannerFile(file); setBannerPreview(preview); setBannerRemoved(false); }
     setError('');
@@ -961,21 +1002,21 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Não foi possível salvar o perfil.'); }
     finally { setSaving(false); }
   };
-  return <div className="modal-backdrop profile-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="profile-card" style={{ '--profile-accent': accentColor } as React.CSSProperties}>
-    <button className="modal-close" onClick={onClose} title="Fechar"><Icon name="close" /></button>
+  return <div className="modal-backdrop profile-backdrop" onMouseDown={(event) => { if (!saving && event.target === event.currentTarget) onClose(); }}><div className="profile-card" style={{ '--profile-accent': accentColor } as React.CSSProperties}>
+    <button className="modal-close" disabled={saving} onClick={onClose} title="Fechar"><Icon name="close" /></button>
     <div className="profile-banner" style={bannerPreview ? { backgroundImage: `url(${bannerPreview})` } : undefined}>{own && <label className="profile-media-edit"><Icon name="paperclip" /> Alterar banner<input type="file" accept="image/gif,image/png,image/jpeg,image/webp" onChange={(event) => chooseImage(event.target.files?.[0], 'banner')} /></label>}</div>
     <div className="profile-avatar-wrap"><Avatar name={user.username} profile={{ ...initial, avatar: avatarRemoved ? undefined : initial.avatar }} serverUrl={serverUrl} large imageOverride={avatarPreview} />{own && <label className="avatar-edit" title="Alterar avatar"><Icon name="paperclip" /><input type="file" accept="image/gif,image/png,image/jpeg,image/webp" onChange={(event) => chooseImage(event.target.files?.[0], 'avatar')} /></label>}</div>
     <section className="profile-body"><h2>{user.username}</h2>{own ? <>
       <label className="profile-field">Descrição<textarea value={bio} onChange={(event) => setBio(event.target.value)} maxLength={190} placeholder="Conte algo sobre você…" /><small>{bio.length}/190</small></label>
       <label className="profile-color">Cor do perfil <input type="color" value={accentColor} onChange={(event) => setAccentColor(event.target.value)} /></label>
-      <div className="profile-remove-row">{(avatarPreview || initial.avatar) && <button onClick={() => { setAvatarRemoved(true); setAvatarFile(null); setAvatarPreview(undefined); }}>Remover avatar</button>}{(bannerPreview || initial.banner) && <button onClick={() => { setBannerRemoved(true); setBannerFile(null); setBannerPreview(undefined); }}>Remover banner</button>}</div>
+      <div className="profile-remove-row">{(avatarPreview || initial.avatar) && <button onClick={() => { if (localPreviewUrls.current.avatar) URL.revokeObjectURL(localPreviewUrls.current.avatar); localPreviewUrls.current.avatar = undefined; setAvatarRemoved(true); setAvatarFile(null); setAvatarPreview(undefined); }}>Remover avatar</button>}{(bannerPreview || initial.banner) && <button onClick={() => { if (localPreviewUrls.current.banner) URL.revokeObjectURL(localPreviewUrls.current.banner); localPreviewUrls.current.banner = undefined; setBannerRemoved(true); setBannerFile(null); setBannerPreview(undefined); }}>Remover banner</button>}</div>
       {error && <div className="form-error">{error}</div>}
       <button className="primary-button profile-save" disabled={saving} onClick={() => void save()}>{saving ? 'Salvando…' : 'Salvar perfil'}</button>
     </> : <p className="profile-bio">{initial.bio || 'Este usuário ainda não escreveu uma descrição.'}</p>}</section>
   </div></div>;
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; onClose: () => void; onLogout: () => void }) {
+function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; onClose: () => void; onLogout: () => void }) {
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
@@ -986,7 +1027,7 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
       <DeviceSelect label="Dispositivo de saída" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
       <DeviceSelect label="Câmera" value={devices.preferences.cameraId} devices={devices.cameras} onChange={(value) => update('cameraId', value)} />
       <label className="sound-toggle"><input type="checkbox" checked={devices.preferences.noiseSuppression} onChange={(event) => update('noiseSuppression', event.target.checked)} /><span><strong>Supressão neural de ruído</strong><small>GTCRN em WebAssembly para reduzir teclado, ventilador e ruído ambiente sem enviar seu áudio para nenhum serviço.</small></span></label>
-      <label className="setting-label">Qualidade da transmissão<select value={quality} onChange={(event) => setQuality(event.target.value as StreamQuality)}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>
+      <label className="setting-label">Qualidade da transmissão<select value={quality} onChange={(event) => { void setQuality(event.target.value as StreamQuality); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>
       <label className="sound-toggle"><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong><small>Entrada, saída, mensagens, microfone e troca de host.</small></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
       <div className="quality-note"><strong>Áudio da transmissão</strong><span>Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.</span></div>

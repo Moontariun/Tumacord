@@ -89,6 +89,42 @@ test('servidor dedicado hospeda o cliente web, protege o acesso e sinaliza tela 
   const viewerRegistration = await fetch(`${url}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'Viewer Server', password: 'senha-viewer', serverKey: 'turma-secreta' }) });
   const viewerSession = await viewerRegistration.json() as { token: string };
 
+  const unauthenticatedLargeUpload = await fetch(`${url}/api/attachments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: Buffer.alloc(25 * 1024 * 1024 + 1),
+  });
+  assert.equal(unauthenticatedLargeUpload.status, 401, 'autenticação precisa ocorrer antes de alocar o corpo grande');
+  const invalidMimeUpload = await fetch(`${url}/api/attachments`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${viewerSession.token}`, 'content-type': 'application/octet-stream', 'x-file-type': encodeURIComponent('text/plain\r\nx-injected: yes') },
+    body: Buffer.from('não salvar'),
+  });
+  assert.equal(invalidMimeUpload.status, 400, 'MIME decodificado não pode injetar cabeçalhos na resposta de download');
+  const attachmentUpload = await fetch(`${url}/api/attachments`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${viewerSession.token}`,
+      'content-type': 'application/octet-stream',
+      'x-file-name': encodeURIComponent('../ relatório QA #1.txt'),
+      'x-file-type': encodeURIComponent('application/x-tumacord-qa'),
+    },
+    body: Buffer.from('anexo seguro'),
+  });
+  assert.equal(attachmentUpload.status, 201);
+  const attachment = await attachmentUpload.json() as { id: string; name: string; mimeType: string };
+  assert.equal(attachment.name, 'relatório QA #1.txt');
+  assert.equal(attachment.mimeType, 'application/x-tumacord-qa');
+  const attachmentDownload = await fetch(`${url}/api/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${viewerSession.token}` } });
+  assert.equal(await attachmentDownload.text(), 'anexo seguro');
+  assert.match(attachmentDownload.headers.get('content-disposition') ?? '', /filename\*=UTF-8''relat%C3%B3rio%20QA%20%231\.txt/);
+  const oversizedUpload = await fetch(`${url}/api/attachments`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${viewerSession.token}`, 'content-type': 'application/octet-stream' },
+    body: Buffer.alloc(25 * 1024 * 1024 + 1),
+  });
+  assert.equal(oversizedUpload.status, 413);
+
   const stored = JSON.parse(await readFile(path.join(dataDirectory, 'tumacord.json'), 'utf8')) as { sessions: Array<{ token?: string; tokenHash?: string }> };
   assert.equal(stored.sessions.some((session) => Boolean(session.token)), false, 'tokens não devem ficar legíveis no disco');
   assert.match(stored.sessions[0].tokenHash ?? '', /^[a-f0-9]{64}$/);
@@ -113,6 +149,14 @@ test('servidor dedicado hospeda o cliente web, protege o acesso e sinaliza tela 
   const overview = await overviewResponse.json() as { security: { media: string }; voiceRooms: Record<string, VoiceState[]> };
   assert.equal(overview.security.media, 'DTLS-SRTP');
   assert.equal(overview.voiceRooms['call-geral'].some((member) => member.screenAudio), true);
+  const deniedDisconnect = await fetch(`${url}/api/admin/users/${viewerSession.token.slice(0, 8)}/disconnect`, { method: 'POST', headers: { authorization: `Bearer ${viewerSession.token}` } });
+  assert.equal(deniedDisconnect.status, 403, 'usuário comum não pode executar ações administrativas');
+  const viewerId = overview.voiceRooms['call-geral'].find((member) => member.socketId === viewer.id)?.id;
+  assert.ok(viewerId);
+  const viewerDisconnected = waitForEvent<string>(viewer, 'disconnect');
+  const disconnectResponse = await fetch(`${url}/api/admin/users/${viewerId}/disconnect`, { method: 'POST', headers: { authorization: `Bearer ${adminSession.token}` } });
+  assert.equal(disconnectResponse.status, 200);
+  await viewerDisconnected;
 });
 
 test('servidor embutido P2P não publica web nem canais extras', { timeout: 20_000 }, async (context) => {

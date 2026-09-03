@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io-client';
 import type { Channel, ChatAttachment, ChatMessage, ChatSyncBundle, ProfileMedia, ReplicatedProfile } from '../../shared/types';
+import { safeAttachmentName } from '../../shared/attachmentName';
 
 const LOCAL_SERVER = 'http://127.0.0.1:3927';
 
@@ -131,7 +132,10 @@ async function imagePreview(file: File): Promise<string | undefined> {
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
     const context = canvas.getContext('2d');
-    if (!context) return undefined;
+    if (!context) {
+      bitmap.close();
+      return undefined;
+    }
     context.fillStyle = '#181922';
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
@@ -163,7 +167,7 @@ export function downloadBlob(contents: Blob, name: string): void {
   const url = URL.createObjectURL(contents);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = name;
+  anchor.download = safeAttachmentName(name);
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }

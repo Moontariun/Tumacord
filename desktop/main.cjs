@@ -4,6 +4,7 @@ const { pathToFileURL } = require('node:url');
 const { TumacordDiscovery } = require('./discovery.cjs');
 const { ScreenAudioRouter } = require('./audio-router.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
+const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
 // isso para manter a voz da call fora do áudio compartilhado.
@@ -14,7 +15,11 @@ process.env['PULSE_PROP_media.role'] = 'phone';
 // PipeWire é o caminho nativo de captura no Wayland. Expor os IPs de interface
 // permite que o ICE enxergue o adaptador virtual do ZeroTier.
 const gpuVendors = detectLinuxGpuVendors();
-app.commandLine.appendSwitch('enable-features', streamingFeatures(process.platform, gpuVendors).join(','));
+const runtimeHealthFile = path.join(app.getPath('userData'), 'runtime-health.json');
+const runtimeLogFile = path.join(app.getPath('userData'), 'logs', 'runtime-health.log');
+const safeGpuMode = consumeSafeGpuMode(runtimeHealthFile);
+if (safeGpuMode) app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('enable-features', streamingFeatures(process.platform, gpuVendors, safeGpuMode).join(','));
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 
@@ -23,11 +28,11 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let discovery;
 let mainWindow;
 let tray;
-let pendingDesktopSource;
 let mediaFullscreenActive = false;
 let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
 let quittingAfterAudioCleanup = false;
+let safeGpuRelaunching = false;
 
 if (!hasSingleInstanceLock) app.quit();
 app.on('second-instance', () => {
@@ -35,6 +40,30 @@ app.on('second-instance', () => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+});
+
+app.on('child-process-gone', (_event, details) => {
+  appendRuntimeEvent(runtimeLogFile, {
+    event: 'child-process-gone',
+    type: details.type,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    name: details.name,
+    safeGpuMode,
+  });
+  const health = recordGpuFailure(runtimeHealthFile, details);
+  if (!health.shouldRelaunch || safeGpuMode || safeGpuRelaunching) return;
+  safeGpuRelaunching = true;
+  discovery?.close();
+  // O Chromium normalmente recria um processo GPU isolado. Se ele cair duas
+  // vezes em dez minutos, continuar insistindo no mesmo driver arrisca levar
+  // o compositor Wayland junto. A próxima execução usa software apenas nessa
+  // sessão; a abertura seguinte volta a testar aceleração normalmente.
+  const cleanupDeadline = new Promise((resolve) => setTimeout(resolve, 4_000));
+  void Promise.race([screenAudioRouter.stop(), cleanupDeadline]).finally(() => {
+    app.relaunch({ args: safeRelaunchArgs() });
+    app.exit(0);
+  });
 });
 
 function blockedCaptureSource(name) {
@@ -81,6 +110,12 @@ async function createWindow() {
     },
   });
   mainWindow = window;
+  window.webContents.on('render-process-gone', (_event, details) => {
+    appendRuntimeEvent(runtimeLogFile, { event: 'render-process-gone', reason: details.reason, exitCode: details.exitCode, safeGpuMode });
+  });
+  window.webContents.on('unresponsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-unresponsive', safeGpuMode }));
+  window.webContents.on('responsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-responsive', safeGpuMode }));
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.on('enter-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', true));
   window.on('leave-full-screen', () => {
     window.webContents.send('tumacord:fullscreen-changed', false);
@@ -91,6 +126,16 @@ async function createWindow() {
   });
 
   const target = process.env.TUMACORD_WEB_URL || `file://${path.join(__dirname, '../dist-web/index.html')}`;
+  const trustedOrigin = new URL(target).origin;
+  window.webContents.on('will-navigate', (event, destination) => {
+    try {
+      const destinationUrl = new URL(destination);
+      const trusted = isDevelopment ? destinationUrl.origin === trustedOrigin : destination === target;
+      if (!trusted) event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
+  });
   await window.loadURL(target);
   if (isDevelopment) window.webContents.openDevTools({ mode: 'detach' });
 }
@@ -121,8 +166,9 @@ app.whenReady().then(async () => {
   discovery = new TumacordDiscovery((calls) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:calls-changed', calls);
   });
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => ['media', 'display-capture'].includes(permission));
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => callback(['media', 'display-capture'].includes(permission)));
+  const trustedMediaRequest = (webContents, permission) => webContents === mainWindow?.webContents && ['media', 'display-capture'].includes(permission);
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => trustedMediaRequest(webContents, permission));
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(trustedMediaRequest(webContents, permission)));
 
   ipcMain.handle('tumacord:desktop-sources', async () => {
     const sources = await desktopCapturer.getSources({
@@ -137,17 +183,6 @@ app.whenReady().then(async () => {
       thumbnail: source.thumbnail.toDataURL(),
       appIcon: source.appIcon?.toDataURL(),
     }));
-  });
-  ipcMain.on('tumacord:select-desktop-source', (event, details) => {
-    event.returnValue = false;
-    if (!details || typeof details.sourceId !== 'string') return;
-    pendingDesktopSource = {
-      sourceId: details.sourceId,
-      includeAudio: Boolean(details.includeAudio),
-      audioDeviceId: typeof details.audioDeviceId === 'string' ? details.audioDeviceId : '',
-      audioDeviceName: typeof details.audioDeviceName === 'string' ? details.audioDeviceName : '',
-    };
-    event.returnValue = true;
   });
   ipcMain.handle('tumacord:prepare-screen-audio', () => screenAudioRouter.prepare());
   ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
@@ -177,37 +212,6 @@ app.whenReady().then(async () => {
     mainWindow.webContents.send('tumacord:media-fullscreen-changed', false);
     if (restoreWindow && mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
     return false;
-  });
-
-  // getDisplayMedia é o caminho do Chromium que diferencia áudio da janela
-  // de áudio geral do sistema. O renderer escolhe a fonte antes de chamar a
-  // API; aqui só entregamos essa fonte ao pedido correspondente.
-  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    try {
-      const sources = (await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 1, height: 1 } })).filter((source) => !blockedCaptureSource(source.name));
-      const requested = pendingDesktopSource;
-      pendingDesktopSource = undefined;
-      const source = sources.find((candidate) => candidate.id === requested?.sourceId) ?? sources[0];
-      if (!source) return callback({});
-      const result = { video: source };
-      // Para uma janela, o Chromium/PipeWire tenta entregar apenas o áudio da
-      // própria janela. Para uma tela inteira, o áudio disponível é o mix do
-      // monitor/sistema — é exatamente o comportamento esperado pelo usuário
-      // quando marca “Transmitir áudio da fonte”.
-      if (request.audioRequested && requested?.includeAudio) {
-        // Electron aceita {id,name} como escape hatch para o dispositivo de
-        // áudio associado à fonte. No Windows, loopback é o caminho oficial;
-        // no CachyOS o Chromium resolve o dispositivo via PipeWire.
-        const routedAudio = requested.audioDeviceId
-          ? { id: requested.audioDeviceId, name: requested.audioDeviceName || 'Tumacord Stream Audio' }
-          : null;
-        callback({ ...result, audio: process.platform === 'win32' ? 'loopbackWithMute' : routedAudio ?? { id: source.id, name: source.name } });
-      } else {
-        callback(result);
-      }
-    } catch {
-      callback({});
-    }
   });
 
   await createWindow();

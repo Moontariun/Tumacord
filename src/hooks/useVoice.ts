@@ -8,17 +8,13 @@ import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
+import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
+import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
 
-export type StreamQuality = 'source' | 'ultra60' | 'ultra30' | 'high' | 'balanced' | 'data';
+export type { StreamQuality } from '../lib/screenQuality';
 
-const QUALITY: Record<StreamQuality, { label: string; width: number; height: number; frameRate: number; bitrate: number }> = {
-  source: { label: 'Fonte · até 1080p60', width: 1920, height: 1080, frameRate: 60, bitrate: 8_000_000 },
-  ultra60: { label: '1440p · 60 FPS', width: 2560, height: 1440, frameRate: 60, bitrate: 14_000_000 },
-  ultra30: { label: '1440p · 30 FPS', width: 2560, height: 1440, frameRate: 30, bitrate: 10_000_000 },
-  high: { label: 'Alta · 1080p30', width: 1920, height: 1080, frameRate: 30, bitrate: 5_000_000 },
-  balanced: { label: 'Equilibrada · 720p30', width: 1280, height: 720, frameRate: 30, bitrate: 2_500_000 },
-  data: { label: 'Econômica · 480p15', width: 854, height: 480, frameRate: 15, bitrate: 900_000 },
-};
+const QUALITY = SCREEN_QUALITIES;
+const QUALITY_STORAGE_KEY = 'tumacord.stream-quality';
 
 interface PeerConnectionState {
   pc: RTCPeerConnection;
@@ -29,9 +25,11 @@ interface PeerConnectionState {
   pendingCandidates: RTCIceCandidateInit[];
   recoveryAttempts: number;
   recoveryTimer?: number;
+  negotiationRecoveryTimer?: number;
   mutedAudioTimers: Map<string, number>;
   screenBitrate?: number;
   healthyScreenSamples: number;
+  screenBaseScale: number;
   screenScale: number;
   healthyEncoderSamples: number;
   encoderPressureSamples: number;
@@ -47,12 +45,22 @@ interface PeerConnectionState {
   lastScreenDecodeRecoveryAt: number;
   lastVoiceRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
+  screenTuning: Promise<void>;
+  screenTuningPending: boolean;
 }
 
 function closePeerState(state: PeerConnectionState): void {
   if (state.recoveryTimer) window.clearTimeout(state.recoveryTimer);
+  if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
   for (const timer of state.mutedAudioTimers.values()) window.clearTimeout(timer);
   state.mutedAudioTimers.clear();
+  state.screenTuningPending = false;
+  state.pc.onicecandidate = null;
+  state.pc.onnegotiationneeded = null;
+  state.pc.ontrack = null;
+  state.pc.onconnectionstatechange = null;
+  for (const receiver of state.pc.getReceivers()) receiver.track?.stop();
+  state.remoteStreams.clear();
   state.pc.close();
 }
 
@@ -75,7 +83,7 @@ interface UseVoiceOptions {
   dynamicHosting: boolean;
 }
 
-export const qualityOptions = Object.entries(QUALITY) as [StreamQuality, (typeof QUALITY)[StreamQuality]][];
+export const qualityOptions = screenQualityOptions;
 
 // O Chromium costuma negociar Opus com bitrate conservador. Um teto de 96 kbps
 // mantém a voz limpa sem transformar a malha P2P em uma transmissão pesada.
@@ -86,25 +94,54 @@ async function tuneVoiceSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
-function screenContentHint(config: (typeof QUALITY)[StreamQuality]): 'motion' | 'detail' {
+function screenContentHint(config: ScreenQualityConfig): 'motion' | 'detail' {
   return config.frameRate >= 30 ? 'motion' : 'detail';
 }
 
-async function tuneScreenSender(sender: RTCRtpSender, config: (typeof QUALITY)[StreamQuality], maxBitrate = config.bitrate, scale = 1): Promise<void> {
+async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1): Promise<boolean> {
   const parameters = sender.getParameters();
   const current = parameters.encodings?.[0] ?? {};
   parameters.encodings = [{
     ...current,
     maxBitrate,
     maxFramerate: config.frameRate,
-    scaleResolutionDownBy: Math.min(2, Math.max(1, scale)),
+    scaleResolutionDownBy: Math.min(4, Math.max(1, scale)),
     priority: 'high',
     networkPriority: 'high',
   } as RTCRtpEncodingParameters];
   // Keep the requested frame rate when possible; this avoids the browser
   // oscillating between a sharp but jerky stream and a blurry one.
   (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = config.frameRate >= 30 ? 'maintain-framerate' : 'balanced';
-  await sender.setParameters(parameters).catch(() => undefined);
+  try {
+    await sender.setParameters(parameters);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tuneScreenPeer(state: PeerConnectionState, sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1): Promise<boolean> {
+  let applied = false;
+  const operation = state.screenTuning.catch(() => undefined).then(async () => {
+    applied = await tuneScreenSender(sender, config, maxBitrate, scale);
+  });
+  state.screenTuning = operation.then(() => undefined, () => undefined);
+  await operation;
+  return applied;
+}
+
+function savedStreamQuality(): StreamQuality {
+  try { return parseStreamQuality(localStorage.getItem(QUALITY_STORAGE_KEY)); }
+  catch { return 'source'; }
+}
+
+function persistStreamQuality(quality: StreamQuality): void {
+  try { localStorage.setItem(QUALITY_STORAGE_KEY, quality); }
+  catch { /* armazenamento indisponível; a troca ainda vale nesta sessão */ }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 interface MicrophoneProcessing {
@@ -227,8 +264,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const deafenedRef = useRef(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
-  const [quality, setQuality] = useState<StreamQuality>('balanced');
-  const qualityRef = useRef<StreamQuality>('balanced');
+  const [quality, setQuality] = useState<StreamQuality>(savedStreamQuality);
+  const qualityRef = useRef<StreamQuality>(quality);
   qualityRef.current = quality;
   const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[]>([]);
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
@@ -244,6 +281,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const speakingRef = useRef(false);
   const speakingMonitor = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; timer: number } | null>(null);
   const microphoneProcessing = useRef<MicrophoneProcessing | null>(null);
+  const microphoneRecoveryTimer = useRef<number | undefined>(undefined);
+  const microphoneCaptureGeneration = useRef(0);
+  const ensureMicrophoneRef = useRef<() => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean) => void>(() => undefined);
   const recoveryCooldown = useRef(new Map<string, number>());
@@ -256,6 +296,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const screenAudioEnabled = useRef(false);
   const screenAudioHealthCheck = useRef(false);
   const screenAudioEndedRef = useRef<(endedTrack: MediaStreamTrack) => void>(() => undefined);
+  const activeCameraDeviceId = useRef('');
+  const cameraSwitching = useRef(false);
+  const mediaCaptureGeneration = useRef({ camera: 0, screen: 0 });
+  const joinGeneration = useRef(0);
+  const qualityChangeGeneration = useRef(0);
+  const preferencesRef = useRef(preferences);
+  const [, retryCameraSwitch] = useState(0);
+  preferencesRef.current = preferences;
 
   const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
 
@@ -314,10 +362,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const refreshRemote = useCallback(() => {
     const media: RemoteMedia[] = [];
     for (const [peerId, peer] of peers.current) {
+      const remoteMember = membersRef.current.find((member) => member.socketId === peerId);
+      const liveVideoStreamCount = [...peer.remoteStreams.values()].filter((stream) => stream.getVideoTracks().some((track) => track.readyState === 'live')).length;
       for (const stream of peer.remoteStreams.values()) {
         if (!stream.getTracks().some((track) => track.readyState !== 'ended')) continue;
-        const meta = streamMeta.current.get(`${peerId}:${stream.id}`);
-        media.push({ peerId, user: peer.user, stream, kind: meta ?? (stream.getVideoTracks().length ? 'camera' : 'audio') });
+        const meta = streamMeta.current.get(streamMetadataKey(peerId, stream.id));
+        media.push({ peerId, user: peer.user, stream, kind: classifyRemoteStream(meta, stream, remoteMember, liveVideoStreamCount) });
       }
     }
     setRemoteMedia(media);
@@ -343,16 +393,27 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket?.emit('rtc:stream-meta', { target, meta: { streamId: stream.id, kind } });
   }, [socket]);
 
-  const addLocalStreams = useCallback((target: string, pc: RTCPeerConnection) => {
+  const addLocalStreams = useCallback((target: string, state: PeerConnectionState) => {
     for (const [kind, stream] of localStreams.current) {
       for (const track of stream.getTracks()) {
-        const sender = pc.addTrack(track, stream);
+        const sender = state.pc.addTrack(track, stream);
         if (kind === 'microphone') void tuneVoiceSender(sender);
-        if (kind === 'screen' && track.kind === 'video') void tuneScreenSender(sender, QUALITY[qualityRef.current]);
+        if (kind === 'screen' && track.kind === 'video') {
+          const config = QUALITY[qualityRef.current];
+          const baseScale = screenScaleForQuality(track.getSettings(), config);
+          state.screenBaseScale = baseScale;
+          state.screenScale = baseScale;
+          state.screenTuningPending = true;
+          void tuneScreenPeer(state, sender, config, config.bitrate, baseScale).then((applied) => {
+            if (peers.current.get(target) !== state) return;
+            state.screenTuningPending = !applied;
+            if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
+          });
+        }
       }
       if (kind === 'camera' || kind === 'screen') sendStreamMeta(target, stream, kind);
     }
-  }, [sendStreamMeta]);
+  }, [onError, sendStreamMeta]);
 
   const createPeer = useCallback((peerId: string, remoteUser?: PublicUser) => {
     const found = peers.current.get(peerId);
@@ -361,6 +422,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       return found;
     }
     const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', iceServers: [], iceCandidatePoolSize: 4 });
+    const currentScreenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
+    const screenBaseScale = currentScreenTrack ? screenScaleForQuality(currentScreenTrack.getSettings(), QUALITY[qualityRef.current]) : 1;
     const state: PeerConnectionState = {
       pc,
       user: remoteUser,
@@ -372,7 +435,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
-      screenScale: 1,
+      screenBaseScale,
+      screenScale: screenBaseScale,
       healthyEncoderSamples: 0,
       encoderPressureSamples: 0,
       receiverFrozenUntil: 0,
@@ -383,10 +447,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       lastScreenDecodeRecoveryAt: 0,
       lastVoiceRecoveryAt: 0,
       remoteStreams: new Map(),
+      screenTuning: Promise.resolve(),
+      screenTuningPending: localStreams.current.has('screen'),
     };
     peers.current.set(peerId, state);
     updatePeerHealth(peerId, 'connecting');
-    addLocalStreams(peerId, pc);
+    addLocalStreams(peerId, state);
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
     pc.onnegotiationneeded = () => void negotiateRef.current(peerId);
     pc.ontrack = (event) => {
@@ -405,7 +471,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           state.mutedAudioTimers.delete(event.track.id);
           if (peers.current.get(peerId) !== state || !event.track.muted) return;
           const member = membersRef.current.find((candidate) => candidate.socketId === peerId);
-          const meta = stream ? streamMeta.current.get(`${peerId}:${stream.id}`) : undefined;
+          const meta = stream ? streamMeta.current.get(streamMetadataKey(peerId, stream.id)) : undefined;
           const screen = meta === 'screen' || Boolean(stream?.getVideoTracks().length && member?.screen);
           if (shouldRecoverMutedAudio({
             trackMuted: event.track.muted,
@@ -422,8 +488,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       };
       event.track.onended = () => {
         clearMutedAudioTimer();
+        if (peers.current.get(peerId) !== state) return;
         for (const [streamId, stream] of state.remoteStreams) {
-          if (stream.getTracks().every((track) => track.readyState === 'ended')) state.remoteStreams.delete(streamId);
+          if (stream.getTracks().every((track) => track.readyState === 'ended')) {
+            state.remoteStreams.delete(streamId);
+            streamMeta.current.delete(streamMetadataKey(peerId, streamId));
+          }
         }
         refreshRemote();
       };
@@ -436,6 +506,17 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         state.recoveryTimer = undefined;
         state.recoveryAttempts = 0;
         updatePeerHealth(peerId, 'connected');
+        if (state.screenTuningPending) {
+          const screenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
+          const sender = screenTrack ? pc.getSenders().find((candidate) => candidate.track === screenTrack) : undefined;
+          if (screenTrack && sender) {
+            const config = QUALITY[qualityRef.current];
+            const baseScale = screenScaleForQuality(screenTrack.getSettings(), config);
+            void tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, Math.max(baseScale, state.screenScale)).then((applied) => {
+              if (peers.current.get(peerId) === state) state.screenTuningPending = !applied;
+            });
+          }
+        }
         return;
       }
       if (pc.connectionState === 'connecting' || pc.connectionState === 'new') {
@@ -469,17 +550,28 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       state.needsNegotiation = true;
       return;
     }
+    let recoverAfterFailure = false;
     try {
       state.makingOffer = true;
       state.needsNegotiation = false;
       if (iceRestart) state.pc.restartIce();
       await state.pc.setLocalDescription(await state.pc.createOffer(iceRestart ? { iceRestart: true } : undefined));
       socket?.emit('rtc:offer', { target: peerId, sdp: state.pc.localDescription });
+      if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
+      state.negotiationRecoveryTimer = undefined;
     } catch {
       state.needsNegotiation = true;
+      recoverAfterFailure = state.pc.signalingState === 'stable' && state.pc.connectionState !== 'closed';
     } finally {
       state.makingOffer = false;
-      if (state.needsNegotiation && state.pc.signalingState === 'stable' && peers.current.get(peerId) === state) {
+      if (recoverAfterFailure && peers.current.get(peerId) === state) {
+        state.needsNegotiation = false;
+        if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
+        state.negotiationRecoveryTimer = window.setTimeout(() => {
+          state.negotiationRecoveryTimer = undefined;
+          if (peers.current.get(peerId) === state) recoverPeerRef.current(peerId, 'falha ao criar oferta', true);
+        }, 250);
+      } else if (state.needsNegotiation && state.pc.signalingState === 'stable' && peers.current.get(peerId) === state) {
         window.setTimeout(() => void negotiateRef.current(peerId), 0);
       }
     }
@@ -496,12 +588,15 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const attempt = Math.min(6, (previous?.recoveryAttempts ?? 0) + 1);
     peers.current.delete(peerId);
     if (previous) closePeerState(previous);
-    for (const key of [...streamMeta.current.keys()]) if (key.startsWith(`${peerId}:`)) streamMeta.current.delete(key);
+    prunePeerStreamMetadata(streamMeta.current, peerId, 'recovery');
     refreshRemote();
     updatePeerHealth(peerId, 'recovering');
+    // O pedido precisa chegar antes dos metadados reenviados por createPeer.
+    // Socket.IO mantém essa ordem e o destinatário não apaga a classificação
+    // da live recém-publicada durante a própria reconstrução.
+    if (notifyRemote) socket?.emit('rtc:resync', { target: peerId });
     const next = createPeer(peerId, remoteUser);
     next.recoveryAttempts = attempt;
-    if (notifyRemote) socket?.emit('rtc:resync', { target: peerId });
     if (shouldInitiateRecovery(selfId.current, peerId)) window.setTimeout(() => void negotiateRef.current(peerId, attempt > 1), 80);
   }, [createPeer, refreshRemote, socket, updatePeerHealth]);
   recoverPeerRef.current = recoverPeer;
@@ -558,6 +653,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   screenAudioEndedRef.current = recoverScreenAudio;
 
   const stopStream = useCallback(async (kind: 'camera' | 'screen') => {
+    // Invalida getUserMedia/getDisplayMedia ainda pendentes antes de consultar
+    // o mapa. Assim uma permissão que termina depois de “Sair” não ressuscita
+    // a captura nem deixa um sender órfão.
+    mediaCaptureGeneration.current[kind] += 1;
+    if (kind === 'screen') qualityChangeGeneration.current += 1;
     const stream = localStreams.current.get(kind);
     if (!stream) return;
     for (const [peerId, state] of peers.current) {
@@ -565,11 +665,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const sender = state.pc.getSenders().find((candidate) => candidate.track === track);
         if (sender) state.pc.removeTrack(sender);
       }
+      if (kind === 'screen') state.screenTuningPending = false;
       void negotiate(peerId);
     }
     stream.getTracks().forEach((track) => track.stop());
     localStreams.current.delete(kind);
     if (kind === 'camera') {
+      activeCameraDeviceId.current = '';
       setCameraOn(false);
       publishState({ camera: false });
     } else {
@@ -587,13 +689,22 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     playSound(kind === 'screen' ? 'streamStop' : 'notification');
   }, [negotiate, publishState]);
 
-  const attachStream = useCallback(async (kind: 'camera' | 'screen', stream: MediaStream, screenQuality: StreamQuality = quality) => {
+  const attachStream = useCallback(async (kind: 'camera' | 'screen', stream: MediaStream, screenQuality: StreamQuality = quality, captureGeneration = mediaCaptureGeneration.current[kind]) => {
+    if (!stream.getVideoTracks().some((track) => track.readyState === 'live')) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error('A captura não criou uma faixa de vídeo ativa.');
+    }
+    if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return false;
+    }
     if (kind === 'screen') {
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenContentHint(QUALITY[screenQuality]);
     }
     localStreams.current.set(kind, stream);
     for (const [peerId, state] of peers.current) {
+      if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) break;
       for (const track of stream.getTracks()) state.pc.addTrack(track, stream);
       sendStreamMeta(peerId, stream, kind);
       if (kind === 'screen') {
@@ -601,10 +712,15 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
         const config = QUALITY[screenQuality];
         if (sender) {
-          await tuneScreenSender(sender, config);
+          const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
+          state.screenTuningPending = true;
+          const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
+          state.screenTuningPending = !applied;
+          if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
           state.screenBitrate = config.bitrate;
           state.healthyScreenSamples = 0;
-          state.screenScale = 1;
+          state.screenBaseScale = baseScale;
+          state.screenScale = baseScale;
           state.healthyEncoderSamples = 0;
           state.encoderPressureSamples = 0;
           state.lastFramesEncoded = undefined;
@@ -615,13 +731,30 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           state.stalledScreenSamples = 0;
         }
       }
+      if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) break;
       void negotiate(peerId);
+    }
+    if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) {
+      for (const [peerId, state] of peers.current) {
+        let changed = false;
+        for (const track of stream.getTracks()) {
+          const sender = state.pc.getSenders().find((candidate) => candidate.track === track);
+          if (!sender) continue;
+          try { state.pc.removeTrack(sender); changed = true; } catch { /* o peer já foi encerrado */ }
+        }
+        if (changed) void negotiate(peerId);
+        if (kind === 'screen') state.screenTuningPending = false;
+      }
+      if (localStreams.current.get(kind) === stream) localStreams.current.delete(kind);
+      stream.getTracks().forEach((track) => track.stop());
+      return false;
     }
     stream.getTracks().forEach((track) => {
       if (kind === 'screen' && track.kind === 'audio') track.onended = () => screenAudioEndedRef.current(track);
       else track.onended = () => void stopStream(kind);
     });
     if (kind === 'camera') {
+      activeCameraDeviceId.current = preferences.cameraId;
       setCameraOn(true);
       publishState({ camera: true });
     } else {
@@ -631,9 +764,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       publishState({ screen: true, screenAudio: screenAudioEnabled.current });
     }
     playSound(kind === 'screen' ? 'streamStart' : 'notification');
-  }, [negotiate, publishState, quality, sendStreamMeta, stopStream]);
+    return true;
+  }, [negotiate, onError, preferences.cameraId, publishState, quality, sendStreamMeta, stopStream]);
 
   const ensureMicrophone = useCallback(async () => {
+    const captureGeneration = ++microphoneCaptureGeneration.current;
     const current = localStreams.current.get('microphone');
     const currentProcessing = microphoneProcessing.current;
     if (current && currentProcessing?.deviceId === preferences.microphoneId && currentProcessing.noiseSuppression === preferences.noiseSuppression) return current;
@@ -667,36 +802,102 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     }
 
     const stream = nextProcessing.outputStream;
-    const old = localStreams.current.get('microphone');
-    localStreams.current.set('microphone', stream);
-    microphoneProcessing.current = nextProcessing;
+    const old = localStreams.current.get('microphone') ?? currentProcessing?.outputStream;
     const newTrack = stream.getAudioTracks()[0];
+    if (!newTrack) {
+      await disposeMicrophoneProcessing(nextProcessing);
+      throw new Error('A captura não criou uma faixa de microfone.');
+    }
+    if (captureGeneration !== microphoneCaptureGeneration.current) {
+      await disposeMicrophoneProcessing(nextProcessing);
+      const latest = localStreams.current.get('microphone');
+      if (latest) return latest;
+      throw new DOMException('Captura de microfone substituída.', 'AbortError');
+    }
     if ('contentHint' in newTrack) newTrack.contentHint = 'speech';
     newTrack.enabled = !mutedRef.current;
-    for (const state of peers.current.values()) {
-      const oldTrack = old?.getAudioTracks()[0];
-      const sender = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
-      if (sender) {
-        await sender.replaceTrack(newTrack);
+    const oldTrack = old?.getAudioTracks()[0];
+    const switchedSenders: Array<{ peerId: string; sender: RTCRtpSender; state: PeerConnectionState; added: boolean }> = [];
+    try {
+      for (const [peerId, state] of peers.current) {
+        const existing = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
+        const sender = existing ?? state.pc.addTrack(newTrack, stream);
+        if (existing) await sender.replaceTrack(newTrack);
+        switchedSenders.push({ peerId, sender, state, added: !existing });
         await tuneVoiceSender(sender);
+        if (!existing) void negotiateRef.current(peerId);
+        if (captureGeneration !== microphoneCaptureGeneration.current) throw new DOMException('Troca de microfone cancelada.', 'AbortError');
       }
+    } catch (error) {
+      await Promise.all(switchedSenders.map(async ({ peerId, sender, state, added }) => {
+        if (added) {
+          if (peers.current.get(peerId) === state && state.pc.signalingState !== 'closed') {
+            try { state.pc.removeTrack(sender); } catch { /* o peer já foi encerrado */ }
+          }
+        } else await sender.replaceTrack(oldTrack ?? null).catch(() => undefined);
+      }));
+      await disposeMicrophoneProcessing(nextProcessing);
+      throw error;
+    }
+    localStreams.current.set('microphone', stream);
+    microphoneProcessing.current = nextProcessing;
+    // Um peer pode ser reconstruído enquanto os replaceTrack acima aguardam.
+    // Depois do commit, novos peers já usam a faixa nova; esta passagem cobre
+    // qualquer peer criado exatamente antes dele e evita áudio preso na faixa
+    // encerrada do dispositivo anterior.
+    for (const [peerId, state] of peers.current) {
+      if (state.pc.getSenders().some((candidate) => candidate.track === newTrack)) continue;
+      const staleSender = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
+      try {
+        const sender = staleSender ?? state.pc.addTrack(newTrack, stream);
+        if (staleSender) await sender.replaceTrack(newTrack);
+        await tuneVoiceSender(sender);
+        if (!staleSender) void negotiateRef.current(peerId);
+      } catch {
+        recoverPeerRef.current(peerId, 'troca de microfone durante reconstrução', true);
+      }
+    }
+    const recoverEndedMicrophone = () => {
+      if (localStreams.current.get('microphone') !== stream || !channelRef.current) return;
+      localStreams.current.delete('microphone');
+      if (microphoneRecoveryTimer.current) window.clearTimeout(microphoneRecoveryTimer.current);
+      microphoneRecoveryTimer.current = window.setTimeout(async () => {
+        microphoneRecoveryTimer.current = undefined;
+        if (!channelRef.current || localStreams.current.has('microphone')) return;
+        try {
+          await ensureMicrophoneRef.current();
+        } catch {
+          mutedRef.current = true;
+          setMuted(true);
+          publishState({ muted: true, speaking: false });
+          onError('O microfone foi desconectado e não encontrei outra entrada disponível.');
+        }
+      }, 300);
+    };
+    newTrack.onended = recoverEndedMicrophone;
+    if (nextProcessing.rawStream !== stream) {
+      for (const rawTrack of nextProcessing.rawStream.getAudioTracks()) rawTrack.onended = recoverEndedMicrophone;
     }
     if (currentProcessing) await disposeMicrophoneProcessing(currentProcessing);
     else old?.getTracks().forEach((track) => track.stop());
     await onDevicesChanged();
-    if (channelRef.current) startSpeakingMonitor(stream);
+    if (channelRef.current && localStreams.current.get('microphone') === stream) startSpeakingMonitor(stream);
     return stream;
-  }, [onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, startSpeakingMonitor]);
+  }, [onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, publishState, startSpeakingMonitor]);
+  ensureMicrophoneRef.current = ensureMicrophone;
 
   const join = useCallback(async (nextChannelId: string) => {
     if (!socket) return;
+    const operation = ++joinGeneration.current;
     try {
       await ensureMicrophone();
-    } catch {
+    } catch (error) {
+      if (operation !== joinGeneration.current || isAbortError(error)) return;
       mutedRef.current = true;
       setMuted(true);
       onError('Microfone indisponível. Você entrou mutado; confira as permissões nas configurações.');
     }
+    if (operation !== joinGeneration.current) return;
     if (channelRef.current) {
       const previousPeers = [...peers.current.values()];
       peers.current.clear();
@@ -705,6 +906,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setPeerHealth({});
     }
     socket.emit('voice:join', nextChannelId, (result: { ok: boolean; selfId: string; peers: VoiceState[] }) => {
+      if (operation !== joinGeneration.current) return;
       if (!result?.ok) return onError('Não foi possível entrar nessa call.');
       selfId.current = result.selfId;
       channelRef.current = nextChannelId;
@@ -731,6 +933,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const leave = useCallback(() => {
     const wasInCall = Boolean(channelRef.current);
     stopSpeakingMonitor();
+    joinGeneration.current += 1;
+    mediaCaptureGeneration.current.camera += 1;
+    mediaCaptureGeneration.current.screen += 1;
+    microphoneCaptureGeneration.current += 1;
+    qualityChangeGeneration.current += 1;
     socket?.emit('voice:leave');
     const previousPeers = [...peers.current.values()];
     peers.current.clear();
@@ -749,6 +956,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     setPeerHealth({});
     setCameraOn(false);
     setScreenOn(false);
+    setShowShareSetup(false);
+    setShowSourcePicker(false);
+    setShareBusy(false);
+    shareListing.current = false;
+    shareCapture.current = false;
+    streamMeta.current.clear();
+    recoveryCooldown.current.clear();
+    missingScreenSince.current.clear();
+    missingVoiceSince.current.clear();
+    screenAudioRecovery.current.enabled = false;
+    screenAudioRecovery.current.attempts = 0;
+    if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
+    screenAudioRecovery.current.timer = undefined;
+    if (microphoneRecoveryTimer.current) window.clearTimeout(microphoneRecoveryTimer.current);
+    microphoneRecoveryTimer.current = undefined;
     screenAudioEnabled.current = false;
     if (wasInCall) playSound('leave');
   }, [socket, stopSpeakingMonitor]);
@@ -761,6 +983,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const remoteStreamStopped = previous.some((member) => member.socketId !== selfId.current && member.screen && !next.some((candidate) => candidate.id === member.id && candidate.screen));
       membersRef.current = next;
       setMembers(next);
+      // A identificação provisória de câmera/tela também depende do estado
+      // anunciado. Reclassifique quando esse estado chegar depois da faixa.
+      refreshRemote();
       if (remoteStreamStarted) playSound('streamStart');
       else if (remoteStreamStopped) playSound('streamStop');
     };
@@ -768,7 +993,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const peer = peers.current.get(peerId);
       peers.current.delete(peerId);
       if (peer) closePeerState(peer);
-      for (const key of [...streamMeta.current.keys()]) if (key.startsWith(`${peerId}:`)) streamMeta.current.delete(key);
+      prunePeerStreamMetadata(streamMeta.current, peerId, 'departure');
+      recoveryCooldown.current.delete(peerId);
+      missingScreenSince.current.delete(peerId);
+      missingVoiceSince.current.delete(peerId);
       updatePeerHealth(peerId);
       refreshRemote();
       playSound('leave');
@@ -821,14 +1049,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
     };
     const onIce = async ({ from, candidate }: { from: string; candidate: RTCIceCandidateInit }) => {
-      const state = peers.current.get(from);
+      const remoteUser = membersRef.current.find((member) => member.socketId === from);
+      const state = peers.current.get(from) ?? (channelRef.current && remoteUser ? createPeer(from, remoteUser) : undefined);
+      // ICE de uma oferta ignorada durante glare pertence à geração que o
+      // peer impolido rejeitou. Reutilizá-lo depois na resposta aceita mistura
+      // credenciais ICE e pode deixar a conexão em "connected" sem mídia.
       if (!state || state.ignoreOffer) return;
       if (shouldQueueIceCandidate(Boolean(state.pc.remoteDescription))) state.pendingCandidates.push(candidate);
       else await state.pc.addIceCandidate(candidate).catch(() => undefined);
     };
     const onMeta = ({ from, meta }: { from: string; meta: StreamMeta }) => {
-      if (!meta) return;
-      streamMeta.current.set(`${from}:${meta.streamId}`, meta.kind);
+      if (!meta || (meta.kind !== 'camera' && meta.kind !== 'screen') || typeof meta.streamId !== 'string' || !meta.streamId) return;
+      streamMeta.current.set(streamMetadataKey(from, meta.streamId), meta.kind);
       refreshRemote();
     };
     const onStreamHealth = ({ from, frozen }: { from: string; frozen?: boolean }) => {
@@ -922,7 +1154,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const remoteMember = membersRef.current.find((member) => member.socketId === peerId);
           for (const receiver of state.pc.getReceivers().filter((candidate) => candidate.track?.kind === 'audio')) {
             const receiverStream = [...state.remoteStreams.values()].find((stream) => stream.getTracks().some((track) => track.id === receiver.track.id));
-            const meta = receiverStream ? streamMeta.current.get(`${peerId}:${receiverStream.id}`) : undefined;
+            const meta = receiverStream ? streamMeta.current.get(streamMetadataKey(peerId, receiverStream.id)) : undefined;
             const isScreenAudio = meta === 'screen' || Boolean(receiverStream?.getVideoTracks().length && remoteMember?.screen);
             if (isScreenAudio || remoteMember?.muted !== false) {
               state.inboundVoice.delete(receiver.track.id);
@@ -945,7 +1177,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
           for (const receiver of state.pc.getReceivers().filter((candidate) => candidate.track?.kind === 'video')) {
             const receiverStream = [...state.remoteStreams.values()].find((stream) => stream.getTracks().some((track) => track.id === receiver.track.id));
-            const meta = receiverStream ? streamMeta.current.get(`${peerId}:${receiverStream.id}`) : undefined;
+            const meta = receiverStream ? streamMeta.current.get(streamMetadataKey(peerId, receiverStream.id)) : undefined;
             const isScreenVideo = meta === 'screen' || (meta === undefined && Boolean(receiverStream && remoteMember?.screen));
             if (!isScreenVideo) {
               state.inboundScreen.delete(receiver.track.id);
@@ -1018,6 +1250,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const encoderDecision = adaptEncoderScale({
             targetFps: config.frameRate,
             currentScale: state.screenScale,
+            minimumScale: state.screenBaseScale,
+            maximumScale: maximumAdaptiveScreenScale(state.screenBaseScale),
             healthySamples: state.healthyEncoderSamples,
             pressureSamples: state.encoderPressureSamples,
             averageEncodeMs,
@@ -1032,7 +1266,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           state.screenScale = encoderDecision.scale;
           state.healthyEncoderSamples = encoderDecision.healthySamples;
           state.encoderPressureSamples = encoderDecision.pressureSamples;
-          if (bitrateChanged || scaleChanged) await tuneScreenSender(sender, config, bitrateDecision.bitrate, encoderDecision.scale);
+          if (bitrateChanged || scaleChanged || state.screenTuningPending) {
+            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, bitrateDecision.bitrate, encoderDecision.scale));
+          }
 
           if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
             state.stalledScreenSamples = state.lastScreenBytes !== undefined
@@ -1066,7 +1302,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   useEffect(() => {
     if (!channelRef.current || !localStreams.current.has('microphone')) return;
-    void ensureMicrophone().catch(() => onError('Não foi possível atualizar o processamento do microfone.'));
+    void ensureMicrophone().catch((error) => {
+      if (!isAbortError(error)) onError('Não foi possível atualizar o processamento do microfone.');
+    });
   }, [ensureMicrophone, onError]);
 
   useEffect(() => {
@@ -1130,7 +1368,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
     };
     void keepScreenAudioHealthy();
-    const timer = window.setInterval(() => void keepScreenAudioHealthy(), 4_000);
+    // O roteador principal já observa mudanças do grafo a cada 2 s. Esta
+    // verificação mais espaçada serve apenas para reconstruir módulos após um
+    // reinício completo do PipeWire, evitando dois loops de pw-dump agressivos.
+    const timer = window.setInterval(() => void keepScreenAudioHealthy(), 10_000);
     return () => window.clearInterval(timer);
   }, [screenOn]);
 
@@ -1156,19 +1397,90 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   };
 
   const toggleCamera = async () => {
-    if (cameraOn) return stopStream('camera');
+    if (localStreams.current.has('camera')) return stopStream('camera');
+    const captureGeneration = ++mediaCaptureGeneration.current.camera;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { deviceId: preferences.cameraId ? { exact: preferences.cameraId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
         audio: false,
       });
-      await attachStream('camera', stream);
+      await attachStream('camera', stream, qualityRef.current, captureGeneration);
       await onDevicesChanged();
     } catch { onError('Câmera indisponível ou permissão negada.'); }
   };
 
+  useEffect(() => {
+    if (!cameraOn || cameraSwitching.current || activeCameraDeviceId.current === preferences.cameraId) return;
+    const currentStream = localStreams.current.get('camera');
+    const oldTrack = currentStream?.getVideoTracks().find((track) => track.readyState === 'live');
+    if (!currentStream || !oldTrack) return;
+    cameraSwitching.current = true;
+    const captureGeneration = mediaCaptureGeneration.current.camera;
+    const desiredCameraId = preferences.cameraId;
+    let completed = false;
+    void navigator.mediaDevices.getUserMedia({
+      video: { deviceId: desiredCameraId ? { exact: desiredCameraId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      audio: false,
+    }).then(async (replacement) => {
+      const newTrack = replacement.getVideoTracks()[0];
+      if (!newTrack || captureGeneration !== mediaCaptureGeneration.current.camera || localStreams.current.get('camera') !== currentStream) {
+        replacement.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const switchedSenders: Array<{ sender: RTCRtpSender; state: PeerConnectionState }> = [];
+      try {
+        for (const state of peers.current.values()) {
+          const sender = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
+          if (!sender) continue;
+          await sender.replaceTrack(newTrack);
+          switchedSenders.push({ sender, state });
+          if (captureGeneration !== mediaCaptureGeneration.current.camera || localStreams.current.get('camera') !== currentStream) {
+            throw new DOMException('Troca de câmera cancelada.', 'AbortError');
+          }
+        }
+      } catch (error) {
+        const cameraStillActive = localStreams.current.get('camera') === currentStream && oldTrack.readyState === 'live';
+        await Promise.all(switchedSenders.map(async ({ sender, state }) => {
+          if (cameraStillActive) await sender.replaceTrack(oldTrack).catch(() => undefined);
+          else if ([...peers.current.values()].includes(state) && state.pc.signalingState !== 'closed') {
+            try { state.pc.removeTrack(sender); } catch { /* o peer já foi encerrado */ }
+          }
+        }));
+        replacement.getTracks().forEach((track) => track.stop());
+        throw error;
+      }
+      currentStream.removeTrack(oldTrack);
+      currentStream.addTrack(newTrack);
+      newTrack.onended = () => void stopStream('camera');
+      activeCameraDeviceId.current = desiredCameraId;
+      for (const [peerId, state] of peers.current) {
+        if (state.pc.getSenders().some((candidate) => candidate.track === newTrack)) continue;
+        const staleSender = state.pc.getSenders().find((candidate) => candidate.track === oldTrack);
+        try {
+          if (staleSender) await staleSender.replaceTrack(newTrack);
+          else {
+            state.pc.addTrack(newTrack, currentStream);
+            void negotiateRef.current(peerId);
+          }
+          sendStreamMeta(peerId, currentStream, 'camera');
+        } catch {
+          recoverPeerRef.current(peerId, 'troca de câmera durante reconstrução', true);
+        }
+      }
+      oldTrack.onended = null;
+      oldTrack.stop();
+      await onDevicesChanged();
+      completed = true;
+    }).catch((error) => {
+      if ((error as DOMException).name !== 'AbortError') onError('Não foi possível trocar a câmera; a câmera atual continua ativa.');
+    }).finally(() => {
+      cameraSwitching.current = false;
+      if (completed && localStreams.current.has('camera') && activeCameraDeviceId.current !== preferencesRef.current.cameraId) retryCameraSwitch((current) => current + 1);
+    });
+  }, [cameraOn, onDevicesChanged, onError, preferences.cameraId, sendStreamMeta, stopStream]);
+
   const requestScreenShare = async () => {
-    if (screenOn) return stopStream('screen');
+    if (localStreams.current.has('screen')) return stopStream('screen');
     if (shareListing.current || shareCapture.current) return;
     setShowShareSetup(true);
   };
@@ -1178,30 +1490,33 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     shareListing.current = true;
     setShareBusy(true);
     pendingShareOptions.current = { includeAudio, quality: selectedQuality };
+    const captureGeneration = mediaCaptureGeneration.current.screen;
+    qualityRef.current = selectedQuality;
     setQuality(selectedQuality);
+    persistStreamQuality(selectedQuality);
     try {
       if (window.tumacordDesktop) {
         const sources = await window.tumacordDesktop.getSources();
+        if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) return;
         if (!sources.length) throw new Error('Nenhuma tela ou janela foi encontrada.');
         setDesktopSources(sources);
         setShowShareSetup(false);
         // No Wayland/PipeWire, getSources já abre o seletor do sistema e
         // devolve somente a fonte escolhida. Começar direto evita pedir a
         // mesma tela novamente em um segundo seletor.
-        if (sources.length === 1) await shareDesktopSource(sources[0].id, sources[0].kind);
+        if (sources.length === 1) await shareDesktopSource(sources[0].id, sources[0].kind, captureGeneration);
         else setShowSourcePicker(true);
         return;
       }
-      const config = QUALITY[selectedQuality];
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } },
+        video: screenCaptureConstraints(),
         audio: includeAudio,
         selfBrowserSurface: 'exclude',
         systemAudio: includeAudio ? 'include' : 'exclude',
         windowAudio: 'window',
       } as DisplayMediaStreamOptions);
       setShowShareSetup(false);
-      await attachStream('screen', stream, selectedQuality);
+      await attachStream('screen', stream, selectedQuality, captureGeneration);
     } catch (error) {
       if ((error as DOMException).name !== 'NotAllowedError') onError(error instanceof Error ? error.message : 'Não consegui compartilhar a tela.');
     } finally {
@@ -1210,21 +1525,27 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     }
   };
 
-  async function shareDesktopSource(sourceId: string, _sourceKind: DesktopSource['kind']): Promise<void> {
+  async function shareDesktopSource(sourceId: string, _sourceKind: DesktopSource['kind'], captureGeneration = mediaCaptureGeneration.current.screen): Promise<void> {
     if (shareCapture.current) return;
+    if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) return;
     shareCapture.current = true;
     setShareBusy(true);
     setShowShareSetup(false);
     setShowSourcePicker(false);
     const { includeAudio, quality: selectedQuality } = pendingShareOptions.current;
+    qualityRef.current = selectedQuality;
     setQuality(selectedQuality);
-    const config = QUALITY[selectedQuality];
+    persistStreamQuality(selectedQuality);
     let routedScreenAudio = false;
     let capturedAudio: MediaStream | null = null;
     let capturedDisplay: MediaStream | null = null;
     try {
       if (window.tumacordDesktop && includeAudio) {
         const prepared = await window.tumacordDesktop.prepareScreenAudio();
+        if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) {
+          await window.tumacordDesktop.stopScreenAudio().catch(() => undefined);
+          return;
+        }
         if (prepared.ok && prepared.deviceId) {
           routedScreenAudio = true;
           screenAudioRecovery.current = {
@@ -1233,6 +1554,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             attempts: 0,
           };
           capturedAudio = await captureIsolatedScreenAudio(prepared.deviceName || 'Tumacord Stream Audio');
+          if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) throw new DOMException('Captura de tela cancelada.', 'AbortError');
         } else {
           throw new Error(prepared.error ?? 'PipeWire indisponível');
         }
@@ -1243,11 +1565,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         audio: false,
         video: {
           mandatory: {
-            chromeMediaSource: 'desktop',
             chromeMediaSourceId: sourceId,
-            maxWidth: config.width,
-            maxHeight: config.height,
-            maxFrameRate: config.frameRate,
+            ...desktopScreenCaptureConstraints(),
           },
         } as unknown as MediaTrackConstraints,
       });
@@ -1256,15 +1575,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         ...(capturedAudio?.getAudioTracks() ?? []),
       ]);
       if (!includeAudio) screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
-      await attachStream('screen', stream, selectedQuality);
+      const attached = await attachStream('screen', stream, selectedQuality, captureGeneration);
+      if (!attached && routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     } catch (error) {
       capturedDisplay?.getTracks().forEach((track) => track.stop());
       capturedAudio?.getTracks().forEach((track) => track.stop());
       if (routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
       screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
-      onError(`Não consegui iniciar a transmissão${includeAudio ? ' com áudio isolado' : ''}: ${error instanceof Error ? error.message : 'captura indisponível'}`);
-      if (desktopSources.length > 1) setShowSourcePicker(true);
-      else setShowShareSetup(true);
+      if (!isAbortError(error)) {
+        onError(`Não consegui iniciar a transmissão${includeAudio ? ' com áudio isolado' : ''}: ${error instanceof Error ? error.message : 'captura indisponível'}`);
+        if (channelRef.current) {
+          if (desktopSources.length > 1) setShowSourcePicker(true);
+          else setShowShareSetup(true);
+        }
+      }
     } finally {
       shareCapture.current = false;
       if (!shareListing.current) setShareBusy(false);
@@ -1272,21 +1596,30 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }
 
   const changeQuality = async (next: StreamQuality) => {
+    const operation = ++qualityChangeGeneration.current;
+    qualityRef.current = next;
     setQuality(next);
+    persistStreamQuality(next);
     const stream = localStreams.current.get('screen');
-    if (!stream) return;
+    if (!stream) return true;
     const config = QUALITY[next];
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenContentHint(config);
-    await videoTrack?.applyConstraints({ width: { ideal: config.width, max: config.width }, height: { ideal: config.height, max: config.height }, frameRate: { ideal: config.frameRate, max: config.frameRate } }).catch(() => undefined);
+    const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
+    let rejectedByBrowser = 0;
     for (const state of peers.current.values()) {
-      const videoTrack = stream.getVideoTracks()[0];
+      if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
       if (!sender) continue;
-      await tuneScreenSender(sender, config);
+      state.screenTuningPending = true;
+      const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
+      if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
+      state.screenTuningPending = !applied;
+      if (!applied) rejectedByBrowser += 1;
       state.screenBitrate = config.bitrate;
       state.healthyScreenSamples = 0;
-      state.screenScale = 1;
+      state.screenBaseScale = baseScale;
+      state.screenScale = baseScale;
       state.healthyEncoderSamples = 0;
       state.encoderPressureSamples = 0;
       state.lastFramesEncoded = undefined;
@@ -1296,6 +1629,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       state.lastScreenPackets = undefined;
       state.stalledScreenSamples = 0;
     }
+    if (rejectedByBrowser) {
+      onError(`A captura continua ativa, mas ${rejectedByBrowser === 1 ? 'um enlace recusou' : `${rejectedByBrowser} enlaces recusaram`} o novo perfil de qualidade.`);
+      return false;
+    }
+    return true;
   };
 
   return {

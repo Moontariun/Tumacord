@@ -78,7 +78,10 @@ class ScreenAudioRouter {
     this.runPactl = options.pactl ?? pactl;
     this.readGraph = options.pipewireGraph ?? pipewireGraph;
     this.runFile = options.execFile ?? execFileAsync;
-    this.intervalMs = options.intervalMs ?? 700;
+    // O grafo muda por eventos (abrir/fechar/pausar aplicativos), não a cada
+    // frame. Consultá-lo várias vezes por segundo cria processos pw-dump em
+    // excesso e aumenta a pressão sobre PipeWire durante uma live longa.
+    this.intervalMs = options.intervalMs ?? 2_000;
     this.retryDelayMs = options.retryDelayMs ?? 120;
     this.nullSinkModule = null;
     this.remapSourceModule = null;
@@ -218,6 +221,10 @@ class ScreenAudioRouter {
     const plan = screenAudioRoutePlan(graph);
     if (!plan.busFound || !plan.sourceFound) throw new Error('O barramento virtual do Tumacord desapareceu do PipeWire.');
     const activeLinks = activePipewireLinks(graph);
+    const plannedLinks = new Set(plan.links.map(([output, input]) => `${output}:${input}`));
+    for (const key of this.links) {
+      if (!plannedLinks.has(key) || !activeLinks.has(key)) this.links.delete(key);
+    }
     let linked = 0;
     for (const [output, input] of plan.links) {
         if (!this.active || generation !== this.generation) break;
@@ -226,16 +233,24 @@ class ScreenAudioRouter {
         // jogo ou sair do modo tela cheia. O cache antigo dizia que o link
         // ainda existia e deixava a live muda para sempre. O grafo real é a
         // fonte de verdade, então qualquer link desaparecido é refeito.
-        this.links.add(key);
         if (activeLinks.has(key)) {
+          this.links.add(key);
           linked += 1;
           continue;
         }
         await this.runFile('pw-link', ['-L', '-w', output, input], { encoding: 'utf8', timeout: 2_500 })
-          .then(() => { activeLinks.add(key); linked += 1; })
+          .then(() => {
+            activeLinks.add(key);
+            this.links.add(key);
+            linked += 1;
+          })
           .catch(() => undefined);
     }
-    if (plan.links.length && linked < plan.links.length) throw new Error(`O PipeWire conectou apenas ${linked} de ${plan.links.length} canais da live.`);
+    // Uma porta pode desaparecer entre o snapshot e pw-link (troca de faixa,
+    // pausa ou fechamento do aplicativo). O barramento continua válido e o
+    // timer tenta apenas o enlace transitório novamente. Desmontar os módulos
+    // aqui encerrava a track que o Chromium ainda capturava e podia derrubar a
+    // thread nativa desktopCaptureT.
     return { eligible: plan.links.length, linked };
   }
 
@@ -245,10 +260,10 @@ class ScreenAudioRouter {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (this.routePromise) await this.routePromise.catch(() => undefined);
-    for (const key of this.links) {
+    await Promise.all([...this.links].map(async (key) => {
       const [output, input] = key.split(':');
       await this.runFile('pw-link', ['-d', output, input], { encoding: 'utf8', timeout: 2_000 }).catch(() => undefined);
-    }
+    }));
     this.links.clear();
     const remapSourceModule = this.remapSourceModule;
     const nullSinkModule = this.nullSinkModule;

@@ -10,6 +10,7 @@ import { Server } from 'socket.io';
 import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
+import { safeAttachmentName } from '../shared/attachmentName.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, verifyPassword, verifySecret } from './auth.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
@@ -38,7 +39,6 @@ const httpServer = tlsEnabled
   : createHttpServer(app);
 const io = new Server(httpServer, { cors: { origin: true, credentials: false }, maxHttpBufferSize: 4e6 });
 const rooms = new VoiceRooms();
-const handoffRooms = new Set<string>();
 const sessions = new Map<string, { userId: string; expiresAt: number }>();
 const connectedUsers = new Map<string, PublicUser>();
 const p2pTextChannelId = 'geral';
@@ -67,10 +67,12 @@ const credentialsInput = z.object({
   serverKey: z.string().max(256).optional().default(''),
 });
 const loginInput = credentialsInput.extend({ allowCreate: z.boolean().optional() });
+const attachmentMimeTypeSchema = z.string().trim().min(1).max(120)
+  .regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i);
 const attachmentSchema = z.object({
   id: z.string().uuid(),
-  name: z.string().trim().min(1).max(200),
-  mimeType: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(1).max(200).transform((name) => safeAttachmentName(name)),
+  mimeType: attachmentMimeTypeSchema,
   size: z.number().int().positive().max(25 * 1024 * 1024),
   previewDataUrl: z.string().max(120_000).regex(/^data:image\/(?:jpeg|png|webp);base64,/).optional(),
 });
@@ -101,6 +103,21 @@ const syncBundleSchema = z.object({
   profiles: z.array(replicatedProfileSchema).max(200).optional().default([]),
   availableAttachmentIds: z.array(z.string().uuid()).max(500).optional().default([]),
 });
+const rtcTargetSchema = z.string().min(1).max(160);
+const rtcOfferSchema = z.object({ target: rtcTargetSchema, sdp: z.object({ type: z.literal('offer'), sdp: z.string().max(1_000_000) }) });
+const rtcAnswerSchema = z.object({ target: rtcTargetSchema, sdp: z.object({ type: z.literal('answer'), sdp: z.string().max(1_000_000) }) });
+const rtcIceSchema = z.object({
+  target: rtcTargetSchema,
+  candidate: z.object({
+    candidate: z.string().max(8_192),
+    sdpMid: z.string().max(256).nullable().optional(),
+    sdpMLineIndex: z.number().int().min(0).max(256).nullable().optional(),
+    usernameFragment: z.string().max(256).nullable().optional(),
+  }),
+});
+const rtcResyncSchema = z.object({ target: rtcTargetSchema });
+const rtcStreamHealthSchema = z.object({ target: rtcTargetSchema, frozen: z.boolean() });
+const rtcStreamMetaSchema = z.object({ target: rtcTargetSchema, meta: z.object({ streamId: z.string().min(1).max(256), kind: z.enum(['camera', 'screen']) }) });
 
 app.get('/api/health', (_request, response) => {
   response.json({
@@ -252,14 +269,32 @@ function isLoopbackRequest(request: express.Request): boolean {
   return address === '127.0.0.1' || address === '::1';
 }
 
+function requireHttpSession(request: express.Request, response: express.Response, next: express.NextFunction): void {
+  if (!httpUser(request)) {
+    response.status(401).json({ error: 'Sessão inválida.' });
+    return;
+  }
+  next();
+}
+
+function requireLoopback(request: express.Request, response: express.Response, next: express.NextFunction): void {
+  if (!isLoopbackRequest(request)) {
+    response.status(403).json({ error: 'Disponível apenas localmente.' });
+    return;
+  }
+  next();
+}
+
 function decodedHeader(value: string | string[] | undefined, fallback: string): string {
   if (typeof value !== 'string') return fallback;
   try { return decodeURIComponent(value); } catch { return fallback; }
 }
 
 function attachmentHeaders(id: string): { name: string; mimeType: string } {
-  const attachment = store.messages.find((message) => message.attachment?.id === id)?.attachment;
-  return { name: attachment?.name ?? 'arquivo', mimeType: attachment?.mimeType ?? 'application/octet-stream' };
+  const attachment = store.attachmentForId(id)
+    ?? store.messages.find((message) => message.attachment?.id === id)?.attachment;
+  const mimeType = attachmentMimeTypeSchema.safeParse(attachment?.mimeType);
+  return { name: safeAttachmentName(attachment?.name), mimeType: mimeType.success ? mimeType.data : 'application/octet-stream' };
 }
 
 async function sendAttachment(id: string, response: express.Response): Promise<void> {
@@ -275,15 +310,17 @@ async function sendAttachment(id: string, response: express.Response): Promise<v
   response.send(contents);
 }
 
-app.post('/api/attachments', express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
-  if (!httpUser(request)) return void response.status(401).json({ error: 'Sessão inválida.' });
+app.post('/api/attachments', requireHttpSession, express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
   const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
-  const name = decodedHeader(request.headers['x-file-name'], 'arquivo').trim().slice(0, 200);
-  const mimeType = decodedHeader(request.headers['x-file-type'], 'application/octet-stream').trim().slice(0, 120) || 'application/octet-stream';
+  const name = safeAttachmentName(decodedHeader(request.headers['x-file-name'], 'arquivo'));
+  const parsedMimeType = attachmentMimeTypeSchema.safeParse(decodedHeader(request.headers['x-file-type'], 'application/octet-stream'));
+  if (!parsedMimeType.success) return void response.status(400).json({ error: 'Tipo MIME inválido.' });
+  const mimeType = parsedMimeType.data;
   if (!contents.length || contents.length > 25 * 1024 * 1024) return void response.status(400).json({ error: 'O arquivo precisa ter entre 1 byte e 25 MB.' });
   const id = randomUUID();
-  await store.saveAttachment(id, contents);
-  response.status(201).json({ id, name, mimeType, size: contents.length });
+  const attachment = { id, name, mimeType, size: contents.length };
+  await store.saveAttachment(id, contents, attachment);
+  response.status(201).json(attachment);
 });
 
 app.get('/api/attachments/:id', async (request, response) => {
@@ -293,8 +330,7 @@ app.get('/api/attachments/:id', async (request, response) => {
   await sendAttachment(parsed.data, response);
 });
 
-app.post('/api/profile/media', express.raw({ type: ['image/gif', 'image/png', 'image/jpeg', 'image/webp'], limit: '6mb' }), async (request, response) => {
-  if (!httpUser(request)) return void response.status(401).json({ error: 'Sessão inválida.' });
+app.post('/api/profile/media', requireHttpSession, express.raw({ type: ['image/gif', 'image/png', 'image/jpeg', 'image/webp'], limit: '6mb' }), async (request, response) => {
   const mimeType = request.headers['content-type']?.split(';')[0] ?? '';
   const parsedType = z.string().regex(/^image\/(?:gif|png|jpeg|webp)$/).safeParse(mimeType);
   const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
@@ -316,8 +352,7 @@ app.get('/api/profile/media/:id', async (request, response) => {
   response.send(contents);
 });
 
-app.put('/api/profile/media/:id', express.raw({ type: ['image/gif', 'image/png', 'image/jpeg', 'image/webp'], limit: '6mb' }), async (request, response) => {
-  if (!httpUser(request)) return void response.status(401).json({ error: 'Sessão inválida.' });
+app.put('/api/profile/media/:id', requireHttpSession, express.raw({ type: ['image/gif', 'image/png', 'image/jpeg', 'image/webp'], limit: '6mb' }), async (request, response) => {
   const id = z.string().uuid().safeParse(request.params.id);
   const mimeType = request.headers['content-type']?.split(';')[0] ?? '';
   const parsedType = z.string().regex(/^image\/(?:gif|png|jpeg|webp)$/).safeParse(mimeType);
@@ -368,8 +403,7 @@ app.post('/api/local/sync', async (request, response) => {
   response.json({ ok: true });
 });
 
-app.put('/api/local/attachments/:id', express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
-  if (!isLoopbackRequest(request)) return void response.status(403).end();
+app.put('/api/local/attachments/:id', requireLoopback, express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
   const parsed = z.string().uuid().safeParse(request.params.id);
   const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
   if (!parsed.success || !contents.length || contents.length > 25 * 1024 * 1024) return void response.status(400).end();
@@ -483,9 +517,9 @@ io.on('connection', (socket) => {
     acknowledge?.({ ok: true, channel });
   });
 
-  socket.on('voice:join', (input: unknown, acknowledge: (result: unknown) => void) => {
+  socket.on('voice:join', (input: unknown, acknowledge?: (result: unknown) => void) => {
     const channelId = typeof input === 'string' ? input : z.object({ channelId: z.string() }).safeParse(input).data?.channelId;
-    if (typeof channelId !== 'string' || !channelIsAvailable(channelId, 'voice')) return;
+    if (typeof channelId !== 'string' || !channelIsAvailable(channelId, 'voice')) return acknowledge?.({ ok: false, error: 'Call inválida.' });
     const previousChannels = rooms.leaveEverywhere(socket.id);
     for (const previous of previousChannels) {
       socket.leave(`voice:${previous}`);
@@ -495,7 +529,7 @@ io.on('connection', (socket) => {
     const existingPeers = rooms.members(channelId);
     socket.join(`voice:${channelId}`);
     rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address) });
-    acknowledge({ ok: true, selfId: socket.id, peers: existingPeers });
+    acknowledge?.({ ok: true, selfId: socket.id, peers: existingPeers });
     // Participantes que já estavam na call mantêm câmera/tela locais. Este
     // aviso faz cada um recriar apenas o enlace P2P do usuário que voltou,
     // sem reiniciar a live nem alterar o estado visual da sala.
@@ -521,17 +555,26 @@ io.on('connection', (socket) => {
     io.to(`voice:${channelId}`).emit('voice:members', rooms.updatePing(channelId, socket.id, parsed.data));
   });
 
-  for (const event of ['rtc:offer', 'rtc:answer', 'rtc:ice', 'rtc:resync', 'rtc:stream-health'] as const) {
-    socket.on(event, (payload: { target?: unknown; [key: string]: unknown }) => {
-      if (typeof payload?.target !== 'string' || !sameVoiceRoom(socket.id, payload.target)) return;
-      const { target, ...forwarded } = payload;
+  const rtcSchemas = {
+    'rtc:offer': rtcOfferSchema,
+    'rtc:answer': rtcAnswerSchema,
+    'rtc:ice': rtcIceSchema,
+    'rtc:resync': rtcResyncSchema,
+    'rtc:stream-health': rtcStreamHealthSchema,
+  } as const;
+  for (const event of Object.keys(rtcSchemas) as Array<keyof typeof rtcSchemas>) {
+    socket.on(event, (payload: unknown) => {
+      const parsed = rtcSchemas[event].safeParse(payload);
+      if (!parsed.success || !sameVoiceRoom(socket.id, parsed.data.target)) return;
+      const { target, ...forwarded } = parsed.data;
       io.to(target).emit(event, { ...forwarded, from: socket.id, user: socket.data.user as PublicUser });
     });
   }
 
-  socket.on('rtc:stream-meta', (payload: { target?: unknown; meta?: StreamMeta }) => {
-    if (typeof payload?.target !== 'string' || !sameVoiceRoom(socket.id, payload.target)) return;
-    io.to(payload.target).emit('rtc:stream-meta', { from: socket.id, meta: payload.meta });
+  socket.on('rtc:stream-meta', (payload: unknown) => {
+    const parsed = rtcStreamMetaSchema.safeParse(payload);
+    if (!parsed.success || !sameVoiceRoom(socket.id, parsed.data.target)) return;
+    io.to(parsed.data.target).emit('rtc:stream-meta', { from: socket.id, meta: parsed.data.meta satisfies StreamMeta });
   });
 
   socket.on('disconnect', () => {
@@ -552,7 +595,7 @@ function sameVoiceRoom(first: string, second: string): boolean {
 function endpointFor(rawAddress: string): string {
   const address = rawAddress.replace(/^::ffff:/, '');
   const printable = address.includes(':') ? `[${address}]` : address;
-  return `http://${printable}:${port}`;
+  return `${tlsEnabled ? 'https' : 'http'}://${printable}:${port}`;
 }
 
 function leaveVoice(socketId: string): void {
@@ -564,12 +607,10 @@ function leaveVoice(socketId: string): void {
   leavingSocket?.leave(`voice:${channelId}`);
   io.to(`voice:${channelId}`).emit('voice:peer-left', socketId);
   io.to(`voice:${channelId}`).emit('voice:members', remaining);
-  if (leavingWasHost && remaining.length && !handoffRooms.has(channelId)) {
+  if (leavingWasHost && remaining.length) {
     const nextHost = remaining.find((member) => member.isHost);
     if (nextHost) {
-      handoffRooms.add(channelId);
       io.to(`voice:${channelId}`).emit('voice:host-handoff', { channelId, host: nextHost, switchAt: Date.now() + 800 });
-      setTimeout(() => handoffRooms.delete(channelId), 5000).unref();
     }
   }
   broadcastSnapshot();
@@ -583,6 +624,12 @@ if (serveWeb && existsSync(webDirectory)) {
     response.sendFile(path.join(webDirectory, 'index.html'));
   });
 }
+
+app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
+  const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
+  if (status === 413) return void response.status(413).json({ error: 'Arquivo acima do limite permitido.' });
+  response.status(500).json({ error: 'Erro interno do servidor.' });
+});
 
 storeReady.then(async () => {
   await store.pruneSessions();

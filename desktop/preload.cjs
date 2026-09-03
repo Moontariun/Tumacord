@@ -3,14 +3,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('tumacordDesktop', {
   isDesktop: true,
   getSources: () => ipcRenderer.invoke('tumacord:desktop-sources'),
-  selectDesktopSource: (sourceId, includeAudio, audioDevice) => {
-    ipcRenderer.sendSync('tumacord:select-desktop-source', {
-      sourceId,
-      includeAudio,
-      audioDeviceId: audioDevice?.deviceId,
-      audioDeviceName: audioDevice?.deviceName,
-    });
-  },
   prepareScreenAudio: () => ipcRenderer.invoke('tumacord:prepare-screen-audio'),
   stopScreenAudio: () => ipcRenderer.invoke('tumacord:stop-screen-audio'),
   discoverCalls: () => ipcRenderer.invoke('tumacord:discover-calls'),

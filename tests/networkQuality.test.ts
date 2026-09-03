@@ -130,3 +130,17 @@ test('encoder saudável recupera resolução aos poucos sem oscilar', () => {
   assert.equal(result.scale, 1.35);
   assert.equal(result.healthySamples, 0);
 });
+
+test('adaptação respeita a escala mínima do perfil sem voltar à resolução máxima', () => {
+  const result = adaptEncoderScale({
+    targetFps: 30,
+    currentScale: 2.15,
+    minimumScale: 2,
+    maximumScale: 4,
+    healthySamples: 5,
+    pressureSamples: 0,
+    averageEncodeMs: 5,
+    qualityLimitationReason: 'none',
+  });
+  assert.equal(result.scale, 2);
+});
