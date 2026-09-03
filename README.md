@@ -43,15 +43,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-v0.5.0.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.5.0/scripts/install-v0.5.0.sh | bash
 ```
 
-Este comando instala a v0.5.0 corrigida a partir da mesma branch de manutenção `release/p2p-media-profile-stability-v0.4.0`. A v0.4.0 anterior está marcada como afetada por falhas de transmissão e não deve mais ser usada. O script baixa primeiro um bootstrap temporário e então clona/compila exatamente essa branch, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-p2p-media-profile-stability-v0.4.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+Este comando instala a v0.5.0 corrigida a partir da branch separada `release/p2p-media-profile-stability-v0.5.0`. A v0.4.0 anterior permanece isolada em sua própria branch e está marcada como afetada por falhas de transmissão; ela não deve mais ser usada. O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.5.0, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-p2p-media-profile-stability-v0.5.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.4.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/p2p-media-profile-stability-v0.5.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.

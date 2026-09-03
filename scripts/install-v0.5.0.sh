@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-branch="release/p2p-media-profile-stability-v0.4.0"
+branch="release/p2p-media-profile-stability-v0.5.0"
 installer_url="https://raw.githubusercontent.com/Moontariun/Tumacord/${branch}/scripts/install-from-github.sh"
 bootstrap_file="$(mktemp "${TMPDIR:-/tmp}/tumacord-bootstrap.XXXXXX.sh")"
 trap 'rm -f -- "$bootstrap_file"' EXIT
