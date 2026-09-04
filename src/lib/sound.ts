@@ -1,13 +1,11 @@
+import { resumeSharedAudio, sharedAudioContext } from './audioBus';
+
 const SOUND_KEY = 'tumacord.sound-feedback';
 const SOUND_VOLUME_KEY = 'tumacord.sound-volume';
 
 export type FeedbackSound = 'connect' | 'join' | 'leave' | 'message' | 'notification' | 'error' | 'mute' | 'unmute' | 'streamStart' | 'streamStop' | 'host';
 
-type AudioContextConstructor = typeof AudioContext;
-type WindowWithAudio = Window & { webkitAudioContext?: AudioContextConstructor };
 type Tone = { frequency: number; duration: number; offset: number; gain: number; wave?: OscillatorType; detune?: number };
-
-let context: AudioContext | null = null;
 
 const patterns: Record<FeedbackSound, Tone[]> = {
   connect: [
@@ -78,24 +76,18 @@ export function setSoundVolume(volume: number): void {
 }
 
 function getContext(): AudioContext | null {
-  if (typeof window === 'undefined') return null;
-  if (context) return context;
-  const Constructor = window.AudioContext ?? (window as WindowWithAudio).webkitAudioContext;
-  if (!Constructor) return null;
-  context = new Constructor({ latencyHint: 'interactive' });
-  return context;
+  return sharedAudioContext();
 }
 
 export function unlockAudio(): void {
-  const audio = getContext();
-  if (audio?.state === 'suspended') void audio.resume();
+  void resumeSharedAudio();
 }
 
 export function playSound(sound: FeedbackSound): void {
   if (!readSoundEnabled()) return;
   const audio = getContext();
   if (!audio) return;
-  if (audio.state === 'suspended') void audio.resume();
+  if (audio.state === 'suspended') void resumeSharedAudio();
   const now = audio.currentTime + 0.008;
   const masterVolume = readSoundVolume();
   const master = audio.createGain();

@@ -6,9 +6,10 @@ import gtcrnWasmPath from '@sapphi-red/web-noise-suppressor/gtcrn.wasm?url';
 import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
-import { isPolitePeer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio } from '../lib/rtcPolicy';
+import { isPolitePeer, planPeerRecovery, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
-import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
+import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
+import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
 
 export type { StreamQuality } from '../lib/screenQuality';
@@ -24,7 +25,10 @@ interface PeerConnectionState {
   needsNegotiation: boolean;
   pendingCandidates: RTCIceCandidateInit[];
   recoveryAttempts: number;
+  connectedSince: number;
+  screenSenderSince: number;
   recoveryTimer?: number;
+  escalationTimer?: number;
   negotiationRecoveryTimer?: number;
   mutedAudioTimers: Map<string, number>;
   screenBitrate?: number;
@@ -41,7 +45,7 @@ interface PeerConnectionState {
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
   inboundVoice: Map<string, { packets?: number; stalled: number }>;
-  inboundScreen: Map<string, { bytes?: number; packets?: number; framesReceived?: number; framesDecoded?: number; freezeCount?: number; freezeDuration?: number; stalled: number }>;
+  inboundScreen: Map<string, { bytes?: number; packets?: number; framesReceived?: number; framesDecoded?: number; freezeCount?: number; freezeDuration?: number; stalled: number; since: number }>;
   lastScreenDecodeRecoveryAt: number;
   lastVoiceRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
@@ -51,6 +55,7 @@ interface PeerConnectionState {
 
 function closePeerState(state: PeerConnectionState): void {
   if (state.recoveryTimer) window.clearTimeout(state.recoveryTimer);
+  if (state.escalationTimer) window.clearTimeout(state.escalationTimer);
   if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
   for (const timer of state.mutedAudioTimers.values()) window.clearTimeout(timer);
   state.mutedAudioTimers.clear();
@@ -94,8 +99,38 @@ async function tuneVoiceSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
+// Perfis de 60 FPS existem para jogo e movimento; os de 30 FPS ou menos são
+// escolhidos para ler tela, código e planilha, onde nitidez vale mais que
+// fluidez. O par contentHint/degradationPreference precisa contar a mesma
+// história, senão o encoder derruba a resolução e a live fica borrada.
 function screenContentHint(config: ScreenQualityConfig): 'motion' | 'detail' {
-  return config.frameRate >= 30 ? 'motion' : 'detail';
+  return config.frameRate >= 60 ? 'motion' : 'detail';
+}
+
+function screenDegradationPreference(config: ScreenQualityConfig): 'maintain-framerate' | 'maintain-resolution' {
+  return config.frameRate >= 60 ? 'maintain-framerate' : 'maintain-resolution';
+}
+
+// A dica de bitrate viaja na seção de vídeo inteira. Sem um teto próprio a
+// câmera passaria a disputar a banda reservada para a transmissão.
+async function tuneCameraSender(sender: RTCRtpSender): Promise<void> {
+  const parameters = sender.getParameters();
+  if (!parameters.encodings?.length) return;
+  parameters.encodings = parameters.encodings.map((encoding) => ({ ...encoding, maxBitrate: 2_500_000, maxFramerate: 30 }));
+  await sender.setParameters(parameters).catch(() => undefined);
+}
+
+async function setTunedLocalDescription(pc: RTCPeerConnection, description: RTCSessionDescriptionInit, hints?: ReturnType<typeof screenBitrateHints>): Promise<void> {
+  if (hints && description.sdp) {
+    try {
+      await pc.setLocalDescription({ type: description.type, sdp: applyVideoBitrateHints(description.sdp, hints) });
+      return;
+    } catch {
+      // Algumas versões do Chromium recusam SDP editada. Nesse caso a live
+      // ainda funciona, apenas com a rampa lenta padrão do navegador.
+    }
+  }
+  await pc.setLocalDescription(description);
 }
 
 async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1): Promise<boolean> {
@@ -109,9 +144,7 @@ async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfi
     priority: 'high',
     networkPriority: 'high',
   } as RTCRtpEncodingParameters];
-  // Keep the requested frame rate when possible; this avoids the browser
-  // oscillating between a sharp but jerky stream and a blurry one.
-  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = config.frameRate >= 30 ? 'maintain-framerate' : 'balanced';
+  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = screenDegradationPreference(config);
   try {
     await sender.setParameters(parameters);
     return true;
@@ -156,6 +189,20 @@ interface MicrophoneProcessing {
   suppressor?: GtcrnWorkletNode;
   compressor?: DynamicsCompressorNode;
   destination?: MediaStreamAudioDestinationNode;
+  inputMeter?: AnalyserNode;
+  outputMeter?: AnalyserNode;
+}
+
+function analyserLevel(analyser: AnalyserNode | undefined): number {
+  if (!analyser) return 0;
+  const samples = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(samples);
+  let sum = 0;
+  for (const sample of samples) {
+    const normalized = (sample - 128) / 128;
+    sum += normalized * normalized;
+  }
+  return Math.sqrt(sum / samples.length);
 }
 
 let gtcrnBinaryPromise: Promise<ArrayBuffer> | null = null;
@@ -197,11 +244,20 @@ async function createNeuralMicrophone(rawStream: MediaStream, deviceId: string):
     compressor.release.value = 0.14;
     const destination = context.createMediaStreamDestination();
     source.connect(highPass).connect(suppressor).connect(compressor).connect(destination);
+    // Comparar a energia antes e depois do filtro é a única forma de perceber
+    // que o worklet WASM travou: a faixa continua "live" e habilitada, mas só
+    // silêncio chega do outro lado.
+    const inputMeter = context.createAnalyser();
+    const outputMeter = context.createAnalyser();
+    inputMeter.fftSize = 256;
+    outputMeter.fftSize = 256;
+    source.connect(inputMeter);
+    compressor.connect(outputMeter);
     const outputTrack = destination.stream.getAudioTracks()[0];
     if (!outputTrack) throw new Error('O filtro neural não criou uma faixa de áudio.');
     if ('contentHint' in outputTrack) outputTrack.contentHint = 'speech';
     const outputStream = new MediaStream([outputTrack]);
-    return { rawStream, outputStream, deviceId, neural: true, noiseSuppression: true, context, source, highPass, suppressor, compressor, destination };
+    return { rawStream, outputStream, deviceId, neural: true, noiseSuppression: true, context, source, highPass, suppressor, compressor, destination, inputMeter, outputMeter };
   } catch (error) {
     await context.close().catch(() => undefined);
     throw error;
@@ -216,6 +272,8 @@ async function disposeMicrophoneProcessing(processing: MicrophoneProcessing | nu
   processing.suppressor?.disconnect();
   processing.compressor?.disconnect();
   processing.destination?.disconnect();
+  processing.inputMeter?.disconnect();
+  processing.outputMeter?.disconnect();
   processing.outputStream.getTracks().forEach((track) => track.stop());
   if (processing.rawStream !== processing.outputStream) processing.rawStream.getTracks().forEach((track) => track.stop());
   await processing.context?.close().catch(() => undefined);
@@ -283,10 +341,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const microphoneProcessing = useRef<MicrophoneProcessing | null>(null);
   const microphoneRecoveryTimer = useRef<number | undefined>(undefined);
   const microphoneCaptureGeneration = useRef(0);
+  const neuralFallback = useRef(false);
   const ensureMicrophoneRef = useRef<() => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
-  const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean) => void>(() => undefined);
+  const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
   const recoveryCooldown = useRef(new Map<string, number>());
+  const recoveryAttemptCount = useRef(new Map<string, number>());
   const missingScreenSince = useRef(new Map<string, number>());
   const missingVoiceSince = useRef(new Map<string, number>());
   const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; notified?: boolean; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
@@ -398,9 +458,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       for (const track of stream.getTracks()) {
         const sender = state.pc.addTrack(track, stream);
         if (kind === 'microphone') void tuneVoiceSender(sender);
+        if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
         if (kind === 'screen' && track.kind === 'video') {
           const config = QUALITY[qualityRef.current];
           const baseScale = screenScaleForQuality(track.getSettings(), config);
+          state.screenSenderSince = Date.now();
           state.screenBaseScale = baseScale;
           state.screenScale = baseScale;
           state.screenTuningPending = true;
@@ -432,6 +494,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       needsNegotiation: false,
       pendingCandidates: [],
       recoveryAttempts: 0,
+      connectedSince: 0,
+      screenSenderSince: localStreams.current.has('screen') ? Date.now() : 0,
       mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
@@ -467,9 +531,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         refreshRemote();
         if (event.track.kind !== 'audio') return;
         clearMutedAudioTimer();
+        // Uma faixa fica "muted" em toda renegociação normal. Reconstruir o
+        // enlace por isso depois de quatro segundos era o gatilho mais comum
+        // de tela preta em sequência.
         state.mutedAudioTimers.set(event.track.id, window.setTimeout(() => {
           state.mutedAudioTimers.delete(event.track.id);
           if (peers.current.get(peerId) !== state || !event.track.muted) return;
+          if (state.pc.connectionState !== 'connected') return;
           const member = membersRef.current.find((candidate) => candidate.socketId === peerId);
           const meta = stream ? streamMeta.current.get(streamMetadataKey(peerId, stream.id)) : undefined;
           const screen = meta === 'screen' || Boolean(stream?.getVideoTracks().length && member?.screen);
@@ -478,8 +546,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             remoteMuted: member?.muted ?? true,
             screen,
             screenAudioExpected: member?.screenAudio ?? false,
-          })) recoverPeerRef.current(peerId, screen ? 'áudio da live interrompido' : 'áudio da call interrompido', true);
-        }, 4_000));
+          })) recoverPeerRef.current(peerId, screen ? 'áudio da live interrompido' : 'áudio da call interrompido', true, 'soft');
+        }, 12_000));
       };
       event.track.onunmute = () => {
         clearMutedAudioTimer();
@@ -503,8 +571,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (peers.current.get(peerId) !== state) return;
       if (pc.connectionState === 'connected') {
         if (state.recoveryTimer) window.clearTimeout(state.recoveryTimer);
+        if (state.escalationTimer) window.clearTimeout(state.escalationTimer);
         state.recoveryTimer = undefined;
+        state.escalationTimer = undefined;
         state.recoveryAttempts = 0;
+        state.connectedSince = Date.now();
         updatePeerHealth(peerId, 'connected');
         if (state.screenTuningPending) {
           const screenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
@@ -523,21 +594,28 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         updatePeerHealth(peerId, state.recoveryAttempts ? 'recovering' : 'connecting');
         return;
       }
+      state.connectedSince = 0;
       if (pc.connectionState === 'disconnected') {
         updatePeerHealth(peerId, 'recovering');
+        // "disconnected" costuma ser um soluço de rede de poucos segundos. Um
+        // ICE restart preserva o decodificador; só depois de dez segundos sem
+        // voltar vale reconstruir o enlace e piscar a tela de quem assiste.
         if (state.recoveryTimer) window.clearTimeout(state.recoveryTimer);
         state.recoveryTimer = window.setTimeout(() => {
+          state.recoveryTimer = undefined;
           if (peers.current.get(peerId) !== state || pc.connectionState !== 'disconnected') return;
           void negotiateRef.current(peerId, true);
-          state.recoveryTimer = window.setTimeout(() => {
-            if (peers.current.get(peerId) === state && pc.connectionState !== 'connected') recoverPeerRef.current(peerId, 'conexão interrompida', true);
-          }, 5_500);
-        }, 1_500);
+          if (state.escalationTimer) window.clearTimeout(state.escalationTimer);
+          state.escalationTimer = window.setTimeout(() => {
+            state.escalationTimer = undefined;
+            if (peers.current.get(peerId) === state && pc.connectionState !== 'connected') recoverPeerRef.current(peerId, 'conexão interrompida', true, 'hard');
+          }, 10_000);
+        }, 2_000);
         return;
       }
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         updatePeerHealth(peerId, 'failed');
-        recoverPeerRef.current(peerId, `estado ${pc.connectionState}`, true);
+        recoverPeerRef.current(peerId, `estado ${pc.connectionState}`, true, 'hard');
       }
     };
     return state;
@@ -555,7 +633,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       state.makingOffer = true;
       state.needsNegotiation = false;
       if (iceRestart) state.pc.restartIce();
-      await state.pc.setLocalDescription(await state.pc.createOffer(iceRestart ? { iceRestart: true } : undefined));
+      const offer = await state.pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+      await setTunedLocalDescription(state.pc, offer, localStreams.current.has('screen') ? screenBitrateHints(QUALITY[qualityRef.current]) : undefined);
       socket?.emit('rtc:offer', { target: peerId, sdp: state.pc.localDescription });
       if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
       state.negotiationRecoveryTimer = undefined;
@@ -578,14 +657,32 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }, [socket]);
   negotiateRef.current = negotiate;
 
-  const recoverPeer = useCallback((peerId: string, _reason = 'recuperação manual', notifyRemote = true) => {
+  const recoverPeer = useCallback((peerId: string, _reason = 'recuperação manual', notifyRemote = true, severity: RecoverySeverity | 'force' = 'force') => {
     if (!channelRef.current || peerId === selfId.current) return;
     const now = Date.now();
-    if (now - (recoveryCooldown.current.get(peerId) ?? 0) < 500) return;
-    recoveryCooldown.current.set(peerId, now);
     const previous = peers.current.get(peerId);
+    const lastAttemptAt = recoveryCooldown.current.get(peerId) ?? 0;
+    const attempts = recoveryAttemptCount.current.get(peerId) ?? 0;
+    if (severity === 'force') {
+      if (now - lastAttemptAt < 500) return;
+      recoveryAttemptCount.current.set(peerId, Math.min(6, attempts + 1));
+    } else {
+      const plan = planPeerRecovery({ now, lastAttemptAt, attempts, connectionState: previous?.pc.connectionState ?? 'closed', severity });
+      if (plan.action === 'wait') return;
+      recoveryAttemptCount.current.set(peerId, plan.attempts);
+      recoveryCooldown.current.set(peerId, now);
+      // Reiniciar o ICE mantém transceivers, decodificador e faixas de pé: o
+      // espectador vê no máximo um engasgo, não a tela preta de uma
+      // renegociação inteira. Só escalamos quando isso não resolve.
+      if (plan.action === 'ice-restart' && previous) {
+        updatePeerHealth(peerId, 'recovering');
+        void negotiateRef.current(peerId, true);
+        return;
+      }
+    }
+    recoveryCooldown.current.set(peerId, now);
     const remoteUser = previous?.user ?? membersRef.current.find((member) => member.socketId === peerId);
-    const attempt = Math.min(6, (previous?.recoveryAttempts ?? 0) + 1);
+    const attempt = recoveryAttemptCount.current.get(peerId) ?? 1;
     peers.current.delete(peerId);
     if (previous) closePeerState(previous);
     prunePeerStreamMetadata(streamMeta.current, peerId, 'recovery');
@@ -705,7 +802,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     localStreams.current.set(kind, stream);
     for (const [peerId, state] of peers.current) {
       if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) break;
-      for (const track of stream.getTracks()) state.pc.addTrack(track, stream);
+      for (const track of stream.getTracks()) {
+        const sender = state.pc.addTrack(track, stream);
+        if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
+      }
       sendStreamMeta(peerId, stream, kind);
       if (kind === 'screen') {
         const videoTrack = stream.getVideoTracks()[0];
@@ -713,6 +813,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const config = QUALITY[screenQuality];
         if (sender) {
           const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
+          state.screenSenderSince = Date.now();
           state.screenTuningPending = true;
           const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
           state.screenTuningPending = !applied;
@@ -768,10 +869,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }, [negotiate, onError, preferences.cameraId, publishState, quality, sendStreamMeta, stopStream]);
 
   const ensureMicrophone = useCallback(async () => {
-    const captureGeneration = ++microphoneCaptureGeneration.current;
     const current = localStreams.current.get('microphone');
     const currentProcessing = microphoneProcessing.current;
-    if (current && currentProcessing?.deviceId === preferences.microphoneId && currentProcessing.noiseSuppression === preferences.noiseSuppression) return current;
+    const wantsNeural = preferences.noiseSuppression && !neuralFallback.current;
+    // Incrementar a geração antes desta verificação abortava uma captura em
+    // andamento mesmo quando nada mudou — e o `join` desistia da call.
+    if (current
+      && currentProcessing?.deviceId === preferences.microphoneId
+      && currentProcessing.noiseSuppression === preferences.noiseSuppression
+      && currentProcessing.neural === wantsNeural) return current;
+    const captureGeneration = ++microphoneCaptureGeneration.current;
 
     const captureRawMicrophone = (browserNoiseSuppression: boolean) => navigator.mediaDevices.getUserMedia({
       audio: {
@@ -786,19 +893,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       video: false,
     });
 
-    let rawStream = await captureRawMicrophone(false);
+    let rawStream = await captureRawMicrophone(!wantsNeural && preferences.noiseSuppression);
     let nextProcessing: MicrophoneProcessing;
-    if (preferences.noiseSuppression) {
+    if (wantsNeural) {
       try {
         nextProcessing = await createNeuralMicrophone(rawStream, preferences.microphoneId);
       } catch {
         rawStream.getTracks().forEach((track) => track.stop());
         rawStream = await captureRawMicrophone(true);
+        neuralFallback.current = true;
         nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, neural: false, noiseSuppression: true };
         onError('O filtro neural não iniciou; ativei a supressão compatível do microfone como reserva.');
       }
     } else {
-      nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, neural: false, noiseSuppression: false };
+      nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, neural: false, noiseSuppression: preferences.noiseSuppression };
     }
 
     const stream = nextProcessing.outputStream;
@@ -892,10 +1000,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     try {
       await ensureMicrophone();
     } catch (error) {
-      if (operation !== joinGeneration.current || isAbortError(error)) return;
-      mutedRef.current = true;
-      setMuted(true);
-      onError('Microfone indisponível. Você entrou mutado; confira as permissões nas configurações.');
+      if (operation !== joinGeneration.current) return;
+      // AbortError significa apenas que outra captura assumiu no meio do
+      // caminho. Cancelar a entrada aqui era o motivo de "clico em entrar e
+      // não acontece nada"; seguimos com a faixa que ficou de pé.
+      if (!isAbortError(error)) {
+        mutedRef.current = true;
+        setMuted(true);
+        onError('Microfone indisponível. Você entrou mutado; confira as permissões nas configurações.');
+      } else if (!localStreams.current.has('microphone')) {
+        mutedRef.current = true;
+        setMuted(true);
+      }
     }
     if (operation !== joinGeneration.current) return;
     if (channelRef.current) {
@@ -963,6 +1079,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     shareCapture.current = false;
     streamMeta.current.clear();
     recoveryCooldown.current.clear();
+    recoveryAttemptCount.current.clear();
     missingScreenSince.current.clear();
     missingVoiceSince.current.clear();
     screenAudioRecovery.current.enabled = false;
@@ -995,6 +1112,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (peer) closePeerState(peer);
       prunePeerStreamMetadata(streamMeta.current, peerId, 'departure');
       recoveryCooldown.current.delete(peerId);
+      recoveryAttemptCount.current.delete(peerId);
       missingScreenSince.current.delete(peerId);
       missingVoiceSince.current.delete(peerId);
       updatePeerHealth(peerId);
@@ -1027,7 +1145,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         await state.pc.setRemoteDescription(sdp);
         state.ignoreOffer = false;
         await flushPendingCandidates(state);
-        await state.pc.setLocalDescription(await state.pc.createAnswer());
+        const answer = await state.pc.createAnswer();
+        await setTunedLocalDescription(state.pc, answer, localStreams.current.has('screen') ? screenBitrateHints(QUALITY[qualityRef.current]) : undefined);
         socket.emit('rtc:answer', { target: from, sdp: state.pc.localDescription });
         if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
       } catch {
@@ -1151,6 +1270,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const path = activePathMetrics(stats);
           if (path.rttMs !== undefined) samples.push(path.rttMs);
 
+          const sampledAt = Date.now();
+          // Enquanto o enlace acabou de ser reconstruído, os contadores RTP
+          // ainda estão zerados: interpretar isso como "sem tráfego" era o que
+          // realimentava o ciclo de reconstruções e tela preta.
+          const trustworthy = stallSignalIsTrustworthy({
+            connectionState: state.pc.connectionState,
+            msSinceLastRecovery: sampledAt - (recoveryCooldown.current.get(peerId) ?? 0),
+          });
+          if (state.connectedSince && sampledAt - state.connectedSince >= 30_000) recoveryAttemptCount.current.set(peerId, 0);
+
           const remoteMember = membersRef.current.find((member) => member.socketId === peerId);
           for (const receiver of state.pc.getReceivers().filter((candidate) => candidate.track?.kind === 'audio')) {
             const receiverStream = [...state.remoteStreams.values()].find((stream) => stream.getTracks().some((track) => track.id === receiver.track.id));
@@ -1168,9 +1297,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             const previous = state.inboundVoice.get(receiver.track.id) ?? { stalled: 0 };
             const stalled = previous.packets !== undefined && inbound.packetsReceived <= previous.packets ? previous.stalled + 1 : 0;
             state.inboundVoice.set(receiver.track.id, { packets: inbound.packetsReceived, stalled });
-            const now = Date.now();
-            if (stalled >= 4 && now - state.lastVoiceRecoveryAt >= 15_000) {
-              state.lastVoiceRecoveryAt = now;
+            if (stalled >= 5 && trustworthy && sampledAt - state.lastVoiceRecoveryAt >= 20_000) {
+              state.lastVoiceRecoveryAt = sampledAt;
               stalledVoicePeers.add(peerId);
             }
           }
@@ -1188,7 +1316,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             receiverReport?.forEach((stat) => receiverStats.push(stat as unknown as RtcStatLike));
             const inbound = inboundVideoMetrics(receiverStats);
             if (inbound.bytesReceived === undefined && inbound.packetsReceived === undefined) continue;
-            const previous = state.inboundScreen.get(receiver.track.id) ?? { stalled: 0 };
+            const previous = state.inboundScreen.get(receiver.track.id) ?? { stalled: 0, since: sampledAt };
+            const settled = sampledAt - previous.since >= 8_000;
             const trafficAdvanced = (inbound.bytesReceived !== undefined && previous.bytes !== undefined && inbound.bytesReceived > previous.bytes)
               || (inbound.packetsReceived !== undefined && previous.packets !== undefined && inbound.packetsReceived > previous.packets);
             const framesArrived = inbound.framesReceived !== undefined && previous.framesReceived !== undefined && inbound.framesReceived > previous.framesReceived;
@@ -1213,11 +1342,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
               freezeCount: inbound.freezeCount,
               freezeDuration: inbound.totalFreezesDuration,
               stalled,
+              since: previous.since,
             });
-            if ((freezeAdvanced || stalled >= 2) && previous.stalled < 2) socket.emit('rtc:stream-health', { target: peerId, frozen: true });
-            const now = Date.now();
-            if (stalled >= 4 && now - state.lastScreenDecodeRecoveryAt >= 15_000) {
-              state.lastScreenDecodeRecoveryAt = now;
+            // Os primeiros segundos de uma live sempre têm congelamento: o
+            // decodificador espera o keyframe. Avisar o transmissor nessa
+            // janela fazia o encoder reduzir a resolução logo na abertura.
+            if (settled && (freezeAdvanced || stalled >= 2) && previous.stalled < 2) socket.emit('rtc:stream-health', { target: peerId, frozen: true });
+            if (stalled >= 5 && settled && trustworthy && sampledAt - state.lastScreenDecodeRecoveryAt >= 20_000) {
+              state.lastScreenDecodeRecoveryAt = sampledAt;
               stalledRemoteScreens.add(peerId);
             }
           }
@@ -1238,6 +1370,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             rttMs: path.rttMs,
             availableOutgoingBitrate: path.availableOutgoingBitrate,
             fractionLost: outbound.fractionLost,
+            warmingUp: sampledAt - state.screenSenderSince < 10_000,
           });
           const encodedFrames = outbound.framesEncoded;
           const totalEncodeTime = outbound.totalEncodeTime;
@@ -1279,18 +1412,17 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
               : 0;
             state.lastScreenBytes = outbound.bytesSent;
             state.lastScreenPackets = outbound.packetsSent;
-            const now = Date.now();
-            if (state.stalledScreenSamples >= 5 && now - state.lastScreenRecoveryAt >= 20_000) {
-              state.lastScreenRecoveryAt = now;
+            if (state.stalledScreenSamples >= 6 && trustworthy && sampledAt - state.lastScreenRecoveryAt >= 25_000) {
+              state.lastScreenRecoveryAt = sampledAt;
               state.stalledScreenSamples = 0;
               stalledPeers.push(peerId);
             }
           }
         }
         socket.emit('voice:latency', median(samples) ?? 9999);
-        for (const peerId of stalledPeers) recoverPeerRef.current(peerId, 'live local sem tráfego', true);
-        for (const peerId of stalledVoicePeers) recoverPeerRef.current(peerId, 'áudio remoto sem tráfego RTP', true);
-        for (const peerId of stalledRemoteScreens) recoverPeerRef.current(peerId, 'decodificador da live congelado', true);
+        for (const peerId of stalledPeers) recoverPeerRef.current(peerId, 'live local sem tráfego', true, 'soft');
+        for (const peerId of stalledVoicePeers) recoverPeerRef.current(peerId, 'áudio remoto sem tráfego RTP', true, 'soft');
+        for (const peerId of stalledRemoteScreens) recoverPeerRef.current(peerId, 'decodificador da live congelado', true, 'soft');
       } finally {
         running = false;
       }
@@ -1306,6 +1438,32 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (!isAbortError(error)) onError('Não foi possível atualizar o processamento do microfone.');
     });
   }, [ensureMicrophone, onError]);
+
+  // O worklet WASM do filtro neural pode travar sob xrun do PipeWire. A faixa
+  // segue "live" e habilitada, então ninguém percebe do lado de cá: só quem
+  // ouve nota que o microfone sumiu. Aqui comparamos a energia antes e depois
+  // do filtro e voltamos para o caminho simples se o áudio parar de sair.
+  useEffect(() => {
+    if (!channelId) return;
+    let silentSamples = 0;
+    const timer = window.setInterval(() => {
+      const processing = microphoneProcessing.current;
+      const track = processing?.outputStream.getAudioTracks()[0];
+      if (!processing?.neural || !track || track.readyState !== 'live' || !track.enabled || mutedRef.current) {
+        silentSamples = 0;
+        return;
+      }
+      const raw = analyserLevel(processing.inputMeter);
+      const processed = analyserLevel(processing.outputMeter);
+      silentSamples = raw > 0.02 && processed < 0.0015 ? silentSamples + 1 : 0;
+      if (silentSamples < 5) return;
+      silentSamples = 0;
+      neuralFallback.current = true;
+      onError('O filtro neural parou de processar; seu microfone voltou pelo caminho simples.');
+      void ensureMicrophoneRef.current().catch(() => undefined);
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [channelId, onError]);
 
   useEffect(() => {
     if (!channelId) return;
@@ -1325,9 +1483,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const missingSince = missingScreenSince.current.get(peerId) ?? now;
         missingScreenSince.current.set(peerId, missingSince);
         const lastRecovery = recoveryCooldown.current.get(peerId) ?? 0;
-        if (now - missingSince >= 5_000 && now - lastRecovery >= 8_000) {
+        const peerState = peers.current.get(peerId);
+        if (peerState?.pc.connectionState === 'connected' && now - missingSince >= 10_000 && now - lastRecovery >= RECOVERY_GRACE_MS) {
           missingScreenSince.current.set(peerId, now);
-          recoverPeer(peerId, screenMedia ? 'live anunciada sem trilha de áudio' : 'live anunciada sem trilha de vídeo', true);
+          // Uma faixa que nunca chegou não volta com ICE restart: aqui a
+          // reconstrução do enlace é mesmo o único caminho.
+          recoverPeer(peerId, screenMedia ? 'live anunciada sem trilha de áudio' : 'live anunciada sem trilha de vídeo', true, 'hard');
         }
       }
 
@@ -1344,9 +1505,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const missingSince = missingVoiceSince.current.get(peerId) ?? now;
         missingVoiceSince.current.set(peerId, missingSince);
         const lastRecovery = recoveryCooldown.current.get(peerId) ?? 0;
-        if (now - missingSince >= 5_000 && now - lastRecovery >= 8_000) {
+        const peerState = peers.current.get(peerId);
+        if (peerState?.pc.connectionState === 'connected' && now - missingSince >= 10_000 && now - lastRecovery >= RECOVERY_GRACE_MS) {
           missingVoiceSince.current.set(peerId, now);
-          recoverPeer(peerId, 'participante sem trilha de voz', true);
+          recoverPeer(peerId, 'participante sem trilha de voz', true, 'hard');
         }
       }
     };
@@ -1611,6 +1773,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
       if (!sender) continue;
+      state.screenSenderSince = Date.now();
       state.screenTuningPending = true;
       const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
       if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;

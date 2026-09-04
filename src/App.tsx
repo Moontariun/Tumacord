@@ -1,19 +1,40 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Component, FormEvent, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { profileIsNewer } from '../shared/profileVersion';
 import { Icon } from './components/Icon';
-import { useDevices } from './hooks/useDevices';
+import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
+import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext } from './lib/audioBus';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
 import logoUrl from '../assets/tumacord-logo.png';
 import packageMetadata from '../package.json';
 
 const APP_VERSION = packageMetadata.version;
+
+// Um erro dentro de um efeito derrubava a árvore inteira: a janela ficava
+// preta e, ao desmontar, o hook de voz saía da call sozinho. Agora o erro para
+// aqui, a sessão continua de pé e dá para tentar de novo sem relogar.
+class Boundary extends Component<{ title: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: unknown) { console.error('[tumacord]', error); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return <div className="surface-crash">
+      <strong>{this.props.title}</strong>
+      <p>Algo falhou nesta parte da interface. Sua sessão e a call continuam ativas.</p>
+      <div>
+        <button onClick={() => this.setState({ failed: false })}>Tentar de novo</button>
+        <button className="ghost" onClick={() => window.location.reload()}>Recarregar o app</button>
+      </div>
+    </div>;
+  }
+}
 
 function App() {
   const [session, setSession] = useState<SavedSession | null>(() => loadSession());
@@ -27,7 +48,7 @@ function App() {
     };
   }, []);
   if (!session) return <Login onLogin={setSession} />;
-  return <Tumacord session={session} onSessionChange={setSession} onLogout={() => { clearSession(); setSession(null); }} />;
+  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={() => { clearSession(); setSession(null); }} /></Boundary>;
 }
 
 function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
@@ -474,7 +495,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       </div>
       {voice.channelId && <div className="voice-status">
         <div><strong>Voz conectada</strong><span>{currentVoiceChannel?.name}</span></div>
-        <button onClick={voice.leave} title="Desconectar"><Icon name="phoneOff" /></button>
+        <button onClick={voice.leave} title="Desconectar"><Icon name="leave" /></button>
       </div>}
       <div className="user-panel">
         <button className="profile-summary" onClick={() => setProfileUser(session.user)} title="Abrir e editar seu perfil"><Avatar name={session.user.username} profile={session.user.profile} serverUrl={session.serverUrl} online /><span className="user-copy"><strong>{session.user.username}</strong><small>{connected ? 'Online' : 'Reconectando…'}</small></span></button>
@@ -497,14 +518,14 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       </header>
       <div className="content-row">
         {selectedChannel?.type === 'voice'
-          ? <CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} />
+          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
         {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
 
-    {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly />)}
-    {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={Math.min(2, streamVolume * activeScreenUserVolume)} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} />}
+    {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
+    {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={Math.min(2, streamVolume * activeScreenUserVolume)} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
@@ -635,14 +656,14 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
     <div className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''}`}>
       {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={voice.deafened || (screen && streamMuted)} volume={Math.min(2, (screen ? streamVolume : 1) * volumeFor(media.user?.id))} speakerId={speakerId} screen={screen} theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={voice.deafened || (screen && streamMuted)} volume={Math.min(2, (screen ? streamVolume : 1) * volumeFor(media.user?.id))} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
       {!theaterMediaKey && missingStreams.map((member) => <div className="stream-recovery-card" key={`missing-${member.id}`}><span className="live-dot" /><strong>{member.username} está AO VIVO</strong><p>A transmissão está se reconectando automaticamente.</p><small>{voice.peerHealth[member.socketId] === 'recovering' ? 'Recuperando conexão…' : 'Aguardando a faixa de vídeo…'}</small><button onClick={() => voice.recoverPeer(member.socketId, 'tentativa manual da interface', true)}>Tentar agora</button></div>)}
       {!theaterMediaKey && hiddenStreams.map((member) => <div className="stream-recovery-card stream-hidden-card" key={`hidden-${member.id}`}><Icon name="screen" /><strong>Live de {member.username} ocultada</strong><p>Você saiu desta transmissão, mas continua na call.</p><button onClick={() => setHiddenScreenUsers((current) => { const next = new Set(current); next.delete(member.id); return next; })}>Assistir novamente</button></div>)}
       {!visibleVideoMedia.length && !missingStreams.length && !hiddenStreams.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
         {tiles.length ? tiles.map((member) => <ParticipantTile key={member.socketId} member={member} serverUrl={serverUrl} onProfile={onProfile} />) : <div className="empty-call"><img src={logoUrl} alt="" /><h2>A call está quietinha</h2><p>Entre e seja o host. Quem chegar depois conecta direto com você.</p></div>}
       </div>}
     </div>
-    {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly />)}
+    {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly remote />)}
     <div className="call-footer">
       <div className="call-status-tools">
         {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /><span>Reconectar</span></button></div>}
@@ -654,18 +675,20 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
           <ControlButton icon="headphones" label={voice.deafened ? 'Ouvir' : 'Ensurdecer'} active={voice.deafened} danger onClick={voice.toggleDeafen} />
           <ControlButton icon="camera" label={voice.cameraOn ? 'Parar vídeo' : 'Câmera'} active={voice.cameraOn} onClick={() => void voice.toggleCamera()} />
           <ControlButton icon="screen" label={voice.screenOn ? 'Parar stream' : 'Transmitir tela'} active={voice.screenOn} accent onClick={() => void voice.requestScreenShare()} />
-          <ControlButton icon="phoneOff" label="Sair" danger active onClick={voice.leave} />
+          <ControlButton icon="leave" label="Sair" danger active onClick={voice.leave} />
         </>}
       </div>
       <div className="call-viewer-tools">
-        {visibleVideoMedia.some((media) => media.kind === 'screen') && <label className="stream-audio-controls"><button type="button" onClick={() => setStreamMuted(!streamMuted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>Live</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></label>}
+        {visibleVideoMedia.some((media) => media.kind === 'screen') && <div className={`stream-audio-controls ${streamMuted ? 'is-muted' : ''}`}><button type="button" aria-pressed={streamMuted} onClick={() => setStreamMuted(!streamMuted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>{streamMuted ? 'Live muda' : 'Live'}</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></div>}
       </div>
     </div>
   </main>;
 }
 
-function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolume, onMute, onOpen, onClose }: { media: RemoteMedia; speakerId: string; muted: boolean; volume: number; rawVolume: number; onVolume: (volume: number) => void; onMute: () => void; onOpen: () => void; onClose: () => void }) {
+function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolume, onMute, onOpen, onClose, onNotice }: { media: RemoteMedia; speakerId: string; muted: boolean; volume: number; rawVolume: number; onVolume: (volume: number) => void; onMute: () => void; onOpen: () => void; onClose: () => void; onNotice: (message: string) => void }) {
   const frame = useRef<HTMLElement>(null);
+  const mediaRef = useRef<HTMLVideoElement | null>(null);
+  const detachedLive = useDetachedLive(mediaRef);
   const drag = useRef<{ offsetX: number; offsetY: number } | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
@@ -690,14 +713,52 @@ function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolu
       <span><i className="live-dot" /><strong>{media.user?.username ?? 'Live da call'}</strong><small>AO VIVO · arraste para mover</small></span>
       <button onClick={onClose} title="Fechar miniatura"><Icon name="close" /></button>
     </header>
-    <button className="floating-live-video" onDoubleClick={onOpen} title="Clique duas vezes para voltar à call"><MediaElement stream={media.stream} muted={muted} volume={volume} speakerId={speakerId} /></button>
+    <button className="floating-live-video" onDoubleClick={onOpen} title="Clique duas vezes para voltar à call"><MediaElement stream={media.stream} muted={muted} volume={volume} speakerId={speakerId} remote mediaRef={mediaRef} /></button>
     <footer>
-      <button onClick={onMute} title={muted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={muted ? 'volumeOff' : 'volume'} /></button>
+      <button className={muted ? 'is-muted' : ''} aria-pressed={muted} onClick={onMute} title={muted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={muted ? 'volumeOff' : 'volume'} /></button>
       <input type="range" min="0" max="2" step="0.01" value={muted ? 0 : rawVolume} onChange={(event) => onVolume(Number(event.target.value))} aria-label="Volume da mini-live" />
       <output>{muted ? 0 : Math.round(rawVolume * 100)}%</output>
+      {detachedLive.supported && <button className="floating-live-detach" onClick={() => void detachedLive.toggle().then((ok) => { if (!ok) onNotice('Não consegui soltar a live em uma janela separada neste sistema.'); })} title={detachedLive.detached ? 'Trazer a live de volta' : 'Soltar sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}
       <button className="floating-live-open" onClick={onOpen}><Icon name="voice" /> Voltar à call</button>
     </footer>
   </aside>;
+}
+
+// A live solta usa a janela nativa de picture-in-picture do Chromium: ela fica
+// sobre os outros aplicativos e continua visível com o Tumacord minimizado. O
+// áudio segue pelo grafo da janela principal, então volume e mute continuam
+// valendo para ela.
+function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>) {
+  const [detached, setDetached] = useState(false);
+  const supported = typeof document !== 'undefined' && document.pictureInPictureEnabled;
+  useEffect(() => {
+    const video = mediaRef.current;
+    if (!video) return;
+    const enter = () => setDetached(true);
+    const leave = () => setDetached(false);
+    video.addEventListener('enterpictureinpicture', enter);
+    video.addEventListener('leavepictureinpicture', leave);
+    setDetached(document.pictureInPictureElement === video);
+    return () => {
+      video.removeEventListener('enterpictureinpicture', enter);
+      video.removeEventListener('leavepictureinpicture', leave);
+    };
+  }, [mediaRef]);
+  useEffect(() => () => {
+    if (document.pictureInPictureElement && document.pictureInPictureElement === mediaRef.current) void document.exitPictureInPicture().catch(() => undefined);
+  }, [mediaRef]);
+  const toggle = async () => {
+    const video = mediaRef.current;
+    if (!video || !supported) return false;
+    try {
+      if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+      else await video.requestPictureInPicture();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return { detached, supported, toggle };
 }
 
 function ControlButton({ icon, label, active, danger, accent, onClick }: { icon: Parameters<typeof Icon>[0]['name']; label: string; active?: boolean; danger?: boolean; accent?: boolean; onClick: () => void }) {
@@ -708,8 +769,11 @@ function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState;
   return <button className={`participant-tile ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => onProfile(member)}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong>{member.screen && <span className="streaming-label"><span className="live-dot" /> AO VIVO</span>}<span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, theater = false, onTheater, onClose }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void }) {
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onNotice }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onNotice?: (message: string) => void }) {
   const tileRef = useRef<HTMLDivElement>(null);
+  const mediaRef = useRef<HTMLVideoElement | null>(null);
+  const detachedLive = useDetachedLive(mediaRef);
+  const canDetach = Boolean(screen && remote && detachedLive.supported);
   const [fullscreen, setFullscreen] = useState(false);
   const fullscreenRef = useRef(false);
   fullscreenRef.current = fullscreen;
@@ -741,17 +805,26 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     if (fullscreenRef.current) await toggleFullscreen();
     onClose?.();
   };
-  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} /><span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  const toggleDetached = async () => {
+    if (fullscreenRef.current) await toggleFullscreen();
+    if (!await detachedLive.toggle()) onNotice?.('Não consegui soltar a live em uma janela separada neste sistema.');
+  };
+  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>A live está em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer a live de volta para o app' : 'Soltar a live em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
-function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean }) {
+function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {
   const ref = useRef<HTMLMediaElement>(null);
   const [trackRevision, setTrackRevision] = useState(0);
-  const gainContext = useRef<AudioContext | null>(null);
-  const gainNode = useRef<GainNode | null>(null);
-  const playback = useRef({ muted, volume, speakerId });
+  const playback = useRef({ muted, volume, remote });
   const syncPlayback = useRef<() => void>(() => undefined);
-  playback.current = { muted, volume, speakerId };
+  playback.current = { muted, volume, remote };
+  // Efeitos de filho rodam antes dos do pai, então quem renderiza o vídeo já
+  // encontra o elemento pronto para soltar em janela flutuante.
+  useEffect(() => {
+    if (!mediaRef) return;
+    mediaRef.current = ref.current as HTMLVideoElement | null;
+    return () => { mediaRef.current = null; };
+  }, [mediaRef]);
   useEffect(() => {
     const refreshTracks = () => setTrackRevision((revision) => revision + 1);
     stream.addEventListener('addtrack', refreshTracks);
@@ -761,6 +834,11 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
       stream.removeEventListener('removetrack', refreshTracks);
     };
   }, [stream]);
+  // A saída é uma preferência única do aplicativo, então roteamos o barramento
+  // inteiro em vez de cada elemento.
+  useEffect(() => {
+    if (speakerId) setSharedAudioSink(speakerId);
+  }, [speakerId]);
   useEffect(() => {
     const media = ref.current;
     if (!media) return;
@@ -771,21 +849,27 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
       void media.play().catch(() => undefined);
       return () => { media.srcObject = null; };
     }
-    const AudioContextClass = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    const applyDirectFallback = () => {
+    // Silenciar a faixa recebida é o único ponto que nenhum caminho de
+    // reprodução consegue contornar: vale para o grafo, para o elemento HTML e
+    // para a miniatura. Faixas locais nunca entram aqui — desligá-las tiraria
+    // o áudio de quem assiste.
+    const applyTrackGate = (silent: boolean) => {
+      if (!playback.current.remote) return;
+      for (const track of audioTracks) track.enabled = !silent;
+    };
+    const context = sharedAudioContext();
+    const applyDirect = () => {
       const current = playback.current;
       media.muted = current.muted;
       media.volume = Math.max(0, Math.min(1, current.volume));
-      const sinkMedia = media as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
-      if (current.speakerId && sinkMedia.setSinkId) void sinkMedia.setSinkId(current.speakerId).catch(() => undefined);
+      applyTrackGate(current.muted);
       void media.play().catch(() => undefined);
     };
-    if (!AudioContextClass) {
-      syncPlayback.current = applyDirectFallback;
-      applyDirectFallback();
-      return () => { syncPlayback.current = () => undefined; media.srcObject = null; };
+    if (!context) {
+      syncPlayback.current = applyDirect;
+      applyDirect();
+      return () => { syncPlayback.current = () => undefined; applyTrackGate(false); media.srcObject = null; };
     }
-    const context = new AudioContextClass({ latencyHint: 'interactive' });
     const source = context.createMediaStreamSource(stream);
     const gain = context.createGain();
     const limiter = context.createDynamicsCompressor();
@@ -794,30 +878,28 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
     limiter.ratio.value = 20;
     limiter.attack.value = 0.003;
     limiter.release.value = 0.1;
+    gain.gain.value = 0;
     source.connect(gain).connect(limiter).connect(context.destination);
-    gainContext.current = context;
-    gainNode.current = gain;
     const apply = () => {
       const current = playback.current;
+      const running = context.state === 'running';
+      // O elemento HTML só existe para o Chromium continuar puxando a faixa
+      // remota; enquanto o grafo toca, ele fica sempre mudo.
+      media.muted = current.muted || running;
+      media.volume = running ? 1 : Math.max(0, Math.min(1, current.volume));
+      applyTrackGate(current.muted);
+      void media.play().catch(() => undefined);
+      const target = current.muted ? 0 : volumeToGain(current.volume);
       const now = context.currentTime;
       gain.gain.cancelScheduledValues(now);
-      gain.gain.setTargetAtTime(current.muted ? 0 : volumeToGain(current.volume), now, 0.012);
-      if (context.state === 'running') {
-        // WebAudio entrega o ganho real acima de 100%. O elemento HTML fica
-        // mudo para não duplicar o som.
-        media.muted = true;
-        media.volume = 1;
-      } else {
-        // Se PipeWire/Chromium suspender o AudioContext, o áudio continua pelo
-        // elemento nativo (limitado a 100%) até o grafo retomar.
-        applyDirectFallback();
-      }
-      const sinkContext = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
-      if (current.speakerId && sinkContext.setSinkId) void sinkContext.setSinkId(current.speakerId).catch(() => undefined);
+      gain.gain.setTargetAtTime(target, now, 0.015);
+      // setTargetAtTime só tende a zero. O valor exato logo depois da rampa
+      // garante silêncio de verdade ao mutar a live.
+      if (!target) gain.gain.setValueAtTime(0, now + 0.2);
     };
     syncPlayback.current = apply;
     const resume = () => {
-      if (context.state === 'suspended') void context.resume().then(apply).catch(applyDirectFallback);
+      if (context.state === 'suspended') void resumeSharedAudio().then(apply);
       else apply();
     };
     context.addEventListener('statechange', apply);
@@ -825,8 +907,7 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
     window.addEventListener('keydown', resume);
     document.addEventListener('visibilitychange', resume);
     for (const track of audioTracks) track.addEventListener('unmute', resume);
-    const watchdog = window.setInterval(resume, 2_000);
-    apply();
+    const watchdog = window.setInterval(resume, 4_000);
     resume();
     return () => {
       window.clearInterval(watchdog);
@@ -837,9 +918,8 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly }: { str
       for (const track of audioTracks) track.removeEventListener('unmute', resume);
       source.disconnect(); gain.disconnect(); limiter.disconnect();
       syncPlayback.current = () => undefined;
-      gainNode.current = null; gainContext.current = null;
+      applyTrackGate(false);
       media.srcObject = null;
-      void context.close().catch(() => undefined);
     };
   }, [stream, trackRevision]);
   useEffect(() => {
@@ -1023,8 +1103,8 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
     <aside><h2>Configurações</h2><button className="selected">Voz e vídeo</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
     <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
-      <DeviceSelect label="Dispositivo de entrada" value={devices.preferences.microphoneId} devices={devices.microphones} onChange={(value) => update('microphoneId', value)} />
-      <DeviceSelect label="Dispositivo de saída" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
+      <DeviceSelect label="Microfone" hint="As entradas duplicadas do Chromium ficam de fora da lista." value={devices.preferences.microphoneId} devices={devices.microphones} onChange={(value) => update('microphoneId', value)} />
+      <DeviceSelect label="Saída de áudio" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
       <DeviceSelect label="Câmera" value={devices.preferences.cameraId} devices={devices.cameras} onChange={(value) => update('cameraId', value)} />
       <label className="sound-toggle"><input type="checkbox" checked={devices.preferences.noiseSuppression} onChange={(event) => update('noiseSuppression', event.target.checked)} /><span><strong>Supressão neural de ruído</strong><small>GTCRN em WebAssembly para reduzir teclado, ventilador e ruído ambiente sem enviar seu áudio para nenhum serviço.</small></span></label>
       <label className="setting-label">Qualidade da transmissão<select value={quality} onChange={(event) => { void setQuality(event.target.value as StreamQuality); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>
@@ -1035,8 +1115,8 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
   </div></div>;
 }
 
-function DeviceSelect({ label, value, devices, onChange }: { label: string; value: string; devices: MediaDeviceInfo[]; onChange: (value: string) => void }) {
-  return <label className="setting-label">{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Padrão do sistema</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${label} ${index + 1}`}</option>)}</select></label>;
+function DeviceSelect({ label, hint, value, devices, onChange }: { label: string; hint?: string; value: string; devices: MediaDeviceInfo[]; onChange: (value: string) => void }) {
+  return <label className="setting-label"><span className="setting-title">{label}{hint && <small>{hint}</small>}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Padrão do sistema</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{cleanDeviceLabel(device.label) || `${label} ${index + 1}`}</option>)}</select></label>;
 }
 
 function ShareSetupModal({ initialQuality, busy, onContinue, onClose }: { initialQuality: StreamQuality; busy: boolean; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {

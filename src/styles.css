@@ -410,7 +410,7 @@ body { background: var(--bg); }
 .voice-member-copy .live-dot { width: 5px; height: 5px; }
 .voice-member-icons { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; color: #f0b85d; }
 .voice-member-icons svg { width: 13px; height: 13px; }
-.voice-member-icons svg:last-child:not(:first-child), .voice-member-icons svg:only-child[data-lucide="mic-off"] { color: #ef6f78; }
+.voice-member-icons svg:last-child:not(:first-child), .voice-member-icons svg:only-child[data-icon="micOff"] { color: #ef6f78; }
 .voice-member-mini.speaking { background: rgba(82,215,137,.06); box-shadow: inset 2px 0 var(--green); }
 .voice-member-mini.speaking .voice-member-copy strong { color: #fff; }
 .voice-member-mini.is-streaming .voice-member-copy strong { color: #fff; }
@@ -952,4 +952,166 @@ body { background: var(--bg); }
   .admin-stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .admin-columns { grid-template-columns: 1fr; }
   .admin-security small { width: 100%; margin: 4px 0 0; }
+}
+
+/* =========================================================================
+   Acabamento visual 0.6 — mesma paleta de sempre, só com mais profundidade,
+   contraste de borda e estados legíveis. Sem cores neon e sem brilho colorido.
+   O layout responsivo (grids, larguras, ordem) continua definido acima e nas
+   container queries, que não são tocadas aqui.
+   ========================================================================= */
+
+:root {
+  --border-strong: rgba(255,255,255,.13);
+  --ink: #f3f3f8;
+  --ink-soft: #c2c3ce;
+  --violet-soft: rgba(125,92,255,.12);
+  --ring: 0 0 0 3px rgba(125,92,255,.16);
+  --elev-1: 0 1px 2px rgba(0,0,0,.28);
+  --elev-2: 0 10px 26px rgba(0,0,0,.28);
+  --elev-3: 0 28px 74px rgba(0,0,0,.44);
+  --edge: inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.13) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 99px; background: rgba(255,255,255,.12); background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* Painéis --------------------------------------------------------------- */
+.server-rail { border-right: 1px solid rgba(255,255,255,.03); }
+.channel-sidebar { box-shadow: var(--edge); }
+.server-header { border-bottom: 1px solid rgba(255,255,255,.045); box-shadow: none; letter-spacing: -.01em; }
+.channel-button { position: relative; border-radius: 9px; }
+.channel-button::before {
+  content: ''; position: absolute; left: -5px; top: 50%; width: 3px; height: 0;
+  border-radius: 0 3px 3px 0; background: var(--violet); opacity: 0;
+  transform: translateY(-50%); transition: height .16s ease, opacity .16s ease;
+}
+.channel-button.selected { background: linear-gradient(90deg, var(--violet-soft), rgba(255,255,255,.025)); color: var(--ink); }
+.channel-button.selected::before { height: 18px; opacity: 1; }
+.channel-button:hover { background: rgba(255,255,255,.05); }
+.user-panel { border-top: 1px solid rgba(255,255,255,.045); }
+.user-panel button:hover { background: rgba(255,255,255,.07); }
+
+/* Botão de desconectar da barra lateral ---------------------------------- */
+.voice-status { align-items: center; }
+.voice-status button {
+  width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto;
+  border: 1px solid rgba(255,77,79,.24); border-radius: 10px;
+  background: rgba(255,77,79,.09); color: #f08b8d;
+}
+.voice-status button svg { width: 16px; height: 16px; }
+.voice-status button:hover { border-color: rgba(255,77,79,.5); background: rgba(255,77,79,.18); color: #ffb2b3; transform: none; }
+.voice-status button:active:not(:disabled) { transform: scale(.94); }
+
+/* Topo e listas --------------------------------------------------------- */
+.topbar { border-bottom: 1px solid rgba(255,255,255,.05); box-shadow: var(--elev-1); backdrop-filter: blur(14px) saturate(1.05); }
+.topbar strong { letter-spacing: -.015em; }
+.connection-pill { background: rgba(255,255,255,.03); font-weight: 700; }
+.connection-pill.online { color: #9adcb6; border-color: rgba(82,215,137,.2); background: rgba(82,215,137,.06); }
+.member-list { border-left: 1px solid rgba(255,255,255,.045); }
+.member-row:hover { background: rgba(255,255,255,.045); }
+
+/* Conversa -------------------------------------------------------------- */
+.message { border-radius: 10px; }
+.message:hover { background: rgba(255,255,255,.025); }
+.message-head strong { letter-spacing: -.01em; }
+.message-box { border: 1px solid var(--border); box-shadow: var(--elev-1); transition: border-color .15s, box-shadow .15s; }
+.message-box:focus-within { border-color: rgba(125,92,255,.42); box-shadow: var(--ring); }
+.channel-welcome h1 { letter-spacing: -.03em; }
+.welcome-icon { background: linear-gradient(145deg, #353643, #292a35); box-shadow: var(--edge); }
+
+/* Palco da call --------------------------------------------------------- */
+.participant-tile { box-shadow: var(--elev-1), var(--edge); }
+.video-tile { box-shadow: var(--elev-2), inset 0 0 0 1px rgba(255,255,255,.045); }
+.video-tile.is-theater { box-shadow: 0 0 0 1px rgba(125,92,255,.42), var(--elev-3); }
+.video-tile > span { border: 1px solid rgba(255,255,255,.07); font-weight: 750; }
+.video-actions button { border: 1px solid rgba(255,255,255,.07); }
+.video-actions button:hover { border-color: transparent; }
+.video-tile.is-detached video { opacity: .12; }
+.detached-live-note {
+  position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: max-content; max-width: min(300px, calc(100% - 28px));
+  display: grid; justify-items: center; gap: 5px;
+  padding: 15px 18px; border: 1px solid var(--border); border-radius: 13px;
+  background: rgba(15,16,23,.88); text-align: center; backdrop-filter: blur(8px);
+}
+.detached-live-note svg { width: 22px; height: 22px; color: #a89bff; }
+.detached-live-note strong { font-size: 12px; }
+.detached-live-note small { color: var(--muted); font-size: 10px; }
+
+.call-footer { background: linear-gradient(180deg, rgba(17,18,25,0), rgba(14,15,21,.78) 55%); }
+.call-control svg { border: 1px solid rgba(255,255,255,.045); }
+.call-control.active svg { border-color: transparent; }
+.call-control.danger.active svg { background: linear-gradient(140deg, var(--tomato), var(--tomato-deep)); }
+.call-control.accent.active svg { background: linear-gradient(140deg, var(--violet), #6b4ff0); }
+
+.p2p-route, .quality-picker, .stream-audio-controls {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(34,36,46,.72);
+  backdrop-filter: blur(10px);
+}
+.quality-picker { padding-inline: 10px; color: var(--ink-soft); }
+.quality-picker select { border-color: var(--border); background: rgba(255,255,255,.04); color: var(--ink); font-weight: 700; }
+.quality-picker select:hover { border-color: var(--border-strong); }
+
+.stream-audio-controls { color: var(--ink-soft); transition: border-color .15s, background .15s; }
+.stream-audio-controls > button { border-radius: 8px; color: var(--ink-soft); }
+.stream-audio-controls > button:hover { background: rgba(255,255,255,.07); color: var(--ink); }
+.stream-audio-controls > button[aria-pressed="true"] { color: #ef9092; background: rgba(255,77,79,.12); }
+.stream-audio-controls.is-muted { border-color: rgba(255,77,79,.26); background: rgba(42,29,33,.74); }
+.stream-audio-controls.is-muted > span { color: #ef9092; }
+.stream-audio-controls input { accent-color: var(--violet); }
+.stream-audio-controls.is-muted input { accent-color: var(--tomato); }
+
+.stream-recovery-card { box-shadow: var(--elev-1); }
+
+/* Miniatura da live ----------------------------------------------------- */
+.floating-live { box-shadow: var(--elev-3), 0 0 0 1px rgba(255,255,255,.04); }
+.floating-live > header { border-bottom: 1px solid rgba(255,255,255,.045); }
+.floating-live footer button.is-muted { color: #ef9092; }
+.floating-live > footer { grid-template-columns: 30px minmax(60px,1fr) 34px 30px auto; }
+.floating-live-detach { width: 30px; padding: 0 !important; }
+
+@media (max-width: 620px) {
+  .floating-live > footer { grid-template-columns: 30px minmax(46px,1fr) 32px 30px 34px; }
+}
+
+/* Modais ---------------------------------------------------------------- */
+.settings-modal > aside { background: rgba(0,0,0,.16); border-right: 1px solid rgba(255,255,255,.045); }
+.setting-label { color: var(--ink-soft); }
+.setting-title { display: grid; gap: 3px; }
+.setting-title small { color: #74778a; font-size: 9px; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.settings-modal select { border-color: var(--border); background: rgba(255,255,255,.035); color: var(--ink); }
+.settings-modal select:hover { border-color: var(--border-strong); }
+.quality-cards button.selected { border-color: rgba(125,92,255,.5); background: var(--violet-soft); }
+
+/* Login ----------------------------------------------------------------- */
+.login-card { box-shadow: var(--elev-3), var(--edge); }
+.login-card input:focus { border-color: var(--violet); box-shadow: var(--ring); }
+
+/* Falha isolada de uma parte da interface -------------------------------- */
+.surface-crash {
+  min-width: 0; flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 9px; padding: 32px; text-align: center;
+  background: radial-gradient(circle at 50% 15%, #222537, #111219 66%);
+}
+.surface-crash strong { font-size: 17px; letter-spacing: -.02em; }
+.surface-crash p { max-width: 420px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.surface-crash div { display: flex; gap: 8px; margin-top: 6px; }
+.surface-crash button { padding: 10px 16px; border-radius: 10px; background: var(--violet); color: white; font-size: 11px; font-weight: 800; }
+.surface-crash button.ghost { background: rgba(255,255,255,.06); color: var(--ink-soft); }
+.surface-crash button:hover { filter: brightness(1.1); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }

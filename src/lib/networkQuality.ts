@@ -60,6 +60,7 @@ export interface StreamAdaptationInput {
   rttMs?: number;
   availableOutgoingBitrate?: number;
   fractionLost?: number;
+  warmingUp?: boolean;
 }
 
 export interface StreamAdaptationResult {
@@ -163,7 +164,10 @@ export function adaptScreenBitrate(input: StreamAdaptationInput): StreamAdaptati
   const target = Math.max(300_000, input.targetBitrate);
   const minimum = Math.min(target, Math.max(350_000, Math.min(1_500_000, target * 0.12)));
   const current = Math.min(target, Math.max(minimum, input.currentBitrate));
-  const available = input.availableOutgoingBitrate;
+  // Nos primeiros segundos o estimador do Chromium ainda sobe a partir de
+  // ~300 kbps: tratar esse valor como capacidade real fazia a live abrir
+  // borrada e levar mais de um minuto para voltar ao perfil escolhido.
+  const available = input.warmingUp ? undefined : input.availableOutgoingBitrate;
   const rtt = input.rttMs;
   const loss = input.fractionLost;
   const severelyCongested = (rtt !== undefined && rtt >= 320)
@@ -184,9 +188,12 @@ export function adaptScreenBitrate(input: StreamAdaptationInput): StreamAdaptati
     && (loss === undefined || loss < 0.01)
     && (available === undefined || available > current * 1.2);
   const healthySamples = healthy ? input.healthySamples + 1 : Math.max(0, input.healthySamples - 1);
-  if (current < target && healthySamples >= 3) {
+  if (current < target && healthySamples >= 2) {
+    // Quando a rota mostra folga larga não faz sentido subir de 14% em 14%:
+    // em LAN/ZeroTier isso levava minutos até a live ficar nítida.
+    const roomy = available !== undefined && available > current * 2 ? available * 0.75 : 0;
     return {
-      bitrate: roundedBitrate(Math.min(target, Math.max(current + 100_000, current * 1.14))),
+      bitrate: roundedBitrate(Math.min(target, Math.max(current + 1_000_000, current * 1.45, roomy))),
       healthySamples: 0,
       congested: false,
     };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeSpeakerId, reconcileDevicePreferences, visibleAudioOutputs } from '../src/hooks/useDevices.js';
+import { cleanDeviceLabel, normalizeSpeakerId, reconcileDevicePreferences, visibleAudioInputs, visibleAudioOutputs } from '../src/hooks/useDevices.js';
 
 test('saídas pseudo do Chromium usam o padrão real do sistema', () => {
   assert.equal(normalizeSpeakerId(''), '');
@@ -39,4 +39,36 @@ test('enumeração limitada antes da permissão não apaga dispositivos salvos a
     { kind: 'audioinput', deviceId: 'default', label: '' },
     { kind: 'videoinput', deviceId: '', label: '' },
   ]), preferences);
+});
+
+test('entradas virtuais do Chromium não duplicam o microfone na lista', () => {
+  const inputs = visibleAudioInputs([
+    { kind: 'audioinput', deviceId: 'default', label: 'Padrão - Microfone (HyperX)' },
+    { kind: 'audioinput', deviceId: 'communications', label: 'Comunicações - Microfone (HyperX)' },
+    { kind: 'audioinput', deviceId: 'mic-hyperx', label: 'Microfone (HyperX)' },
+    { kind: 'audioinput', deviceId: 'mic-webcam', label: 'Microfone (Webcam)' },
+    { kind: 'audiooutput', deviceId: 'saida-1', label: 'Saída' },
+  ] as Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>[]);
+  assert.deepEqual(inputs.map((device) => device.deviceId), ['mic-hyperx', 'mic-webcam']);
+});
+
+test('o mesmo hardware publicado por dois back-ends aparece uma única vez', () => {
+  const inputs = visibleAudioInputs([
+    { kind: 'audioinput', deviceId: 'alsa-mic', label: 'Microfone (HyperX)' },
+    { kind: 'audioinput', deviceId: 'pipewire-mic', label: 'Microfone (HyperX)' },
+  ] as Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>[]);
+  assert.equal(inputs.length, 1);
+});
+
+test('rótulo perde o prefixo virtual mas mantém o nome do aparelho', () => {
+  assert.equal(cleanDeviceLabel('Padrão - Microfone (HyperX)'), 'Microfone (HyperX)');
+  assert.equal(cleanDeviceLabel('Default - Built-in Audio'), 'Built-in Audio');
+  assert.equal(cleanDeviceLabel('Microfone (HyperX)'), 'Microfone (HyperX)');
+});
+
+test('microfone virtual salvo volta a ser o padrão do sistema', () => {
+  assert.deepEqual(reconcileDevicePreferences(
+    { microphoneId: 'default', cameraId: '', speakerId: '', noiseSuppression: true },
+    [{ kind: 'audioinput', deviceId: 'default', label: 'Padrão - Microfone' }] as Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>[],
+  ).microphoneId, '');
 });

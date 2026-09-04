@@ -78,7 +78,7 @@ test('congestionamento derruba bitrate rapidamente sem chegar a zero', () => {
   assert.equal(result.healthySamples, 0);
 });
 
-test('bitrate volta gradualmente depois de três amostras saudáveis', () => {
+test('rota com folga larga recupera o perfil escolhido sem arrastar por minutos', () => {
   const result = adaptScreenBitrate({
     targetBitrate: 5_000_000,
     currentBitrate: 2_000_000,
@@ -88,8 +88,45 @@ test('bitrate volta gradualmente depois de três amostras saudáveis', () => {
     fractionLost: 0,
   });
   assert.equal(result.congested, false);
-  assert.equal(result.bitrate, 2_300_000);
+  assert.equal(result.bitrate, 5_000_000);
   assert.equal(result.healthySamples, 0);
+});
+
+test('folga modesta ainda sobe em degraus, sem estourar a rota', () => {
+  const result = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 2_000_000,
+    healthySamples: 1,
+    rttMs: 40,
+    availableOutgoingBitrate: 3_000_000,
+    fractionLost: 0,
+  });
+  assert.equal(result.bitrate, 3_000_000);
+});
+
+test('estimativa inicial baixa não derruba a live durante a abertura', () => {
+  const warming = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 8_000_000,
+    healthySamples: 0,
+    rttMs: 22,
+    availableOutgoingBitrate: 300_000,
+    fractionLost: 0,
+    warmingUp: true,
+  });
+  assert.equal(warming.congested, false);
+  assert.equal(warming.bitrate, 8_000_000);
+
+  const settled = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 8_000_000,
+    healthySamples: 0,
+    rttMs: 22,
+    availableOutgoingBitrate: 300_000,
+    fractionLost: 0,
+  });
+  assert.equal(settled.congested, true);
+  assert.ok(settled.bitrate < 8_000_000);
 });
 
 test('pressão persistente do encoder reduz resolução para manter FPS', () => {

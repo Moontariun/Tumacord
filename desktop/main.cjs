@@ -107,11 +107,24 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
+      // Sem isso o Chromium estrangula timers e mídia quando a janela é
+      // minimizada — justamente quando a live fica em uma janela flutuante.
+      backgroundThrottling: false,
     },
   });
   mainWindow = window;
+  // Quando o renderizador morre, a janela fica simplesmente preta e o app
+  // parece travado. Recarregar devolve a tela de login/sessão salva; o teto de
+  // três tentativas evita um laço de recarga se a falha for permanente.
+  let rendererReloads = [];
   window.webContents.on('render-process-gone', (_event, details) => {
     appendRuntimeEvent(runtimeLogFile, { event: 'render-process-gone', reason: details.reason, exitCode: details.exitCode, safeGpuMode });
+    if (details.reason === 'clean-exit' || window.isDestroyed()) return;
+    const now = Date.now();
+    rendererReloads = [...rendererReloads.filter((at) => now - at < 5 * 60_000), now];
+    if (rendererReloads.length > 3) return;
+    appendRuntimeEvent(runtimeLogFile, { event: 'renderer-reload', attempt: rendererReloads.length, safeGpuMode });
+    setTimeout(() => { if (!window.isDestroyed()) window.reload(); }, 400);
   });
   window.webContents.on('unresponsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-unresponsive', safeGpuMode }));
   window.webContents.on('responsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-responsive', safeGpuMode }));

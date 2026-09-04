@@ -9,13 +9,57 @@ export interface DevicePreferences {
 
 const KEY = 'tumacord.devices';
 
-export function normalizeSpeakerId(value: unknown): string {
-  if (typeof value !== 'string' || value === 'default' || value === 'communications') return '';
+// O Chromium publica duas entradas virtuais por dispositivo padrão: `default`
+// (rotulada "Padrão - …" em pt-BR) e `communications`. Elas apontam para o
+// mesmo hardware que já aparece com o id real, então manter as três na lista
+// só cria as opções duplicadas de "default" e "padrão".
+export function isVirtualDeviceId(value: unknown): boolean {
+  return value === 'default' || value === 'communications';
+}
+
+export function normalizeDeviceId(value: unknown): string {
+  if (typeof value !== 'string' || isVirtualDeviceId(value)) return '';
   return value;
 }
 
-export function visibleAudioOutputs<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'>>(devices: readonly T[]): T[] {
-  return devices.filter((device) => device.kind === 'audiooutput' && normalizeSpeakerId(device.deviceId) !== '');
+export function normalizeSpeakerId(value: unknown): string {
+  return normalizeDeviceId(value);
+}
+
+// Rótulos do Chromium chegam como "Padrão - Microfone (USB)". O prefixo só faz
+// sentido nas entradas virtuais que acabaram de ser removidas.
+export function cleanDeviceLabel(label: string | undefined): string {
+  return (label ?? '').replace(/^\s*(padr[ãa]o|default|communications|comunica[çc][õo]es)\s*[-–—:]\s*/i, '').trim();
+}
+
+function realDevices<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(devices: readonly T[], kind: MediaDeviceKind): T[] {
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const visible: T[] = [];
+  for (const device of devices) {
+    if (device.kind !== kind || !device.deviceId || isVirtualDeviceId(device.deviceId)) continue;
+    if (seenIds.has(device.deviceId)) continue;
+    // Alguns portais publicam o mesmo hardware duas vezes (uma pelo ALSA e
+    // outra pelo PipeWire) com ids diferentes e rótulo idêntico.
+    const name = cleanDeviceLabel(device.label).toLocaleLowerCase('pt-BR');
+    if (name && seenNames.has(name)) continue;
+    seenIds.add(device.deviceId);
+    if (name) seenNames.add(name);
+    visible.push(device);
+  }
+  return visible;
+}
+
+export function visibleAudioInputs<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(devices: readonly T[]): T[] {
+  return realDevices(devices, 'audioinput');
+}
+
+export function visibleAudioOutputs<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(devices: readonly T[]): T[] {
+  return realDevices(devices, 'audiooutput');
+}
+
+export function visibleVideoInputs<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(devices: readonly T[]): T[] {
+  return realDevices(devices, 'videoinput');
 }
 
 export function reconcileDevicePreferences<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label'>>>(preferences: DevicePreferences, devices: readonly T[]): DevicePreferences {
@@ -28,16 +72,21 @@ export function reconcileDevicePreferences<T extends Pick<MediaDeviceInfo, 'kind
   };
   return {
     ...preferences,
-    microphoneId: exists('audioinput', preferences.microphoneId) ? preferences.microphoneId : '',
-    cameraId: exists('videoinput', preferences.cameraId) ? preferences.cameraId : '',
-    speakerId: exists('audiooutput', preferences.speakerId) ? normalizeSpeakerId(preferences.speakerId) : '',
+    microphoneId: exists('audioinput', preferences.microphoneId) ? normalizeDeviceId(preferences.microphoneId) : '',
+    cameraId: exists('videoinput', preferences.cameraId) ? normalizeDeviceId(preferences.cameraId) : '',
+    speakerId: exists('audiooutput', preferences.speakerId) ? normalizeDeviceId(preferences.speakerId) : '',
   };
 }
 
 function savedPreferences(): DevicePreferences {
   try {
     const saved = { microphoneId: '', cameraId: '', speakerId: '', noiseSuppression: true, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
-    return { ...saved, speakerId: normalizeSpeakerId(saved.speakerId) };
+    return {
+      ...saved,
+      microphoneId: normalizeDeviceId(saved.microphoneId),
+      cameraId: normalizeDeviceId(saved.cameraId),
+      speakerId: normalizeDeviceId(saved.speakerId),
+    };
   } catch {
     return { microphoneId: '', cameraId: '', speakerId: '', noiseSuppression: true };
   }
@@ -72,7 +121,12 @@ export function useDevices() {
   }, [refresh]);
 
   const setPreferences = (next: DevicePreferences) => {
-    const normalized = { ...next, speakerId: normalizeSpeakerId(next.speakerId) };
+    const normalized = {
+      ...next,
+      microphoneId: normalizeDeviceId(next.microphoneId),
+      cameraId: normalizeDeviceId(next.cameraId),
+      speakerId: normalizeDeviceId(next.speakerId),
+    };
     setPreferencesState(normalized);
     localStorage.setItem(KEY, JSON.stringify(normalized));
   };
@@ -82,8 +136,8 @@ export function useDevices() {
     preferences,
     setPreferences,
     refresh,
-    microphones: devices.filter((device) => device.kind === 'audioinput'),
-    cameras: devices.filter((device) => device.kind === 'videoinput'),
+    microphones: visibleAudioInputs(devices),
+    cameras: visibleVideoInputs(devices),
     speakers: visibleAudioOutputs(devices),
   };
 }

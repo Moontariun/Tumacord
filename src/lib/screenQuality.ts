@@ -17,7 +17,15 @@ export const SCREEN_QUALITIES: Record<StreamQuality, ScreenQualityConfig> = {
   data: { label: '480p · 15 FPS', width: 854, height: 480, frameRate: 15, bitrate: 900_000 },
 };
 
-export const screenQualityOptions = Object.entries(SCREEN_QUALITIES) as [StreamQuality, ScreenQualityConfig][];
+// A ordem do objeto acima existe por motivos históricos e não serve para a
+// interface. O seletor lista da menor para a maior resolução e, dentro da
+// mesma resolução, do menor para o maior FPS.
+export const screenQualityOptions = (Object.entries(SCREEN_QUALITIES) as [StreamQuality, ScreenQualityConfig][])
+  .sort(([, left], [, right]) => (left.height - right.height)
+    || (left.width - right.width)
+    || (left.frameRate - right.frameRate));
+
+export const screenQualityOrder = screenQualityOptions.map(([value]) => value);
 
 const CAPTURE_ENVELOPE = SCREEN_QUALITIES.ultra60;
 
@@ -53,4 +61,17 @@ export function screenScaleForQuality(settings: Pick<MediaTrackSettings, 'width'
 
 export function maximumAdaptiveScreenScale(baseScale: number): number {
   return Math.min(4, Math.max(baseScale, baseScale * 2));
+}
+
+// O controle de congestionamento do Chromium começa perto de 300 kbps e leva
+// dezenas de segundos para descobrir um enlace LAN/ZeroTier. Anunciar o piso e
+// o ponto de partida na SDP faz a live abrir já nítida em vez de subir de
+// qualidade um minuto depois.
+export function screenBitrateHints(config: ScreenQualityConfig): { startKbps: number; minKbps: number; maxKbps: number } {
+  const maxKbps = Math.round(config.bitrate / 1_000);
+  return {
+    startKbps: Math.round(maxKbps * 0.7),
+    minKbps: Math.round(maxKbps * 0.25),
+    maxKbps,
+  };
 }

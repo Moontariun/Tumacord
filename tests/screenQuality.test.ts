@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenCaptureConstraints, screenScaleForQuality } from '../src/lib/screenQuality.js';
+import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenQualityOrder, screenScaleForQuality } from '../src/lib/screenQuality.js';
 
 test('qualidade padrão é 1080p60 e valor salvo inválido não reduz a live silenciosamente', () => {
   assert.equal(parseStreamQuality(null), 'source');
@@ -30,4 +30,23 @@ test('troca de qualidade calcula somente a escala do encoder da captura existent
   assert.equal(screenScaleForQuality(settings, SCREEN_QUALITIES.balanced), 2);
   assert.equal(screenScaleForQuality(settings, SCREEN_QUALITIES.data), 3);
   assert.equal(maximumAdaptiveScreenScale(3), 4);
+});
+
+test('seletor lista as resoluções em ordem crescente e sem repetir a mesma altura fora de ordem', () => {
+  assert.deepEqual(screenQualityOptions.map(([, option]) => option.label), [
+    '480p · 15 FPS',
+    '720p · 30 FPS',
+    '1080p · 30 FPS',
+    '1080p · 60 FPS',
+    '1440p · 30 FPS',
+    '1440p · 60 FPS',
+  ]);
+  assert.deepEqual(screenQualityOrder, ['data', 'balanced', 'high', 'source', 'ultra30', 'ultra60']);
+});
+
+test('dicas de bitrate abrem a live perto do perfil escolhido', () => {
+  const hints = screenBitrateHints(SCREEN_QUALITIES.source);
+  assert.equal(hints.maxKbps, 8_000);
+  assert.equal(hints.startKbps, 5_600);
+  assert.equal(hints.minKbps, 2_000);
 });
