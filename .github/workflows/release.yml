@@ -33,7 +33,22 @@ jobs:
         run: npm ci
 
       - name: Auditar dependências de produção
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          # O endpoint de auditoria do npm cai de vez em quando (503) e uma
+          # indisponibilidade do registro não pode reprovar uma versão.
+          for attempt in 1 2 3; do
+            if output="$(npm audit --omit=dev --audit-level=high 2>&1)"; then
+              echo "$output"
+              exit 0
+            fi
+            echo "$output"
+            if ! grep -qiE 'audit endpoint returned an error|service unavailable|ECONNRESET|ETIMEDOUT|EAI_AGAIN' <<<"$output"; then
+              exit 1
+            fi
+            echo "::warning::Registro npm indisponível na tentativa $attempt; tentando de novo."
+            sleep $((attempt * 20))
+          done
+          echo "::warning::Auditoria ignorada: o registro npm segue indisponível."
 
       - name: Validar projeto
         run: |

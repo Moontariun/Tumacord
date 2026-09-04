@@ -1,4 +1,4 @@
-import { resumeSharedAudio, sharedAudioContext } from './audioBus';
+import { resumeSharedAudio, sharedAudioContext, sharedAudioOutput } from './audioBus';
 
 const SOUND_KEY = 'tumacord.sound-feedback';
 const SOUND_VOLUME_KEY = 'tumacord.sound-volume';
@@ -96,7 +96,7 @@ export function playSound(sound: FeedbackSound): void {
   filter.type = 'lowpass';
   filter.frequency.setValueAtTime(sound === 'error' ? 1_800 : 4_800, now);
   filter.Q.setValueAtTime(0.55, now);
-  master.connect(filter).connect(audio.destination);
+  master.connect(filter).connect(sharedAudioOutput() ?? audio.destination);
   const pattern = patterns[sound];
   for (const tone of pattern) {
     const start = now + tone.offset;

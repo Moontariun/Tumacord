@@ -1,19 +1,22 @@
 type WindowWithAudio = Window & { webkitAudioContext?: typeof AudioContext };
-type SinkCapableContext = AudioContext & { setSinkId?: (id: string) => Promise<void> };
+type SinkCapableElement = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
 
 let shared: AudioContext | null = null;
+let master: GainNode | null = null;
 let unavailable = false;
 let currentSink = '';
+let bridge: MediaStreamAudioDestinationNode | null = null;
+let bridgeElement: SinkCapableElement | null = null;
 
 // O Chromium limita a quantidade de AudioContexts vivos por aba (na prática,
-// seis). A versão anterior criava um por participante, mais um por live, mais
-// o monitor de fala, mais os sons de feedback: em uma call com duas pessoas e
-// uma transmissão o limite estourava, `new AudioContext()` passava a lançar
-// dentro de um efeito do React e a árvore inteira caía — tela preta e saída da
-// call. Todo o áudio de saída do app passa por este único contexto.
-export function sharedAudioContext(): AudioContext | null {
+// seis). Criar um por participante, mais um por live, mais o monitor de fala,
+// estourava esse limite e derrubava a árvore do React de dentro de um efeito.
+// Todo o áudio de saída do aplicativo passa por este contexto único, e tudo se
+// conecta ao mesmo nó mestre — é ele que troca de rota quando a pessoa escolhe
+// outra saída, sem que nenhuma fonte precise ser religada.
+function ensureBus(): { context: AudioContext; output: GainNode } | null {
   if (typeof window === 'undefined' || unavailable) return null;
-  if (shared && shared.state !== 'closed') return shared;
+  if (shared && shared.state !== 'closed' && master) return { context: shared, output: master };
   const Constructor = window.AudioContext ?? (window as WindowWithAudio).webkitAudioContext;
   if (!Constructor) {
     unavailable = true;
@@ -21,30 +24,98 @@ export function sharedAudioContext(): AudioContext | null {
   }
   try {
     shared = new Constructor({ latencyHint: 'interactive' });
-    if (currentSink) void (shared as SinkCapableContext).setSinkId?.(currentSink).catch(() => undefined);
+    master = shared.createGain();
+    master.connect(shared.destination);
+    bridge = null;
+    bridgeElement = null;
+    const sink = currentSink;
+    currentSink = '';
+    if (sink) setSharedAudioSink(sink);
   } catch {
     shared = null;
+    master = null;
     unavailable = true;
     return null;
   }
-  return shared;
+  return { context: shared, output: master };
+}
+
+export function sharedAudioContext(): AudioContext | null {
+  return ensureBus()?.context ?? null;
+}
+
+// Nós de reprodução se conectam aqui, nunca direto em `destination`.
+export function sharedAudioOutput(): AudioNode | null {
+  return ensureBus()?.output ?? null;
 }
 
 export function resumeSharedAudio(): Promise<void> {
   const context = sharedAudioContext();
-  if (!context || context.state !== 'suspended') return Promise.resolve();
-  return context.resume().catch(() => undefined).then(() => undefined);
+  const resumeElement = () => { if (bridgeElement) void bridgeElement.play().catch(() => undefined); };
+  if (!context || context.state !== 'suspended') {
+    resumeElement();
+    return Promise.resolve();
+  }
+  return context.resume().catch(() => undefined).then(resumeElement);
 }
 
-export function sharedAudioReady(): boolean {
-  return sharedAudioContext()?.state === 'running';
-}
-
-// A saída é uma preferência única do aplicativo; roteamos o contexto inteiro em
-// vez de cada elemento de mídia.
+// `AudioContext.setSinkId` reinicia a saída inteira do contexto: com todo o
+// áudio do aplicativo compartilhando um contexto, uma troca de dispositivo
+// deixava a pessoa sem ouvir ninguém até voltar para o padrão do sistema.
+// A saída escolhida passa por um elemento <audio> dedicado, que aceita
+// `setSinkId` sem mexer no grafo.
 export function setSharedAudioSink(deviceId: string): void {
-  const context = sharedAudioContext() as SinkCapableContext | null;
+  const bus = ensureBus();
+  if (!bus || deviceId === currentSink) return;
+  const previous = currentSink;
   currentSink = deviceId;
-  if (!context?.setSinkId) return;
-  void context.setSinkId(deviceId).catch(() => undefined);
+  const routeToDefault = () => {
+    bus.output.disconnect();
+    bus.output.connect(bus.context.destination);
+    if (bridgeElement) {
+      bridgeElement.pause();
+      bridgeElement.srcObject = null;
+    }
+  };
+  if (!deviceId) {
+    routeToDefault();
+    return;
+  }
+  if (!bridge) bridge = bus.context.createMediaStreamDestination();
+  if (!bridgeElement) {
+    bridgeElement = document.createElement('audio') as SinkCapableElement;
+    bridgeElement.autoplay = true;
+    bridgeElement.style.display = 'none';
+    document.body.append(bridgeElement);
+  }
+  if (!bridgeElement.setSinkId) {
+    // Sem suporte a saída dedicada, o padrão do sistema é a única rota real.
+    currentSink = previous;
+    return;
+  }
+  const target = bridge;
+  const element = bridgeElement;
+  void element.setSinkId(deviceId)
+    .then(() => {
+      if (currentSink !== deviceId) return;
+      bus.output.disconnect();
+      bus.output.connect(target);
+      element.srcObject = target.stream;
+      return element.play().catch(() => {
+        // Sem reprodução no elemento não sai som nenhum: melhor voltar para a
+        // saída padrão do que deixar a call muda.
+        if (currentSink !== deviceId) return;
+        currentSink = '';
+        routeToDefault();
+      });
+    })
+    .catch(() => {
+      if (currentSink !== deviceId) return;
+      currentSink = '';
+      routeToDefault();
+    });
+}
+
+export function sharedAudioSink(): string {
+  return currentSink;
 }

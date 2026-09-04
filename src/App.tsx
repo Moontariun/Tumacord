@@ -11,7 +11,7 @@ import { clearSession, defaultServerUrl, loadSession, login, register, saveSessi
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
-import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext } from './lib/audioBus';
+import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext, sharedAudioOutput } from './lib/audioBus';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
 import logoUrl from '../assets/tumacord-logo.png';
 import packageMetadata from '../package.json';
@@ -463,6 +463,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const activeScreenUserVolume = activeRemoteScreen?.user?.id ? Math.max(0, Math.min(2, userVolumes[activeRemoteScreen.user.id] ?? 1)) : 1;
   useEffect(() => { setMiniLiveHidden(false); }, [activeRemoteScreen?.stream.id, selectedChannelId]);
   useEffect(() => { setVoiceMenuUserId(null); }, [selectedChannelId, voice.channelId]);
+  // Um único ponto troca a saída de áudio. Fazer isso por elemento de mídia
+  // reiniciava a saída várias vezes seguidas e derrubava o som da call.
+  useEffect(() => { setSharedAudioSink(devices.preferences.speakerId); }, [devices.preferences.speakerId]);
 
   return <div className="app-shell">
     <nav className="server-rail" aria-label="Servidor Tumacord">
@@ -726,18 +729,17 @@ function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolu
   </aside>;
 }
 
-// A live solta abre uma janela própria de picture-in-picture: ela fica acima
-// dos outros aplicativos e continua visível com o Tumacord minimizado. Usamos
-// a variante "document", que é uma janela HTML de verdade — a variante de
-// vídeo do Chromium escurece a imagem com a barra de controles dele sempre que
-// a janela recebe foco. O áudio segue pelo grafo da janela principal, então
-// volume e mute continuam valendo.
+// A live solta precisa ficar acima dos outros aplicativos com o Tumacord
+// minimizado. Tentamos, em ordem: a janela de documento do Chromium, uma
+// janela nomeada aberta pelo próprio app (que o processo principal do Electron
+// promove a "sempre visível") e, por último, o picture-in-picture de vídeo —
+// esse último escurece a imagem com a barra de controles do navegador, então
+// fica mesmo como último recurso.
 function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, title: string) {
   const [detached, setDetached] = useState(false);
   const detachedWindow = useRef<Window | null>(null);
   const home = useRef<{ parent: Node; next: ChildNode | null } | null>(null);
-  const supported = typeof window !== 'undefined'
-    && (Boolean(window.documentPictureInPicture?.requestWindow) || (typeof document !== 'undefined' && document.pictureInPictureEnabled));
+  const supported = typeof window !== 'undefined';
 
   const bringBack = useCallback(() => {
     const video = mediaRef.current;
@@ -773,39 +775,55 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, tit
     }
   }, []);
 
+  const dressWindow = (opened: Window, video: HTMLVideoElement) => {
+    home.current = { parent: video.parentNode!, next: video.nextSibling };
+    opened.document.title = title;
+    const style = opened.document.createElement('style');
+    style.textContent = 'html,body{margin:0;height:100%;background:#06070b;overflow:hidden}video{display:block;width:100%;height:100%;object-fit:contain;background:#06070b}';
+    opened.document.head.append(style);
+    opened.document.body.append(video);
+    opened.addEventListener('pagehide', () => bringBackRef.current(), { once: true });
+    detachedWindow.current = opened;
+    setDetached(true);
+  };
+
   const toggle = async () => {
     const video = mediaRef.current;
-    if (!video || !supported) return false;
-    try {
-      if (detachedWindow.current) {
-        const opened = detachedWindow.current;
-        bringBack();
-        opened.close();
-        return true;
-      }
-      if (document.pictureInPictureElement === video) {
-        await document.exitPictureInPicture();
-        return true;
-      }
-      const factory = window.documentPictureInPicture;
-      if (factory?.requestWindow) {
-        const opened = await factory.requestWindow({ width: 960, height: 540 });
-        home.current = { parent: video.parentNode!, next: video.nextSibling };
-        opened.document.title = title;
-        const style = opened.document.createElement('style');
-        style.textContent = 'html,body{margin:0;height:100%;background:#06070b;overflow:hidden}video{display:block;width:100%;height:100%;object-fit:contain;background:#06070b}';
-        opened.document.head.append(style);
-        opened.document.body.append(video);
-        opened.addEventListener('pagehide', () => bringBackRef.current(), { once: true });
-        detachedWindow.current = opened;
-        setDetached(true);
-        return true;
-      }
-      await video.requestPictureInPicture();
+    if (!video) return false;
+    if (detachedWindow.current) {
+      const opened = detachedWindow.current;
+      bringBack();
+      opened.close();
       return true;
-    } catch {
-      return false;
     }
+    if (document.pictureInPictureElement === video) {
+      await document.exitPictureInPicture().catch(() => undefined);
+      return true;
+    }
+    const factory = window.documentPictureInPicture;
+    if (factory?.requestWindow) {
+      try {
+        dressWindow(await factory.requestWindow({ width: 960, height: 540 }), video);
+        return true;
+      } catch { /* segue para a janela nomeada */ }
+    }
+    // A janela nomeada roda no mesmo processo e na mesma origem, então o vídeo
+    // pode simplesmente mudar de documento e continuar tocando.
+    try {
+      const opened = window.open('', 'tumacord-live', 'width=960,height=540');
+      if (opened?.document) {
+        dressWindow(opened, video);
+        return true;
+      }
+      opened?.close();
+    } catch { /* segue para o picture-in-picture de vídeo */ }
+    if (document.pictureInPictureEnabled) {
+      try {
+        await video.requestPictureInPicture();
+        return true;
+      } catch { /* sem caminho disponível */ }
+    }
+    return false;
   };
   return { detached, supported, toggle };
 }
@@ -883,11 +901,6 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
       stream.removeEventListener('removetrack', refreshTracks);
     };
   }, [stream]);
-  // A saída é uma preferência única do aplicativo, então roteamos o barramento
-  // inteiro em vez de cada elemento.
-  useEffect(() => {
-    if (speakerId) setSharedAudioSink(speakerId);
-  }, [speakerId]);
   useEffect(() => {
     const media = ref.current;
     if (!media) return;
@@ -907,6 +920,7 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
       for (const track of audioTracks) track.enabled = !silent;
     };
     const context = sharedAudioContext();
+    const output = sharedAudioOutput();
     const applyDirect = () => {
       const current = playback.current;
       media.muted = current.muted;
@@ -914,7 +928,7 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
       applyTrackGate(current.muted);
       void media.play().catch(() => undefined);
     };
-    if (!context) {
+    if (!context || !output) {
       syncPlayback.current = applyDirect;
       applyDirect();
       return () => { syncPlayback.current = () => undefined; applyTrackGate(false); media.srcObject = null; };
@@ -928,7 +942,7 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
     limiter.attack.value = 0.003;
     limiter.release.value = 0.1;
     gain.gain.value = 0;
-    source.connect(gain).connect(limiter).connect(context.destination);
+    source.connect(gain).connect(limiter).connect(output);
     const apply = () => {
       const current = playback.current;
       const running = context.state === 'running';

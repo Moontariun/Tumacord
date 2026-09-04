@@ -28,6 +28,15 @@
 
 - o Chromium não trata mais a janela coberta pela live flutuante como oculta, então a imagem não escurece nem engasga quando a janela solta ganha foco.
 
+**Correções aplicadas ainda na 0.7.0**
+
+- escolher microfone ou saída de áudio derrubava o som da call: `AudioContext.setSinkId` reinicia a saída inteira do contexto e, com todo o áudio do aplicativo compartilhando um contexto, a pessoa parava de ouvir até voltar para "Padrão do sistema". A saída escolhida passou a sair por um elemento dedicado, sem tocar no grafo, e a troca acontece em um único ponto do aplicativo em vez de uma vez por elemento de mídia;
+- o botão "Reconectar" escapava da borda da pastilha da malha quando o texto não cabia;
+- a live solta ganhou uma janela real do Electron, sempre acima dos outros aplicativos, para hosts onde nenhuma das APIs de picture-in-picture do Chromium existe — era o caso do erro "não consegui soltar a live";
+- novo desenho do ícone de bandeja: silhueta de tomate com o telefone em negativo, geometria simétrica, legível a 24 px;
+- a marca no topo da barra lateral ocupa a faixa inteira;
+- a auditoria de dependências do CI tolera indisponibilidade do registro npm, que reprovou a primeira build desta versão.
+
 ## 0.6.0 — estabilidade real da live, áudio previsível e interface redesenhada (afetada)
 
 > **Aviso:** na v0.6.0 as dicas de bitrate não chegavam ao encoder, então a live ainda abria borrada; os seletores nativos abriam com as opções em branco no Linux e a live solta escurecia ao receber foco. Use a v0.7.0.

@@ -1197,3 +1197,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 
 /* Sem subtítulo no login: a marca já ocupa esse espaço. */
 .login-card .brand-title { margin-bottom: 26px; }
+
+/* 0.7.1 — pastilha da malha não deixa o botão escapar da borda; marca do topo
+   ocupa a faixa da barra lateral. */
+.p2p-route { overflow: hidden; gap: 6px; }
+.p2p-route > span { min-width: 0; overflow: hidden; }
+.p2p-route > span strong { min-width: 0; flex: 0 1 auto; }
+.p2p-route > span small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.p2p-route > button { flex: 0 0 auto; max-width: 50%; }
+.p2p-route > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.channel-sidebar { grid-template-rows: 58px 1fr auto auto; }
+.server-header { padding-inline: 16px; }
+.server-header .brand-mark { font-size: 21px; font-weight: 850; line-height: 1; letter-spacing: -.045em; }

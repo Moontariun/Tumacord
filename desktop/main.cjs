@@ -133,7 +133,37 @@ async function createWindow() {
   });
   window.webContents.on('unresponsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-unresponsive', safeGpuMode }));
   window.webContents.on('responsive', () => appendRuntimeEvent(runtimeLogFile, { event: 'renderer-responsive', safeGpuMode }));
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // A única janela extra permitida é a da live solta: mesma origem, sem
+  // navegação e sempre acima dos outros aplicativos. Todo o resto continua
+  // bloqueado.
+  window.webContents.setWindowOpenHandler(({ frameName, url }) => {
+    if (frameName !== 'tumacord-live' || (url && url !== 'about:blank')) return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 960,
+        height: 540,
+        minWidth: 320,
+        minHeight: 180,
+        alwaysOnTop: true,
+        autoHideMenuBar: true,
+        backgroundColor: '#06070b',
+        title: 'Tumacord · AO VIVO',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          backgroundThrottling: false,
+        },
+      },
+    };
+  });
+  window.webContents.on('did-create-window', (child) => {
+    child.setAlwaysOnTop(true, 'floating');
+    child.setMenuBarVisibility(false);
+    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    child.webContents.on('will-navigate', (event) => event.preventDefault());
+  });
   window.on('enter-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', true));
   window.on('leave-full-screen', () => {
     window.webContents.send('tumacord:fullscreen-changed', false);
