@@ -1,6 +1,20 @@
 # Histórico de versões
 
-## 0.7.1 — o instalador passa a entregar o que compilou
+## 0.7.1 — o instalador passa a entregar o que compilou, e a call da rede vira a call
+
+**A call da turma**
+
+- a seção "Calls na rede" saiu. Quando alguém da rede local ou do ZeroTier está em uma call, ela aparece como a própria "Call da turma", já com as pessoas dentro — do jeito que o Discord mostra;
+- clicar no canal de voz ou em "Entrar na call" leva para o host onde a turma está reunida. Antes isso abria a sala vazia do servidor local enquanto todo mundo conversava em outro host, e parecia que o botão não funcionava;
+- o anúncio de descoberta passou a carregar a lista de participantes, e não só a contagem. O que chega pela rede é limpo e limitado antes de ser exibido;
+- migrar para a call de outra pessoa entra na conversa mesmo quando este cliente já havia retomado uma call antes.
+
+**Áudio e presença**
+
+- dá para silenciar uma pessoa sem silenciar a transmissão dela: o mudo e o volume individuais valem para a voz, e a live continua com o próprio controle;
+- a lista de presença da direita não reage mais a quem está falando — isso é papel da barra da esquerda, junto da call.
+
+**Instalação**
 
 - **reinstalar a mesma versão não trocava o código.** O `install-cachyos.sh` identificava cada build pelo sha256 do executável do Electron, que é idêntico em toda compilação porque o código do Tumacord vive em `resources/app.asar`. A pasta da versão coincidia com a da instalação anterior, o script pulava a cópia e apenas reapontava o atalho `current` para a build velha: o instalador compilava tudo e descartava o resultado. Agora o identificador cobre também o conteúdo de `resources/`;
 - por causa disso, quem instalou a 0.7.0 e reinstalou depois nunca recebeu as correções de áudio e da janela solta publicadas na sequência. Elas chegam nesta versão.

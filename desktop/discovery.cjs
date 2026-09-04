@@ -18,6 +18,26 @@ function numberToIpv4(value) {
   return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.');
 }
 
+// A lista de participantes viaja no mesmo datagrama do anúncio, então precisa
+// caber com folga em um pacote UDP e nunca pode confiar no que chega da rede.
+const MAX_ADVERTISED_MEMBERS = 10;
+
+function sanitizeMembers(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const members = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const id = typeof entry.id === 'string' ? entry.id.slice(0, 64) : '';
+    const username = typeof entry.username === 'string' ? entry.username.trim().slice(0, 24) : '';
+    if (!id || !username || seen.has(id)) continue;
+    seen.add(id);
+    members.push({ id, username, muted: entry.muted === true, screen: entry.screen === true });
+    if (members.length >= MAX_ADVERTISED_MEMBERS) break;
+  }
+  return members;
+}
+
 function interfaces(readNetworkInterfaces = os.networkInterfaces) {
   return Object.values(readNetworkInterfaces()).flat().filter((entry) => entry && entry.family === 'IPv4' && !entry.internal);
 }
@@ -61,7 +81,9 @@ class TumacordDiscovery {
 
   setHosting(details) {
     if (this.closed) return;
-    this.hosting = details ? { ...details, hostId: this.hostId, port: 3927 } : null;
+    this.hosting = details
+      ? { ...details, members: sanitizeMembers(details.members), hostId: this.hostId, port: 3927 }
+      : null;
     if (this.hosting) this.broadcast({ type: 'advertise', ...this.hosting });
   }
 
@@ -129,6 +151,7 @@ class TumacordDiscovery {
       callId: message.callId,
       callName: message.callName || 'Call Geral',
       participants: Number(message.participants) || 1,
+      members: sanitizeMembers(message.members),
       url: `http://${remote.address}:3927`,
       pingMs: measured,
       lastSeen: Date.now(),
@@ -164,4 +187,4 @@ class TumacordDiscovery {
   }
 }
 
-module.exports = { TumacordDiscovery };
+module.exports = { TumacordDiscovery, sanitizeMembers };
