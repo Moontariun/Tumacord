@@ -150,11 +150,7 @@ svg { width: 20px; height: 20px; }
 .member-profile { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 3px 0; background: transparent; color: inherit; text-align: left; }
 .member-profile > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-row small { margin-left: auto; color: #6f7181; font-size: 9px; }
-.member-row > span:last-child { margin-left: auto; color: #f7b955; }
-.member-row small + span:last-child { margin-left: 3px; }
 .member-row svg { width: 14px; height: 14px; }
-.member-row.speaking .member-profile > span:last-child { color: #fff; animation: speaking-name .8s ease-in-out infinite alternate; }
-.member-row.is-streaming .member-profile > span:last-child { color: #ff9a9c; }
 .member-live { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; color: #ff7d80 !important; font-size: 7px; font-weight: 900; letter-spacing: .04em; }
 .member-volume { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: #777989; }
 .member-volume svg { width: 13px; height: 13px; flex: 0 0 auto; }
@@ -260,14 +256,6 @@ svg { width: 20px; height: 20px; }
 .stream-recovery-card button:hover { background: var(--violet); color: white; }
 .stream-hidden-card { border-color: rgba(125,92,255,.2); background: linear-gradient(145deg, rgba(34,32,48,.96), rgba(20,21,29,.96)); }
 .stream-hidden-card > svg { width: 24px; height: 24px; color: #9c87ff; }
-.call-footer { min-height: 88px; display: flex; justify-content: center; align-items: flex-start; gap: 9px; padding: 8px 14px 16px; }
-.quality-picker { display: flex; align-items: center; gap: 7px; margin: 7px 8px 0 0; color: #9b9dac; font-size: 10px; font-weight: 700; }
-.quality-picker select { max-width: 170px; border: 1px solid var(--border); border-radius: 8px; background: #242631; color: #e2e2ec; padding: 8px 24px 8px 9px; font-size: 10px; }
-.stream-audio-controls { display: flex; align-items: center; gap: 7px; margin: 7px 8px 0 0; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(36,38,49,.82); }
-.stream-audio-controls button { display: grid; place-items: center; width: 24px; height: 28px; padding: 0; background: transparent; color: #c4c5d1; }
-.stream-audio-controls button:hover { color: white; }
-.stream-audio-controls svg { width: 16px; height: 16px; }
-.stream-audio-controls input { width: 92px; accent-color: var(--violet); }
 .call-control { min-width: 70px; display: grid; justify-items: center; gap: 6px; background: transparent; color: #b8b9c5; font-size: 9px; font-weight: 700; }
 .call-control svg { width: 22px; height: 22px; padding: 13px; box-sizing: content-box; border-radius: 15px; background: #2b2d39; transition: transform .15s, background .15s; }
 .call-control:hover svg { transform: translateY(-2px); background: #363846; }
@@ -490,24 +478,7 @@ body { background: var(--bg); }
 .video-actions { right: 12px; top: 12px; opacity: 0; transform: translateY(-3px); transition: opacity .16s, transform .16s; }
 .video-tile:hover .video-actions, .video-tile.is-fullscreen .video-actions { opacity: 1; transform: none; }
 .video-actions button { width: 38px; height: 38px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: rgba(10,11,16,.78); }
-.call-footer { min-height: 96px; align-items: flex-start; gap: 7px; padding: 10px 18px 18px; border-top: 1px solid rgba(255,255,255,.035); background: linear-gradient(180deg, transparent, rgba(7,8,12,.22)); }
-.p2p-route { position: static; z-index: 5; flex: 0 1 auto; min-width: 246px; min-height: 42px; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid rgba(255,255,255,.065); border-radius: 11px; background: rgba(7,9,13,.5); }
-.p2p-route > span { min-width: 0; flex: 1; min-height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 7px; }
-.p2p-route > span i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: #8790a2; box-shadow: 0 0 8px rgba(135,144,162,.45); }
-.p2p-route > span strong { overflow: hidden; color: #c8cbd6; font-size: 8px; letter-spacing: .035em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
-.p2p-route > span small { flex: 0 0 auto; color: #74798a; font-size: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.p2p-route.stable > span i { background: var(--green); box-shadow: 0 0 8px rgba(82,215,137,.72); }
-.p2p-route.connecting > span i { background: #f2bb58; animation: live-pulse 1s infinite; }
-.p2p-route.recovering > span i { background: #ff686f; animation: live-pulse .75s infinite; }
-.p2p-route > button { flex: 0 0 auto; height: 32px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border-radius: 8px; background: rgba(255,255,255,.045); color: #8f94a4; font-size: 8px; font-weight: 750; }
-.p2p-route > button:hover { background: rgba(125,92,255,.12); color: #c5bcff; }
-.p2p-route > button svg { width: 11px; height: 11px; }
 .call-control { min-width: 76px; font-size: 9px; }
-.quality-picker { min-width: 188px; display: grid; gap: 5px; margin: 2px 8px 0 0; }
-.quality-picker > span { display: flex; align-items: center; gap: 6px; color: #8f93a4; font-size: 8px; text-transform: uppercase; letter-spacing: .07em; }
-.quality-picker > span i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(82,215,137,.7); }
-.quality-picker select { width: 100%; max-width: none; padding-block: 9px; }
-.stream-audio-controls { min-height: 42px; margin-top: 12px; }
 
 .modal-backdrop { padding: 24px; background: rgba(4,5,8,.74); backdrop-filter: blur(14px) saturate(.8); }
 .settings-modal, .source-picker, .share-setup { border-color: rgba(255,255,255,.09); background: #1a1c25; box-shadow: 0 35px 110px rgba(0,0,0,.62); animation: modal-in .16s ease-out; }
@@ -582,12 +553,8 @@ body { background: var(--bg); }
 }
 
 @media (max-width: 900px) {
-  .call-footer { min-height: 78px; flex-wrap: wrap; align-content: center; align-items: center; gap: 6px; padding: 8px 10px 12px; }
   .call-control { min-width: 54px; width: 54px; padding-inline: 7px; }
   .call-control span { display: none; }
-  .quality-picker { min-width: 168px; margin-right: 2px; }
-  .stream-audio-controls { margin-top: 0; }
-  .p2p-route { order: -1; min-width: min(246px, 100%); }
   .stage-grid.count-2,
   .stage-grid.count-3,
   .stage-grid.count-4 { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: minmax(230px, 1fr); overflow-x: hidden; overflow-y: auto; }
@@ -613,8 +580,6 @@ body { background: var(--bg); }
 @media (max-width: 660px) {
   .quality-cards, .source-grid { grid-template-columns: 1fr; }
   .share-setup { padding: 28px 20px; }
-  .p2p-route { width: 100%; min-width: 0; }
-  .p2p-route > span { min-height: 28px; }
 }
 
 /* Interface 0.4 — palco elástico, tipografia legível e controles estáveis. */
@@ -684,40 +649,9 @@ body { background: var(--bg); }
 .video-tile.is-fullscreen { contain: none; }
 .video-tile.is-fullscreen video { position: absolute; inset: 0; object-fit: contain; }
 .video-tile > span { z-index: 2; padding: 7px 10px; font-size: 11px; }
-
-.call-footer {
-  min-width: 0;
-  min-height: 104px;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 10px 18px 14px;
-  background: rgba(10,12,17,.82);
-  border-top: 1px solid rgba(255,255,255,.06);
-  box-shadow: 0 -12px 34px rgba(0,0,0,.14);
-  backdrop-filter: blur(18px);
-}
-.call-status-tools,
-.call-primary-controls,
-.call-viewer-tools { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.call-status-tools { justify-self: start; }
-.call-primary-controls { justify-self: center; }
-.call-viewer-tools { justify-self: end; }
 .call-control { min-width: 68px; gap: 7px; color: #c5c8d2; font-size: 10px; }
 .call-control svg { width: 21px; height: 21px; padding: 12px; border-radius: 14px; background: #292d38; }
 .call-control span { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p2p-route { min-width: 0; width: min(292px, 100%); min-height: 46px; }
-.p2p-route > span strong { font-size: 10px; }
-.p2p-route > span small { font-size: 10px; }
-.p2p-route > button { min-width: 35px; font-size: 10px; }
-.quality-picker { min-width: 190px; margin: 0; }
-.quality-picker > span { font-size: 10px; }
-.quality-picker select { font-size: 11px; }
-.stream-audio-controls { min-width: 206px; min-height: 44px; display: grid; grid-template-columns: 28px auto minmax(64px, 1fr) 36px; gap: 7px; margin: 0; padding: 4px 8px; }
-.stream-audio-controls > span { color: #b3b7c3; font-size: 11px; font-weight: 750; }
-.stream-audio-controls input { width: 100%; }
-.stream-audio-controls output { color: #9297a7; font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; }
 
 .member-list { flex-basis: 288px; }
 .member-list > header small { font-size: 9px; }
@@ -763,56 +697,23 @@ body { background: var(--bg); }
   }
 }
 
-@media (max-width: 1180px) {
-  .call-footer { grid-template-columns: minmax(0, 1fr) auto; }
-  .call-status-tools { overflow-x: auto; }
-  .call-viewer-tools { grid-column: 1 / -1; justify-self: center; }
-  .stream-audio-controls { width: min(440px, 100%); }
-}
-
 @media (max-width: 900px) {
-  .call-footer { min-height: 96px; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 10px 10px; }
-  .call-primary-controls { grid-column: 2; grid-row: 1; }
-  .call-status-tools { grid-column: 1; grid-row: 1; }
-  .call-viewer-tools { grid-column: 1 / -1; grid-row: 2; }
   .call-control { min-width: 48px; width: 48px; }
   .call-control span { display: none; }
-  .p2p-route > button span { display: none; }
-  .quality-picker { min-width: 166px; }
 }
 
 @media (max-width: 700px) {
   .topbar { padding-inline: 12px; }
-  .call-footer { display: flex; flex-wrap: wrap; justify-content: center; }
-  .call-status-tools { order: 2; width: 100%; justify-content: center; overflow: visible; }
-  .call-primary-controls { order: 1; }
-  .call-viewer-tools { order: 3; width: 100%; justify-content: center; }
-  .p2p-route { width: min(360px, 100%); }
-  .quality-picker { flex: 1 1 166px; }
-  .stream-audio-controls { width: min(360px, 100%); }
   .video-actions { opacity: 1; transform: none; }
 }
 
 /* O espaço útil da call pode ser estreito mesmo em um monitor largo quando
    as duas barras laterais estão abertas. Container queries respondem ao
    palco real, não apenas à largura total da janela. */
-@container call-stage (max-width: 1000px) {
-  .call-footer { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
-  .call-status-tools { min-width: 0; overflow-x: auto; }
-  .call-viewer-tools { grid-column: 1 / -1; justify-self: center; }
-  .stream-audio-controls { width: min(440px, 100%); }
-}
 
 @container call-stage (max-width: 680px) {
-  .call-footer { display: flex; flex-wrap: wrap; justify-content: center; }
-  .call-primary-controls { order: 1; }
-  .call-status-tools { order: 2; width: 100%; justify-content: center; overflow: visible; }
-  .call-viewer-tools { order: 3; width: 100%; justify-content: center; }
   .call-control { min-width: 48px; width: 48px; }
   .call-control span { display: none; }
-  .p2p-route { width: min(360px, 100%); }
-  .p2p-route > button span { display: none; }
-  .quality-picker { flex: 1 1 166px; }
 }
 
 /* Navegação de voz: volume individual aparece sob demanda na barra esquerda. */
@@ -842,31 +743,12 @@ body { background: var(--bg); }
 .member-badges { margin-left: 4px; }
 
 /* Barra de chamada: os grupos descem de linha antes de disputar espaço. */
-.call-footer { overflow: visible; }
-.call-status-tools { flex-wrap: wrap; align-content: center; }
-.call-status-tools .p2p-route { flex: 1 1 245px; }
-.call-status-tools .quality-picker { flex: 0 1 190px; }
-.call-primary-controls { gap: 6px; padding: 6px; border: 1px solid rgba(255,255,255,.055); border-radius: 17px; background: rgba(5,7,11,.42); box-shadow: 0 8px 24px rgba(0,0,0,.16); }
 .call-control { min-width: 64px; border-radius: 12px; }
 .call-control:hover { background: rgba(255,255,255,.035); }
 
-@container call-stage (max-width: 1280px) {
-  .call-footer { min-height: 142px; grid-template-columns: minmax(0,1fr) auto; grid-template-rows: auto auto; align-items: center; gap: 8px 12px; }
-  .call-status-tools { grid-column: 1; grid-row: 1; justify-self: stretch; }
-  .call-primary-controls { grid-column: 2; grid-row: 1; }
-  .call-viewer-tools { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
-  .stream-audio-controls { width: min(460px, 100%); }
-}
-
 @container call-stage (max-width: 900px) {
-  .call-footer { display: flex; min-height: 0; flex-wrap: wrap; justify-content: center; padding: 9px 10px 11px; }
-  .call-primary-controls { order: 1; }
-  .call-status-tools { order: 2; width: 100%; justify-content: center; }
-  .call-viewer-tools { order: 3; width: 100%; justify-content: center; }
   .call-control { width: 48px; min-width: 48px; }
   .call-control span { display: none; }
-  .p2p-route { width: min(360px, 100%); }
-  .quality-picker { flex: 1 1 166px; max-width: 260px; }
 }
 
 /* Mini-live persistente sobre chat, redimensionável e arrastável. */
@@ -1046,31 +928,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .detached-live-note svg { width: 22px; height: 22px; color: #a89bff; }
 .detached-live-note strong { font-size: 12px; }
 .detached-live-note small { color: var(--muted); font-size: 10px; }
-
-.call-footer { background: linear-gradient(180deg, rgba(17,18,25,0), rgba(14,15,21,.78) 55%); }
 .call-control svg { border: 1px solid rgba(255,255,255,.045); }
 .call-control.active svg { border-color: transparent; }
 .call-control.danger.active svg { background: linear-gradient(140deg, var(--tomato), var(--tomato-deep)); }
 .call-control.accent.active svg { background: linear-gradient(140deg, var(--violet), #6b4ff0); }
-
-.p2p-route, .quality-picker, .stream-audio-controls {
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: rgba(34,36,46,.72);
-  backdrop-filter: blur(10px);
-}
-.quality-picker { padding-inline: 10px; color: var(--ink-soft); }
-.quality-picker select { border-color: var(--border); background: rgba(255,255,255,.04); color: var(--ink); font-weight: 700; }
-.quality-picker select:hover { border-color: var(--border-strong); }
-
-.stream-audio-controls { color: var(--ink-soft); transition: border-color .15s, background .15s; }
-.stream-audio-controls > button { border-radius: 8px; color: var(--ink-soft); }
-.stream-audio-controls > button:hover { background: rgba(255,255,255,.07); color: var(--ink); }
-.stream-audio-controls > button[aria-pressed="true"] { color: #ef9092; background: rgba(255,77,79,.12); }
-.stream-audio-controls.is-muted { border-color: rgba(255,77,79,.26); background: rgba(42,29,33,.74); }
-.stream-audio-controls.is-muted > span { color: #ef9092; }
-.stream-audio-controls input { accent-color: var(--violet); }
-.stream-audio-controls.is-muted input { accent-color: var(--tomato); }
 
 .stream-recovery-card { box-shadow: var(--elev-1); }
 
@@ -1156,21 +1017,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 @keyframes dropdown-in-up { from { opacity: 0; transform: translateY(calc(-100% + 4px)); } to { opacity: 1; transform: translateY(-100%); } }
 
 /* Rodapé da call: três pastilhas da mesma altura, alinhadas ---------------- */
-.p2p-route,
-.quality-picker,
-.stream-audio-controls { min-height: 46px; margin: 0; }
-.call-status-tools, .call-viewer-tools { align-items: center; flex-wrap: wrap; row-gap: 8px; overflow: visible; }
-.p2p-route { flex: 0 1 auto; min-width: 244px; max-width: 320px; }
-.quality-picker {
-  flex: 0 1 auto; min-width: 252px; max-width: 320px;
-  display: flex; align-items: center; gap: 10px;
-  padding: 4px 4px 4px 12px;
-}
-.quality-picker > span { flex: 0 0 auto; margin: 0; }
-.quality-picker .dropdown { flex: 1 1 auto; min-width: 132px; }
-.quality-picker .dropdown-trigger { min-height: 36px; }
-.stream-audio-controls { flex: 0 1 auto; min-width: 236px; max-width: 340px; grid-template-columns: 30px auto minmax(56px, 1fr) 38px; padding-inline: 8px; }
-.stream-audio-controls > button { width: 30px; height: 30px; }
 
 /* Presença: quem está online, sem repetir o estado da chamada ------------- */
 .member-list > header { height: 56px; }
@@ -1200,12 +1046,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 
 /* 0.7.1 — pastilha da malha não deixa o botão escapar da borda; marca do topo
    ocupa a faixa da barra lateral. */
-.p2p-route { overflow: hidden; gap: 6px; }
-.p2p-route > span { min-width: 0; overflow: hidden; }
-.p2p-route > span strong { min-width: 0; flex: 0 1 auto; }
-.p2p-route > span small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.p2p-route > button { flex: 0 0 auto; max-width: 50%; }
-.p2p-route > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .channel-sidebar { grid-template-rows: 58px 1fr auto auto; }
 .server-header { padding-inline: 16px; }
@@ -1215,7 +1055,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
    pessoa separado do áudio da transmissão. */
 .member-list .live-dot { animation: none; }
 .member-row.speaking { border-color: transparent; background: transparent; }
-
 
 .voice-volume-mute {
   min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 7px;
@@ -1230,12 +1069,77 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 /* 0.7.4 — a pastilha da qualidade dimensiona pelo conteúdo. Antes o rótulo
    não encolhia e o seletor tinha piso próprio, então a soma passava da
    largura da pastilha e o botão saía por cima da borda. */
-.quality-picker { overflow: hidden; }
-.quality-picker > span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.quality-picker .dropdown { flex: 1 1 auto; min-width: 118px; }
 .dropdown { min-width: 0; }
 .dropdown-trigger { min-width: 0; }
 
 /* Controles da call sem rótulo: o ícone fala por si e o nome fica na dica. */
 .call-control { min-width: 0; width: auto; padding: 0; gap: 0; font-size: 0; }
 .call-control svg { padding: 14px; }
+
+/* =========================================================================
+   0.7.5 — o rodapé da call virou um único bloco. Antes eram três grupos
+   soltos, cada um com altura e alinhamento próprios, e a barra de estado da
+   malha ocupava espaço para oferecer um botão que a recuperação automática já
+   dispensava.
+   ========================================================================= */
+.call-dock {
+  /* Três colunas: os controles ficam no centro real do palco, e o que é
+     contextual acompanha as bordas sem deslocá-los. */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center; gap: 10px;
+  margin: 0 12px 14px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 18px;
+  background: rgba(19,20,28,.82);
+  box-shadow: var(--elev-2), var(--edge);
+  backdrop-filter: blur(16px) saturate(1.05);
+}
+.call-dock.is-idle { grid-template-columns: 1fr; justify-items: center; }
+.dock-side { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.dock-side.start { justify-content: flex-start; }
+.dock-side.end { justify-content: flex-end; }
+.dock-controls { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.dock-field {
+  min-width: 0; height: 44px; display: flex; align-items: center; gap: 9px;
+  padding: 0 12px; border-radius: 14px; background: rgba(255,255,255,.03);
+}
+.dock-label { flex: 0 0 auto; color: #8f93a4; font-size: 9px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.dock-field .dropdown { min-width: 126px; }
+.dock-field .dropdown-trigger { min-height: 32px; border-radius: 9px; }
+.dock-live > button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 9px; background: transparent; color: var(--ink-soft); }
+.dock-live > button svg { width: 16px; height: 16px; }
+.dock-live > button:hover { background: rgba(255,255,255,.07); color: var(--ink); }
+.dock-live > button[aria-pressed="true"] { color: #ef9092; background: rgba(255,77,79,.12); }
+.dock-live input { width: 96px; accent-color: var(--violet); cursor: pointer; }
+.dock-live output { min-width: 34px; color: #9297a7; font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; }
+.dock-live.is-muted .dock-label { color: #ef9092; }
+.dock-live.is-muted input { accent-color: var(--tomato); }
+.call-dock .join-call { margin: 2px 6px; }
+.call-dock .call-control { min-width: 0; width: auto; padding: 0; gap: 0; font-size: 0; }
+
+@media (max-width: 760px) {
+  .call-dock { gap: 6px; padding: 6px 8px; border-radius: 16px; }
+  .call-control svg { padding: 11px; }
+  .dock-field { height: 40px; padding-inline: 10px; }
+  .dock-live input { width: 72px; }
+  .dock-field .dropdown { min-width: 112px; }
+}
+/* Palco estreito: os rótulos somem antes de o bloco quebrar em duas linhas.
+   O valor da qualidade e o ícone do alto-falante já dizem o que cada campo é. */
+@container call-stage (max-width: 1000px) {
+  .dock-label { display: none; }
+  .dock-field { gap: 7px; padding-inline: 10px; }
+  .dock-live input { width: 84px; }
+}
+@container call-stage (max-width: 720px) {
+  .call-dock { gap: 6px; padding: 6px 8px; }
+  .call-control svg { padding: 11px; }
+  .dock-field { height: 40px; }
+  .dock-live input { width: 72px; }
+  .dock-live output { display: none; }
+}
+
+/* Ping ao lado de quem está na call, na lista de presença. */
+.member-row > .member-ping { flex: 0 0 auto; margin-left: 0; color: #767a8b; font-size: 9px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.member-row > .live-dot { margin-left: 0; }
+.member-row > .member-ping + .live-dot { margin-left: 2px; }
+.member-name { flex: 1; }

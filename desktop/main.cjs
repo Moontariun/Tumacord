@@ -38,16 +38,15 @@ let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
 let quittingAfterAudioCleanup = false;
 let safeGpuRelaunching = false;
-let liveWindow;
+const liveWindows = new Set();
 
-// "screen-saver" é o nível mais alto que o Electron expõe; é o que mantém a
-// live visível sobre um jogo em tela cheia. Nem todo compositor Wayland honra
+// A janela solta abre acima das outras; daí em diante quem manda é a barra de
+// título do sistema, que já oferece "manter acima". Nem todo compositor honra
 // os dois ajustes, então nenhum deles pode derrubar a janela se falhar.
-function applyLivePin(target, pinned) {
-  if (!target || target.isDestroyed()) return false;
-  try { target.setAlwaysOnTop(pinned, pinned ? 'screen-saver' : 'normal'); } catch { /* compositor sem suporte */ }
-  try { target.setVisibleOnAllWorkspaces(pinned, { visibleOnFullScreenWindow: pinned }); } catch { /* idem */ }
-  return pinned;
+function raiseLiveWindow(target) {
+  if (!target || target.isDestroyed()) return;
+  try { target.setAlwaysOnTop(true, 'screen-saver'); } catch { /* compositor sem suporte */ }
+  try { target.setVisibleOnAllWorkspaces(true, { visibleOnFullScreenWindow: true }); } catch { /* idem */ }
 }
 
 if (!hasSingleInstanceLock) app.quit();
@@ -170,16 +169,24 @@ async function createWindow() {
     };
   });
   window.webContents.on('did-create-window', (child) => {
-    liveWindow = child;
     // Sem soltar do pai, a janela é arrastada junto com a principal: ela some
     // quando o Tumacord é minimizado e não consegue subir acima de outro app.
     try { child.setParentWindow(null); } catch { /* alguns compositores recusam */ }
     try { child.setSkipTaskbar(false); } catch { /* idem */ }
-    applyLivePin(child, true);
+    raiseLiveWindow(child);
     child.setMenuBarVisibility(false);
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     child.webContents.on('will-navigate', (event) => event.preventDefault());
-    child.on('closed', () => { if (liveWindow === child) liveWindow = undefined; });
+    // Soltar do pai também significa que ela não fecha junto: sem isto, fechar
+    // o Tumacord deixaria a janela da live órfã segurando o processo.
+    liveWindows.add(child);
+    child.on('closed', () => liveWindows.delete(child));
+  });
+  window.on('closed', () => {
+    for (const child of liveWindows) {
+      if (!child.isDestroyed()) child.close();
+    }
+    liveWindows.clear();
   });
   window.on('enter-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', true));
   window.on('leave-full-screen', () => {
@@ -253,7 +260,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
   ipcMain.handle('tumacord:discover-calls', () => discovery.list());
   ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery.setHosting(details));
-  ipcMain.handle('tumacord:pin-live-window', (_event, pinned) => applyLivePin(liveWindow, pinned === true));
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
     const next = !mainWindow.isFullScreen();

@@ -5,7 +5,7 @@ export type IconName =
   | 'settings' | 'leave' | 'plus' | 'users' | 'send' | 'host' | 'close'
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
-  | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pin' | 'pinOff';
+  | 'shield' | 'refresh' | 'popOut' | 'popIn';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -13,10 +13,6 @@ export type IconName =
 const SPEAKER = 'M11.2 4.6 6.6 8.6H3.4a1 1 0 0 0-1 1v4.8a1 1 0 0 0 1 1h3.2l4.6 4V4.6Z';
 const MIC_BODY = 'M12 3.4a2.7 2.7 0 0 1 2.7 2.7v5.4a2.7 2.7 0 0 1-5.4 0V6.1A2.7 2.7 0 0 1 12 3.4Z';
 const MIC_STAND = 'M5.8 11.3v.7a6.2 6.2 0 0 0 12.4 0v-.7M12 18.2v2.4M8.6 20.6h6.8';
-// Exportado como texto porque a janela solta da live é outro documento: lá o
-// botão é montado sem React e precisa do mesmo desenho.
-export const PIN_PATH = 'M9.4 4.2h5.2a1.4 1.4 0 0 1 1.4 1.4v4.6c0 .7.3 1.3.9 1.7l1.3.9a1.1 1.1 0 0 1-.6 2H6.4a1.1 1.1 0 0 1-.6-2l1.3-.9c.6-.4.9-1 .9-1.7V5.6a1.4 1.4 0 0 1 1.4-1.4ZM12 14.8V20.4';
-export const PIN_OFF_PATH = `${PIN_PATH}M3.6 3.6l16.8 16.8`;
 
 const glyphs: Record<IconName, ReactNode> = {
   hash: <path d="M10.2 3.6 8.2 20.4M15.8 3.6l-2 16.8M4.4 9h15.2M3.8 15h15.2" />,
@@ -48,8 +44,6 @@ const glyphs: Record<IconName, ReactNode> = {
   shield: <><path d="M12 3.2 20 6v5.4c0 4.5-3.2 7.8-8 9.4-4.8-1.6-8-4.9-8-9.4V6Z" /><path d="m8.8 12 2.4 2.4 4-4.4" /></>,
   refresh: <><path d="M20.2 12a8.2 8.2 0 1 1-2.4-5.8" /><path d="M20.4 4.4v5.2h-5.2" /></>,
   popOut: <><path d="M20.4 12.4V6.2a2 2 0 0 0-2-2H5.6a2 2 0 0 0-2 2v9.2a2 2 0 0 0 2 2h5" /><rect x="12.4" y="12.6" width="9" height="7" rx="1.8" /></>,
-  pin: <path d={PIN_PATH} />,
-  pinOff: <path d={PIN_OFF_PATH} />,
   popIn: <><path d="M3.6 11.6v-5.4a2 2 0 0 1 2-2h12.8a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H12" /><rect x="2.6" y="13.4" width="9" height="7" rx="1.8" /><path d="M14.2 9.8 18.6 5.4M18.6 5.4h-3.4M18.6 5.4v3.4" /></>,
 };
 

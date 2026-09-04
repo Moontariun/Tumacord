@@ -19,7 +19,6 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     ipcRenderer.on('tumacord:fullscreen-changed', handler);
     return () => ipcRenderer.removeListener('tumacord:fullscreen-changed', handler);
   },
-  pinLiveWindow: (pinned) => ipcRenderer.invoke('tumacord:pin-live-window', pinned === true),
   beginMediaFullscreen: () => ipcRenderer.invoke('tumacord:begin-media-fullscreen'),
   endMediaFullscreen: () => ipcRenderer.invoke('tumacord:end-media-fullscreen'),
   onMediaFullscreenChanged: (listener) => {

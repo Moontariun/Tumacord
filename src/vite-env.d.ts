@@ -38,7 +38,6 @@ interface Window {
     toggleFullscreen: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     onFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;
-    pinLiveWindow: (pinned: boolean) => Promise<boolean>;
     beginMediaFullscreen: () => Promise<boolean>;
     endMediaFullscreen: () => Promise<boolean>;
     onMediaFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;

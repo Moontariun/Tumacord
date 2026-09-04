@@ -1,5 +1,28 @@
 # Histórico de versões
 
+## 0.7.5 — rodapé refeito, presença com ping e marca oficial na bandeja
+
+**Rodapé da call**
+
+- refeito do zero. Eram três grupos soltos, cada um com altura e alinhamento próprios; agora é um bloco único em três colunas, com os controles no centro exato do palco e o que é contextual acompanhando as bordas. Em palco estreito os rótulos somem antes de o bloco quebrar em duas linhas;
+- **a barra de estado da malha saiu.** Ela ocupava espaço para oferecer um botão de reconectar que a recuperação automática já dispensa — o aplicativo continua reconstruindo enlaces sozinho, em silêncio.
+
+**Presença**
+
+- a lista da direita mostra o ping de quem está na call, ao lado do nome.
+
+**Janela solta**
+
+- o alfinete saiu: a barra de título do sistema já oferece "manter acima", e a janela continua abrindo acima das outras;
+- cada mídia solta abre a própria janela. Com um nome só, soltar a câmera reaproveitava a janela da tela e o primeiro vídeo sumia;
+- ampliar outro quadro não desmonta mais o quadro que está solto — antes isso levava a janela flutuante junto;
+- se o quadro de origem foi remontado enquanto a janela estava aberta (uma reconstrução de enlace troca o MediaStream), o vídeo volta para o quadro que está em tela em vez de se perder;
+- fechar o Tumacord fecha as janelas soltas, que desde a 0.7.4 não são mais filhas da principal.
+
+**Bandeja**
+
+- o ícone passou a ser a própria marca do Tumacord em preto e branco, derivada do logo oficial: a silhueta do tomate com o telefone vazado.
+
 ## 0.7.4 — microfone audível desde a abertura, alfinete que segura e rodapé sem sobreposição
 
 **Microfone**
