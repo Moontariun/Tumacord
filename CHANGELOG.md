@@ -1,5 +1,10 @@
 # Histórico de versões
 
+## 0.7.1 — o instalador passa a entregar o que compilou
+
+- **reinstalar a mesma versão não trocava o código.** O `install-cachyos.sh` identificava cada build pelo sha256 do executável do Electron, que é idêntico em toda compilação porque o código do Tumacord vive em `resources/app.asar`. A pasta da versão coincidia com a da instalação anterior, o script pulava a cópia e apenas reapontava o atalho `current` para a build velha: o instalador compilava tudo e descartava o resultado. Agora o identificador cobre também o conteúdo de `resources/`;
+- por causa disso, quem instalou a 0.7.0 e reinstalou depois nunca recebeu as correções de áudio e da janela solta publicadas na sequência. Elas chegam nesta versão.
+
 ## 0.7.0 — abertura nítida da live, seletores próprios e presença enxuta
 
 **Transmissão**

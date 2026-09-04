@@ -53,7 +53,11 @@ versions_dir="$install_root/versions"
 current_link="$install_root/current"
 previous_link="$install_root/previous"
 app_version="$(node -p "require('./package.json').version")"
-build_hash="$(sha256sum "$compiled_app/tumacord" | cut -c1-12)"
+# O binário do Electron é idêntico em toda build: o nosso código fica em
+# resources/. Um hash só do executável fazia a pasta da versão coincidir com a
+# instalação anterior, e o script pulava a cópia — reinstalar a mesma versão
+# compilava tudo e mantinha o código antigo rodando.
+build_hash="$( { sha256sum "$compiled_app/tumacord"; find "$compiled_app/resources" -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-12 )"
 version_dir="$versions_dir/${app_version}-${build_hash}"
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$versions_dir"
 
