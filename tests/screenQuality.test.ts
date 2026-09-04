@@ -47,6 +47,6 @@ test('seletor lista as resoluções em ordem crescente e sem repetir a mesma alt
 test('dicas de bitrate abrem a live perto do perfil escolhido', () => {
   const hints = screenBitrateHints(SCREEN_QUALITIES.source);
   assert.equal(hints.maxKbps, 8_000);
-  assert.equal(hints.startKbps, 5_600);
-  assert.equal(hints.minKbps, 2_000);
+  assert.equal(hints.startKbps, 6_800);
+  assert.equal(hints.minKbps, 2_800);
 });

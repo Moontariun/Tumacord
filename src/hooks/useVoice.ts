@@ -6,6 +6,7 @@ import gtcrnWasmPath from '@sapphi-red/web-noise-suppressor/gtcrn.wasm?url';
 import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
+import { resumeSharedAudio, sharedAudioContext } from '../lib/audioBus';
 import { isPolitePeer, planPeerRecovery, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
@@ -27,6 +28,7 @@ interface PeerConnectionState {
   recoveryAttempts: number;
   connectedSince: number;
   screenSenderSince: number;
+  screenWarmupHeld: boolean;
   recoveryTimer?: number;
   escalationTimer?: number;
   negotiationRecoveryTimer?: number;
@@ -120,20 +122,26 @@ async function tuneCameraSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
-async function setTunedLocalDescription(pc: RTCPeerConnection, description: RTCSessionDescriptionInit, hints?: ReturnType<typeof screenBitrateHints>): Promise<void> {
+// O Chromium recusa editar codecs na própria descrição local, mas configura o
+// encoder a partir do que o outro lado pede. Por isso as dicas de bitrate
+// entram na descrição remota: é ela que define com quanto a nossa live abre.
+async function setTunedRemoteDescription(pc: RTCPeerConnection, description: RTCSessionDescriptionInit, hints?: ReturnType<typeof screenBitrateHints>): Promise<void> {
   if (hints && description.sdp) {
     try {
-      await pc.setLocalDescription({ type: description.type, sdp: applyVideoBitrateHints(description.sdp, hints) });
+      await pc.setRemoteDescription({ type: description.type, sdp: applyVideoBitrateHints(description.sdp, hints) });
       return;
     } catch {
-      // Algumas versões do Chromium recusam SDP editada. Nesse caso a live
-      // ainda funciona, apenas com a rampa lenta padrão do navegador.
+      // SDP recusada: a live continua, apenas com a rampa padrão do navegador.
     }
   }
-  await pc.setLocalDescription(description);
+  await pc.setRemoteDescription(description);
 }
 
-async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1): Promise<boolean> {
+function currentScreenHints(active: boolean, quality: StreamQuality): ReturnType<typeof screenBitrateHints> | undefined {
+  return active ? screenBitrateHints(QUALITY[quality]) : undefined;
+}
+
+async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1, holdResolution = false): Promise<boolean> {
   const parameters = sender.getParameters();
   const current = parameters.encodings?.[0] ?? {};
   parameters.encodings = [{
@@ -144,7 +152,10 @@ async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfi
     priority: 'high',
     networkPriority: 'high',
   } as RTCRtpEncodingParameters];
-  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = screenDegradationPreference(config);
+  // Nos primeiros segundos o encoder ainda não sabe quanta banda tem. Segurar
+  // a resolução nessa janela é o que faz a live abrir nítida; depois dela o
+  // perfil volta a mandar, então jogo em 60 FPS continua fluido.
+  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = holdResolution ? 'maintain-resolution' : screenDegradationPreference(config);
   try {
     await sender.setParameters(parameters);
     return true;
@@ -153,10 +164,12 @@ async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfi
   }
 }
 
-async function tuneScreenPeer(state: PeerConnectionState, sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1): Promise<boolean> {
+const SCREEN_WARMUP_MS = 9_000;
+
+async function tuneScreenPeer(state: PeerConnectionState, sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1, holdResolution = false): Promise<boolean> {
   let applied = false;
   const operation = state.screenTuning.catch(() => undefined).then(async () => {
-    applied = await tuneScreenSender(sender, config, maxBitrate, scale);
+    applied = await tuneScreenSender(sender, config, maxBitrate, scale, holdResolution);
   });
   state.screenTuning = operation.then(() => undefined, () => undefined);
   await operation;
@@ -342,6 +355,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const microphoneRecoveryTimer = useRef<number | undefined>(undefined);
   const microphoneCaptureGeneration = useRef(0);
   const neuralFallback = useRef(false);
+  const microphoneFallbackNotice = useRef(false);
+  const microphoneSignal = useRef({ lastSignalAt: 0, warned: false });
   const ensureMicrophoneRef = useRef<() => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
@@ -373,7 +388,6 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     window.clearInterval(monitor.timer);
     monitor.source.disconnect();
     monitor.analyser.disconnect();
-    void monitor.context.close();
     speakingMonitor.current = null;
     if (speakingRef.current) {
       speakingRef.current = false;
@@ -384,10 +398,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const startSpeakingMonitor = useCallback((stream: MediaStream) => {
     stopSpeakingMonitor();
     if (typeof window === 'undefined') return;
-    const AudioContextClass = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    // O monitor divide o mesmo AudioContext do restante do aplicativo: um
+    // contexto por finalidade era o que estourava o limite do Chromium.
+    const context = sharedAudioContext();
     const track = stream.getAudioTracks()[0];
-    if (!AudioContextClass || !track) return;
-    const context = new AudioContextClass();
+    if (!context || !track) return;
     const source = context.createMediaStreamSource(stream);
     const analyser = context.createAnalyser();
     analyser.fftSize = 256;
@@ -402,6 +417,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         }
         return;
       }
+      if (context.state !== 'running') return;
       analyser.getByteTimeDomainData(samples);
       let sum = 0;
       for (const sample of samples) {
@@ -416,7 +432,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
     }, 80);
     speakingMonitor.current = { context, source, analyser, timer };
-    if (context.state === 'suspended') void context.resume();
+    void resumeSharedAudio();
   }, [publishState, stopSpeakingMonitor]);
 
   const refreshRemote = useCallback(() => {
@@ -463,10 +479,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const config = QUALITY[qualityRef.current];
           const baseScale = screenScaleForQuality(track.getSettings(), config);
           state.screenSenderSince = Date.now();
+          state.screenWarmupHeld = true;
           state.screenBaseScale = baseScale;
           state.screenScale = baseScale;
           state.screenTuningPending = true;
-          void tuneScreenPeer(state, sender, config, config.bitrate, baseScale).then((applied) => {
+          void tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true).then((applied) => {
             if (peers.current.get(target) !== state) return;
             state.screenTuningPending = !applied;
             if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
@@ -496,6 +513,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       recoveryAttempts: 0,
       connectedSince: 0,
       screenSenderSince: localStreams.current.has('screen') ? Date.now() : 0,
+      screenWarmupHeld: localStreams.current.has('screen'),
       mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
@@ -583,7 +601,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           if (screenTrack && sender) {
             const config = QUALITY[qualityRef.current];
             const baseScale = screenScaleForQuality(screenTrack.getSettings(), config);
-            void tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, Math.max(baseScale, state.screenScale)).then((applied) => {
+            void tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, Math.max(baseScale, state.screenScale), Date.now() - state.screenSenderSince < SCREEN_WARMUP_MS).then((applied) => {
               if (peers.current.get(peerId) === state) state.screenTuningPending = !applied;
             });
           }
@@ -633,8 +651,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       state.makingOffer = true;
       state.needsNegotiation = false;
       if (iceRestart) state.pc.restartIce();
-      const offer = await state.pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
-      await setTunedLocalDescription(state.pc, offer, localStreams.current.has('screen') ? screenBitrateHints(QUALITY[qualityRef.current]) : undefined);
+      await state.pc.setLocalDescription(await state.pc.createOffer(iceRestart ? { iceRestart: true } : undefined));
       socket?.emit('rtc:offer', { target: peerId, sdp: state.pc.localDescription });
       if (state.negotiationRecoveryTimer) window.clearTimeout(state.negotiationRecoveryTimer);
       state.negotiationRecoveryTimer = undefined;
@@ -814,8 +831,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         if (sender) {
           const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
           state.screenSenderSince = Date.now();
+          state.screenWarmupHeld = true;
           state.screenTuningPending = true;
-          const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
+          const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true);
           state.screenTuningPending = !applied;
           if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
           state.screenBitrate = config.bitrate;
@@ -880,18 +898,33 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       && currentProcessing.neural === wantsNeural) return current;
     const captureGeneration = ++microphoneCaptureGeneration.current;
 
-    const captureRawMicrophone = (browserNoiseSuppression: boolean) => navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: preferences.microphoneId ? { exact: preferences.microphoneId } : undefined,
-        echoCancellation: { ideal: true },
-        noiseSuppression: { ideal: browserNoiseSuppression },
-        autoGainControl: { ideal: true },
-        channelCount: { ideal: 1 },
-        sampleRate: { ideal: 48_000 },
-        sampleSize: { ideal: 16 },
-      },
-      video: false,
-    });
+    // Um id salvo pode existir na lista e mesmo assim recusar a captura: o
+    // PipeWire renumera nós ao reconectar e o Chromium guarda ids por origem.
+    // Sem esta reserva a pessoa ficava com o microfone escolhido e sem áudio
+    // nenhum saindo, e só "Padrão do sistema" funcionava.
+    const captureRawMicrophone = async (browserNoiseSuppression: boolean) => {
+      const shape = (deviceId?: ConstrainDOMString) => ({
+        audio: {
+          ...(deviceId === undefined ? {} : { deviceId }),
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: browserNoiseSuppression },
+          autoGainControl: { ideal: true },
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48_000 },
+          sampleSize: { ideal: 16 },
+        },
+        video: false,
+      } as MediaStreamConstraints);
+      if (!preferences.microphoneId) return navigator.mediaDevices.getUserMedia(shape());
+      try {
+        return await navigator.mediaDevices.getUserMedia(shape({ exact: preferences.microphoneId }));
+      } catch (error) {
+        if ((error as DOMException).name === 'NotAllowedError') throw error;
+        const stream = await navigator.mediaDevices.getUserMedia(shape());
+        microphoneFallbackNotice.current = true;
+        return stream;
+      }
+    };
 
     let rawStream = await captureRawMicrophone(!wantsNeural && preferences.noiseSuppression);
     let nextProcessing: MicrophoneProcessing;
@@ -985,6 +1018,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     newTrack.onended = recoverEndedMicrophone;
     if (nextProcessing.rawStream !== stream) {
       for (const rawTrack of nextProcessing.rawStream.getAudioTracks()) rawTrack.onended = recoverEndedMicrophone;
+    }
+    microphoneSignal.current = { lastSignalAt: Date.now(), warned: false };
+    if (microphoneFallbackNotice.current) {
+      microphoneFallbackNotice.current = false;
+      onError('O microfone escolhido não aceitou a captura; voltei para o padrão do sistema.');
     }
     if (currentProcessing) await disposeMicrophoneProcessing(currentProcessing);
     else old?.getTracks().forEach((track) => track.stop());
@@ -1142,11 +1180,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (state.ignoreOffer) return;
       try {
         if (collision) await state.pc.setLocalDescription({ type: 'rollback' }).catch(() => undefined);
-        await state.pc.setRemoteDescription(sdp);
+        await setTunedRemoteDescription(state.pc, sdp, currentScreenHints(localStreams.current.has('screen'), qualityRef.current));
         state.ignoreOffer = false;
         await flushPendingCandidates(state);
-        const answer = await state.pc.createAnswer();
-        await setTunedLocalDescription(state.pc, answer, localStreams.current.has('screen') ? screenBitrateHints(QUALITY[qualityRef.current]) : undefined);
+        await state.pc.setLocalDescription(await state.pc.createAnswer());
         socket.emit('rtc:answer', { target: from, sdp: state.pc.localDescription });
         if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
       } catch {
@@ -1158,7 +1195,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const state = peers.current.get(from);
       if (state && state.pc.signalingState === 'have-local-offer') {
         try {
-          await state.pc.setRemoteDescription(sdp);
+          await setTunedRemoteDescription(state.pc, sdp, currentScreenHints(localStreams.current.has('screen'), qualityRef.current));
           state.ignoreOffer = false;
           await flushPendingCandidates(state);
           if (state.needsNegotiation) window.setTimeout(() => void negotiateRef.current(from), 0);
@@ -1370,8 +1407,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             rttMs: path.rttMs,
             availableOutgoingBitrate: path.availableOutgoingBitrate,
             fractionLost: outbound.fractionLost,
-            warmingUp: sampledAt - state.screenSenderSince < 10_000,
+            warmingUp: sampledAt - state.screenSenderSince < SCREEN_WARMUP_MS,
           });
+          // Quando a janela de abertura termina, o perfil volta a mandar na
+          // troca entre resolução e FPS — e isso precisa ser reaplicado.
+          const holdResolution = sampledAt - state.screenSenderSince < SCREEN_WARMUP_MS;
+          const warmupChanged = state.screenWarmupHeld !== holdResolution;
+          state.screenWarmupHeld = holdResolution;
           const encodedFrames = outbound.framesEncoded;
           const totalEncodeTime = outbound.totalEncodeTime;
           const encodedDelta = encodedFrames !== undefined && state.lastFramesEncoded !== undefined ? encodedFrames - state.lastFramesEncoded : 0;
@@ -1399,8 +1441,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           state.screenScale = encoderDecision.scale;
           state.healthyEncoderSamples = encoderDecision.healthySamples;
           state.encoderPressureSamples = encoderDecision.pressureSamples;
-          if (bitrateChanged || scaleChanged || state.screenTuningPending) {
-            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, bitrateDecision.bitrate, encoderDecision.scale));
+          if (bitrateChanged || scaleChanged || warmupChanged || state.screenTuningPending) {
+            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, bitrateDecision.bitrate, encoderDecision.scale, holdResolution));
           }
 
           if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
@@ -1461,6 +1503,37 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       neuralFallback.current = true;
       onError('O filtro neural parou de processar; seu microfone voltou pelo caminho simples.');
       void ensureMicrophoneRef.current().catch(() => undefined);
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [channelId, onError]);
+
+  // Um microfone que abre sem captar nada é silencioso dos dois lados: quem
+  // fala não percebe e quem ouve acha que a call caiu. Aqui o próprio app
+  // avisa em vez de deixar a pessoa descobrir sozinha.
+  useEffect(() => {
+    if (!channelId) return;
+    const timer = window.setInterval(() => {
+      const processing = microphoneProcessing.current;
+      const track = processing?.outputStream.getAudioTracks()[0];
+      const signal = microphoneSignal.current;
+      if (!processing || !track || track.readyState !== 'live' || !track.enabled || mutedRef.current) {
+        signal.lastSignalAt = Date.now();
+        return;
+      }
+      const meter = processing.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
+      if (!meter || speakingMonitor.current?.context.state !== 'running') {
+        signal.lastSignalAt = Date.now();
+        return;
+      }
+      const now = Date.now();
+      if (analyserLevel(meter) > 0.006) {
+        signal.lastSignalAt = now;
+        signal.warned = false;
+        return;
+      }
+      if (signal.warned || now - signal.lastSignalAt < 25_000) return;
+      signal.warned = true;
+      onError('Seu microfone está aberto mas não capta som. Tente “Padrão do sistema” em Configurações › Microfone.');
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [channelId, onError]);
@@ -1774,8 +1847,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
       if (!sender) continue;
       state.screenSenderSince = Date.now();
+      state.screenWarmupHeld = true;
       state.screenTuningPending = true;
-      const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale);
+      const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true);
       if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
       state.screenTuningPending = !applied;
       if (!applied) rejectedByBrowser += 1;

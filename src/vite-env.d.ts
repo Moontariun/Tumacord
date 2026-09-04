@@ -20,7 +20,13 @@ interface DiscoveredCall {
   lastSeen: number;
 }
 
+interface DocumentPictureInPicture extends EventTarget {
+  readonly window: Window | null;
+  requestWindow: (options?: { width?: number; height?: number; disallowReturnToOpener?: boolean; preferInitialWindowPlacement?: boolean }) => Promise<Window>;
+}
+
 interface Window {
+  documentPictureInPicture?: DocumentPictureInPicture;
   tumacordDesktop?: {
     isDesktop: true;
     getSources: () => Promise<DesktopSource[]>;

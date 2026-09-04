@@ -1,6 +1,36 @@
 # Histórico de versões
 
-## 0.6.0 — estabilidade real da live, áudio previsível e interface redesenhada
+## 0.7.0 — abertura nítida da live, seletores próprios e presença enxuta
+
+**Transmissão**
+
+- as dicas de bitrate passaram a viajar na descrição **remota**: o Chromium recusa editar codecs na própria SDP local, então na 0.6.0 elas caíam no fallback e a live continuava abrindo borrada. Agora o encoder já nasce perto do perfil escolhido;
+- nos primeiros nove segundos a transmissão segura a resolução enquanto o bitrate sobe. Passada essa janela o perfil volta a mandar, então 60 FPS continua priorizando fluidez para jogo;
+- o ponto de partida subiu para 85% do perfil e o piso para 35%.
+
+**Áudio e microfone**
+
+- um microfone escolhido nas configurações que recusa a captura agora cai para o padrão do sistema com aviso, em vez de deixar a pessoa falando sem que ninguém ouça;
+- o aplicativo avisa quando o microfone está aberto mas não capta som nenhum;
+- o monitor de fala passou a dividir o mesmo `AudioContext` do restante do aplicativo.
+
+**Interface**
+
+- os seletores deixaram de usar o `<select>` nativo, cujo popup ignora o tema escuro no Linux e abria com as opções em branco. A lista agora é desenhada pelo Tumacord, com teclado e sem ser cortada pelo rodapé;
+- rodapé da call reorganizado: estado da malha, qualidade e áudio da live viraram pastilhas da mesma altura, alinhadas, que quebram para a linha de baixo em vez de espremer o texto;
+- o botão de mutar a live não troca mais o rótulo, então nada muda de tamanho ao clicar;
+- a lista da direita mostra só quem está online, sem repetir o estado da chamada;
+- o topo da barra lateral mostra apenas a marca Tumacord;
+- novo ícone de bandeja: contorno fino em vez do desenho preenchido, ainda em branco;
+- a live solta passou a abrir em uma janela de documento própria — a janela nativa de vídeo do Chromium escurecia a imagem com a barra de controles dele sempre que recebia foco.
+
+**Desktop**
+
+- o Chromium não trata mais a janela coberta pela live flutuante como oculta, então a imagem não escurece nem engasga quando a janela solta ganha foco.
+
+## 0.6.0 — estabilidade real da live, áudio previsível e interface redesenhada (afetada)
+
+> **Aviso:** na v0.6.0 as dicas de bitrate não chegavam ao encoder, então a live ainda abria borrada; os seletores nativos abriam com as opções em branco no Linux e a live solta escurecia ao receber foco. Use a v0.7.0.
 
 **Transmissão e enlace**
 

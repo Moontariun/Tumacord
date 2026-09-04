@@ -70,8 +70,8 @@ export function maximumAdaptiveScreenScale(baseScale: number): number {
 export function screenBitrateHints(config: ScreenQualityConfig): { startKbps: number; minKbps: number; maxKbps: number } {
   const maxKbps = Math.round(config.bitrate / 1_000);
   return {
-    startKbps: Math.round(maxKbps * 0.7),
-    minKbps: Math.round(maxKbps * 0.25),
+    startKbps: Math.round(maxKbps * 0.85),
+    minKbps: Math.round(maxKbps * 0.35),
     maxKbps,
   };
 }

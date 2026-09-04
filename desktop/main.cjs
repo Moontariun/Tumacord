@@ -22,6 +22,11 @@ if (safeGpuMode) app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('enable-features', streamingFeatures(process.platform, gpuVendors, safeGpuMode).join(','));
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+// Sem estes, o Chromium trata a janela coberta pela live flutuante como
+// oculta e reduz o ritmo de composição: a imagem escurece e engasga
+// exatamente quando a janela solta ganha foco.
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 const isDevelopment = Boolean(process.env.TUMACORD_WEB_URL);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();

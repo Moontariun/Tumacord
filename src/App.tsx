@@ -3,8 +3,10 @@ import { io, type Socket } from 'socket.io-client';
 import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { profileIsNewer } from '../shared/profileVersion';
 import { Icon } from './components/Icon';
+import { Dropdown } from './components/Dropdown';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
+import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
@@ -15,6 +17,7 @@ import logoUrl from '../assets/tumacord-logo.png';
 import packageMetadata from '../package.json';
 
 const APP_VERSION = packageMetadata.version;
+const qualityDropdownOptions = qualityOptions.map(([value, option]) => ({ value, label: option.label }));
 
 // Um erro dentro de um efeito derrubava a árvore inteira: a janela ficava
 // preta e, ao desmontar, o hook de voz saía da call sozinho. Agora o erro para
@@ -95,7 +98,6 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     <form className="login-card" onSubmit={submit}>
       <img className="login-logo" src={logoUrl} alt="Marca do Tumacord" />
       <div className="brand-title">Tuma<span>cord</span></div>
-      <p>{mode === 'register' ? 'Crie sua conta e entre na turma.' : 'Entre e o Tumacord encontra a turma sozinho.'}</p>
       <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
         <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'ZeroTier/LAN, host dinâmico' : 'Disponível no aplicativo'}</small></span></button>
         <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
@@ -468,7 +470,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     </nav>
 
     <aside className="channel-sidebar">
-      <header className="server-header"><span>{snapshot.serverName}</span></header>
+      <header className="server-header"><span className="brand-mark">Tuma<span>cord</span></span></header>
       <div className="channel-scroll">
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
@@ -667,7 +669,7 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
     <div className="call-footer">
       <div className="call-status-tools">
         {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /><span>Reconectar</span></button></div>}
-        {inThisCall && voice.screenOn && <label className="quality-picker"><span><i /> Qualidade ao vivo</span><select value={voice.quality} onChange={(event) => { const next = event.target.value as StreamQuality; void voice.setQuality(next).then((applied) => { if (applied) onNotice(`Live ajustada para ${qualityOptions.find(([value]) => value === next)?.[1].label ?? next}.`); }); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>}
+        {inThisCall && voice.screenOn && <div className="quality-picker"><span><i /> Qualidade ao vivo</span><Dropdown label="Qualidade da transmissão ao vivo" value={voice.quality} options={qualityDropdownOptions} onChange={(next) => { void voice.setQuality(next as StreamQuality).then((applied) => { if (applied) onNotice(`Live ajustada para ${SCREEN_QUALITIES[next as StreamQuality]?.label ?? next}.`); }); }} /></div>}
       </div>
       <div className="call-primary-controls">
         {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
@@ -679,7 +681,7 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
         </>}
       </div>
       <div className="call-viewer-tools">
-        {visibleVideoMedia.some((media) => media.kind === 'screen') && <div className={`stream-audio-controls ${streamMuted ? 'is-muted' : ''}`}><button type="button" aria-pressed={streamMuted} onClick={() => setStreamMuted(!streamMuted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>{streamMuted ? 'Live muda' : 'Live'}</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></div>}
+        {visibleVideoMedia.some((media) => media.kind === 'screen') && <div className={`stream-audio-controls ${streamMuted ? 'is-muted' : ''}`}><button type="button" aria-pressed={streamMuted} onClick={() => setStreamMuted(!streamMuted)} title={streamMuted ? 'Ativar áudio da live' : 'Mutar áudio da live'}><Icon name={streamMuted ? 'volumeOff' : 'volume'} /></button><span>Live</span><input type="range" min="0" max="2" step="0.01" value={streamMuted ? 0 : streamVolume} onChange={(event) => { setStreamMuted(false); setStreamVolume(Number(event.target.value)); }} aria-label="Volume da live (até 200%)" /><output>{streamMuted ? 0 : Math.round(streamVolume * 100)}%</output></div>}
       </div>
     </div>
   </main>;
@@ -688,7 +690,7 @@ function CallView({ voice, channel, members, speakerId, userVolumes, streamVolum
 function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolume, onMute, onOpen, onClose, onNotice }: { media: RemoteMedia; speakerId: string; muted: boolean; volume: number; rawVolume: number; onVolume: (volume: number) => void; onMute: () => void; onOpen: () => void; onClose: () => void; onNotice: (message: string) => void }) {
   const frame = useRef<HTMLElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
-  const detachedLive = useDetachedLive(mediaRef);
+  const detachedLive = useDetachedLive(mediaRef, `${media.user?.username ?? 'Tumacord'} · AO VIVO`);
   const drag = useRef<{ offsetX: number; offsetY: number } | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
@@ -724,13 +726,28 @@ function FloatingLivePlayer({ media, speakerId, muted, volume, rawVolume, onVolu
   </aside>;
 }
 
-// A live solta usa a janela nativa de picture-in-picture do Chromium: ela fica
-// sobre os outros aplicativos e continua visível com o Tumacord minimizado. O
-// áudio segue pelo grafo da janela principal, então volume e mute continuam
-// valendo para ela.
-function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>) {
+// A live solta abre uma janela própria de picture-in-picture: ela fica acima
+// dos outros aplicativos e continua visível com o Tumacord minimizado. Usamos
+// a variante "document", que é uma janela HTML de verdade — a variante de
+// vídeo do Chromium escurece a imagem com a barra de controles dele sempre que
+// a janela recebe foco. O áudio segue pelo grafo da janela principal, então
+// volume e mute continuam valendo.
+function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, title: string) {
   const [detached, setDetached] = useState(false);
-  const supported = typeof document !== 'undefined' && document.pictureInPictureEnabled;
+  const detachedWindow = useRef<Window | null>(null);
+  const home = useRef<{ parent: Node; next: ChildNode | null } | null>(null);
+  const supported = typeof window !== 'undefined'
+    && (Boolean(window.documentPictureInPicture?.requestWindow) || (typeof document !== 'undefined' && document.pictureInPictureEnabled));
+
+  const bringBack = useCallback(() => {
+    const video = mediaRef.current;
+    const origin = home.current;
+    if (video && origin?.parent.isConnected) origin.parent.insertBefore(video, origin.next);
+    home.current = null;
+    detachedWindow.current = null;
+    setDetached(false);
+  }, [mediaRef]);
+
   useEffect(() => {
     const video = mediaRef.current;
     if (!video) return;
@@ -738,21 +755,53 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>) {
     const leave = () => setDetached(false);
     video.addEventListener('enterpictureinpicture', enter);
     video.addEventListener('leavepictureinpicture', leave);
-    setDetached(document.pictureInPictureElement === video);
     return () => {
       video.removeEventListener('enterpictureinpicture', enter);
       video.removeEventListener('leavepictureinpicture', leave);
     };
   }, [mediaRef]);
+
+  const bringBackRef = useRef(bringBack);
+  bringBackRef.current = bringBack;
   useEffect(() => () => {
-    if (document.pictureInPictureElement && document.pictureInPictureElement === mediaRef.current) void document.exitPictureInPicture().catch(() => undefined);
-  }, [mediaRef]);
+    const opened = detachedWindow.current;
+    if (opened) {
+      bringBackRef.current();
+      opened.close();
+    } else if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => undefined);
+    }
+  }, []);
+
   const toggle = async () => {
     const video = mediaRef.current;
     if (!video || !supported) return false;
     try {
-      if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
-      else await video.requestPictureInPicture();
+      if (detachedWindow.current) {
+        const opened = detachedWindow.current;
+        bringBack();
+        opened.close();
+        return true;
+      }
+      if (document.pictureInPictureElement === video) {
+        await document.exitPictureInPicture();
+        return true;
+      }
+      const factory = window.documentPictureInPicture;
+      if (factory?.requestWindow) {
+        const opened = await factory.requestWindow({ width: 960, height: 540 });
+        home.current = { parent: video.parentNode!, next: video.nextSibling };
+        opened.document.title = title;
+        const style = opened.document.createElement('style');
+        style.textContent = 'html,body{margin:0;height:100%;background:#06070b;overflow:hidden}video{display:block;width:100%;height:100%;object-fit:contain;background:#06070b}';
+        opened.document.head.append(style);
+        opened.document.body.append(video);
+        opened.addEventListener('pagehide', () => bringBackRef.current(), { once: true });
+        detachedWindow.current = opened;
+        setDetached(true);
+        return true;
+      }
+      await video.requestPictureInPicture();
       return true;
     } catch {
       return false;
@@ -772,7 +821,7 @@ function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState;
 function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onNotice }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onNotice?: (message: string) => void }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
-  const detachedLive = useDetachedLive(mediaRef);
+  const detachedLive = useDetachedLive(mediaRef, label);
   const canDetach = Boolean(screen && remote && detachedLive.supported);
   const [fullscreen, setFullscreen] = useState(false);
   const fullscreenRef = useRef(false);
@@ -938,31 +987,18 @@ function VoiceMemberVolume({ member, volume, onVolume, onProfile, onClose }: { m
 
 function MemberList({ users, voiceMembers, currentUserId, serverUrl, onProfile }: { users: PublicUser[]; voiceMembers: VoiceState[]; currentUserId: string; serverUrl: string; onProfile: (user: PublicUser) => void }) {
   const voiceByUser = useMemo(() => new Map(voiceMembers.map((member) => [member.id, member])), [voiceMembers]);
-  const inCall = users.filter((user) => voiceByUser.has(user.id));
-  const available = users.filter((user) => !voiceByUser.has(user.id));
-  const renderMember = (user: PublicUser) => {
-    const voice = voiceByUser.get(user.id);
-    const self = user.id === currentUserId;
-    return <article className={`member-row ${voice?.speaking ? 'speaking' : ''} ${voice?.screen ? 'is-streaming' : ''} ${voice ? 'in-call' : 'available'}`} key={user.id}>
-      <div className="member-row-main">
-        <button className="member-profile" onClick={() => onProfile(user)}>
-          <Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online />
-          <span className="member-copy">
-            <span className="member-name"><strong>{user.username}</strong>{self && <em>Você</em>}</span>
-            <small><i className={voice ? 'voice-presence' : ''} /><span>{voice ? (voice.pingMs < 9999 ? `Na chamada · ${voice.pingMs} ms` : 'Na chamada') : 'Online agora'}</span>{voice?.screen && <em className="member-inline-live">AO VIVO</em>}</small>
-          </span>
-        </button>
-        <span className="member-badges">
-          {voice?.isHost && <span className="member-host" title="Host da chamada"><Icon name="host" /></span>}
-        </span>
-      </div>
-    </article>;
-  };
+  const people = useMemo(() => [...users].sort((left, right) => Number(right.id === currentUserId) - Number(left.id === currentUserId) || left.username.localeCompare(right.username, 'pt-BR')), [currentUserId, users]);
   return <aside className="member-list">
-    <header><div><small>Presença</small><h3>Pessoas online</h3></div><span title={`${users.length} online`}>{users.length}</span></header>
+    <header><h3>Online</h3><span title={`${users.length} ${users.length === 1 ? 'pessoa online' : 'pessoas online'}`}>{users.length}</span></header>
     <div className="member-list-scroll">
-      {inCall.length > 0 && <section className="member-section"><div className="member-section-title"><span>Na chamada</span><b>{inCall.length}</b></div>{inCall.map(renderMember)}</section>}
-      {available.length > 0 && <section className="member-section"><div className="member-section-title"><span>Disponíveis</span><b>{available.length}</b></div>{available.map(renderMember)}</section>}
+      {people.map((user) => {
+        const voice = voiceByUser.get(user.id);
+        return <button className={`member-row ${voice?.speaking ? 'speaking' : ''}`} key={user.id} onClick={() => onProfile(user)} title={`Ver perfil de ${user.username}`}>
+          <Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online />
+          <span className="member-name">{user.username}{user.id === currentUserId && <em>você</em>}</span>
+          {voice?.screen && <i className="live-dot" title="Transmitindo agora" />}
+        </button>;
+      })}
       {!users.length && <div className="member-list-empty"><Icon name="users" /><strong>Ninguém por aqui</strong><span>Seus amigos aparecem quando entram.</span></div>}
     </div>
   </aside>;
@@ -1107,7 +1143,7 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
       <DeviceSelect label="Saída de áudio" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
       <DeviceSelect label="Câmera" value={devices.preferences.cameraId} devices={devices.cameras} onChange={(value) => update('cameraId', value)} />
       <label className="sound-toggle"><input type="checkbox" checked={devices.preferences.noiseSuppression} onChange={(event) => update('noiseSuppression', event.target.checked)} /><span><strong>Supressão neural de ruído</strong><small>GTCRN em WebAssembly para reduzir teclado, ventilador e ruído ambiente sem enviar seu áudio para nenhum serviço.</small></span></label>
-      <label className="setting-label">Qualidade da transmissão<select value={quality} onChange={(event) => { void setQuality(event.target.value as StreamQuality); }}>{qualityOptions.map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select></label>
+      <div className="setting-label"><span className="setting-title">Qualidade da transmissão<small>Vale para a próxima live e para a que já estiver no ar.</small></span><Dropdown label="Qualidade da transmissão" value={quality} options={qualityDropdownOptions} onChange={(next) => { void setQuality(next as StreamQuality); }} /></div>
       <label className="sound-toggle"><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong><small>Entrada, saída, mensagens, microfone e troca de host.</small></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
       <div className="quality-note"><strong>Áudio da transmissão</strong><span>Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.</span></div>
@@ -1116,7 +1152,11 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
 }
 
 function DeviceSelect({ label, hint, value, devices, onChange }: { label: string; hint?: string; value: string; devices: MediaDeviceInfo[]; onChange: (value: string) => void }) {
-  return <label className="setting-label"><span className="setting-title">{label}{hint && <small>{hint}</small>}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Padrão do sistema</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{cleanDeviceLabel(device.label) || `${label} ${index + 1}`}</option>)}</select></label>;
+  const options = [
+    { value: '', label: 'Padrão do sistema' },
+    ...devices.map((device, index) => ({ value: device.deviceId, label: cleanDeviceLabel(device.label) || `${label} ${index + 1}` })),
+  ];
+  return <div className="setting-label"><span className="setting-title">{label}{hint && <small>{hint}</small>}</span><Dropdown label={label} value={value} options={options} onChange={onChange} /></div>;
 }
 
 function ShareSetupModal({ initialQuality, busy, onContinue, onClose }: { initialQuality: StreamQuality; busy: boolean; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {
