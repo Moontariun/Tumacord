@@ -4,9 +4,8 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { TumacordDiscovery, sanitizeMembers } = require('../desktop/discovery.cjs') as {
+const { TumacordDiscovery } = require('../desktop/discovery.cjs') as {
   TumacordDiscovery: new (onChange: (calls: unknown[]) => void, options: { createSocket: () => FakeSocket; networkInterfaces?: () => NodeJS.Dict<import('node:os').NetworkInterfaceInfo[]> }) => { close(): void; refreshInterfaces(): void };
-  sanitizeMembers: (value: unknown) => { id: string; username: string; muted: boolean; screen: boolean }[];
 };
 
 class FakeSocket extends EventEmitter {
@@ -67,27 +66,4 @@ test('interface ZeroTier que aparece ou some atualiza o multicast sem reiniciar'
   assert.deepEqual(socket.memberships, ['10.10.10.2', '10.10.20.2']);
   assert.deepEqual(socket.droppedMemberships, ['10.10.10.2']);
   discovery.close();
-});
-
-test('a lista de participantes anunciada é limpa e limitada antes de entrar no pacote', () => {
-  assert.deepEqual(sanitizeMembers([
-    { id: 'a', username: '  Moontariun  ', screen: true },
-    { id: 'a', username: 'Duplicado' },
-    { id: '', username: 'Sem id' },
-    { id: 'b', username: '' },
-    { id: 'c', username: 'tumati', muted: true },
-  ]), [
-    { id: 'a', username: 'Moontariun', muted: false, screen: true },
-    { id: 'c', username: 'tumati', muted: true, screen: false },
-  ]);
-});
-
-test('um anúncio hostil não estoura o pacote nem injeta campos', () => {
-  const flood = Array.from({ length: 40 }, (_, index) => ({ id: `id-${index}`, username: 'x'.repeat(120), isHost: true }));
-  const cleaned = sanitizeMembers(flood);
-  assert.equal(cleaned.length, 10);
-  assert.equal(cleaned[0].username.length, 24);
-  assert.deepEqual(Object.keys(cleaned[0]).sort(), ['id', 'muted', 'screen', 'username']);
-  assert.deepEqual(sanitizeMembers('não é lista'), []);
-  assert.deepEqual(sanitizeMembers(undefined), []);
 });

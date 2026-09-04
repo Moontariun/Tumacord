@@ -1216,8 +1216,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .member-list .live-dot { animation: none; }
 .member-row.speaking { border-color: transparent; background: transparent; }
 
-.voice-member-mini.remote { opacity: .82; }
-.voice-member-mini.remote:hover { opacity: 1; }
 
 .voice-volume-mute {
   min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 7px;

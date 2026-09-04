@@ -38,6 +38,17 @@ let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
 let quittingAfterAudioCleanup = false;
 let safeGpuRelaunching = false;
+let liveWindow;
+
+// "screen-saver" é o nível mais alto que o Electron expõe; é o que mantém a
+// live visível sobre um jogo em tela cheia. Nem todo compositor Wayland honra
+// os dois ajustes, então nenhum deles pode derrubar a janela se falhar.
+function applyLivePin(target, pinned) {
+  if (!target || target.isDestroyed()) return false;
+  try { target.setAlwaysOnTop(pinned, pinned ? 'screen-saver' : 'normal'); } catch { /* compositor sem suporte */ }
+  try { target.setVisibleOnAllWorkspaces(pinned, { visibleOnFullScreenWindow: pinned }); } catch { /* idem */ }
+  return pinned;
+}
 
 if (!hasSingleInstanceLock) app.quit();
 app.on('second-instance', () => {
@@ -159,10 +170,12 @@ async function createWindow() {
     };
   });
   window.webContents.on('did-create-window', (child) => {
-    child.setAlwaysOnTop(true, 'floating');
+    liveWindow = child;
+    applyLivePin(child, true);
     child.setMenuBarVisibility(false);
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     child.webContents.on('will-navigate', (event) => event.preventDefault());
+    child.on('closed', () => { if (liveWindow === child) liveWindow = undefined; });
   });
   window.on('enter-full-screen', () => window.webContents.send('tumacord:fullscreen-changed', true));
   window.on('leave-full-screen', () => {
@@ -236,6 +249,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
   ipcMain.handle('tumacord:discover-calls', () => discovery.list());
   ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery.setHosting(details));
+  ipcMain.handle('tumacord:pin-live-window', (_event, pinned) => applyLivePin(liveWindow, pinned === true));
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
     const next = !mainWindow.isFullScreen();

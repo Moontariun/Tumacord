@@ -8,13 +8,6 @@ interface DesktopSource {
   appIcon?: string;
 }
 
-interface DiscoveredCallMember {
-  id: string;
-  username: string;
-  muted?: boolean;
-  screen?: boolean;
-}
-
 interface DiscoveredCall {
   hostId: string;
   hostUserId: string;
@@ -22,7 +15,6 @@ interface DiscoveredCall {
   callId: string;
   callName: string;
   participants: number;
-  members?: DiscoveredCallMember[];
   url: string;
   pingMs: number;
   lastSeen: number;
@@ -42,10 +34,11 @@ interface Window {
     stopScreenAudio: () => Promise<{ ok: boolean }>;
     discoverCalls: () => Promise<DiscoveredCall[]>;
     onCallsChanged: (listener: (calls: DiscoveredCall[]) => void) => () => void;
-    setHosting: (details: null | { hostUserId: string; hostUsername: string; callId: string; callName: string; participants: number; members: DiscoveredCallMember[] }) => Promise<void>;
+    setHosting: (details: null | { hostUserId: string; hostUsername: string; callId: string; callName: string; participants: number }) => Promise<void>;
     toggleFullscreen: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     onFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;
+    pinLiveWindow: (pinned: boolean) => Promise<boolean>;
     beginMediaFullscreen: () => Promise<boolean>;
     endMediaFullscreen: () => Promise<boolean>;
     onMediaFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;

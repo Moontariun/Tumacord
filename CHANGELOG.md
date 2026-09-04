@@ -1,6 +1,14 @@
 # Histórico de versões
 
-## 0.7.2 — a call de quem está na rede vira a call da turma
+## 0.7.3 — a call volta ao que funcionava e a live solta ganha o alfinete
+
+- **a "Call Geral" voltou ao comportamento da 0.7.1.** A mudança da 0.7.2, que fazia a call de quem está na rede aparecer dentro do canal de voz, não funcionou na prática e foi desfeita por inteiro: a seção "Calls na rede" está de volta no topo da barra lateral e entrar no canal volta a abrir a call deste computador. A descoberta também voltou a anunciar apenas a contagem de participantes;
+- **a janela solta da live ganhou um alfinete.** O botão fica na própria janela e alterna entre mantê-la acima de todos os aplicativos — inclusive sobre um jogo em tela cheia — e deixá-la se comportar como uma janela comum. Ela abre fixada;
+- o mudo e o volume por pessoa continuam valendo só para a voz, com a transmissão mantendo o próprio controle, e a lista de presença da direita continua sem reagir a quem está falando. Essas duas partes da 0.7.2 foram mantidas.
+
+## 0.7.2 — a call de quem está na rede vira a call da turma (revertida)
+
+> **Aviso:** a mudança da call da rede não funcionou na prática e foi desfeita na v0.7.3. O mudo por pessoa e a lista de presença sem piscar continuam valendo.
 
 **A call da turma**
 

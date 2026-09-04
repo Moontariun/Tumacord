@@ -2,7 +2,7 @@ import { Component, FormEvent, useCallback, useEffect, useMemo, useRef, useState
 import { io, type Socket } from 'socket.io-client';
 import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundle, PublicUser, ServerSnapshot, UserProfile, VoiceState } from '../shared/types';
 import { profileIsNewer } from '../shared/profileVersion';
-import { Icon } from './components/Icon';
+import { Icon, PIN_OFF_PATH, PIN_PATH } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
@@ -161,7 +161,6 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const handoffTimer = useRef<number | null>(null);
   const handoffGeneration = useRef(0);
   const resumedCall = useRef('');
-  const networkCallRef = useRef<DiscoveredCall | undefined>(undefined);
   const selectedChannelRef = useRef(selectedChannelId);
   const syncFilesRef = useRef(syncFiles);
   useEffect(() => { selectedChannelRef.current = selectedChannelId; }, [selectedChannelId]);
@@ -405,24 +404,15 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   }, [connected, session.resumeChannelId, session.serverUrl, visibleChannels, voice]);
 
   const selfVoiceState = voice.members.find((member) => member.id === session.user.id);
-  // Quem hospeda anuncia a lista de participantes, e não só a contagem: é isso
-  // que permite ver a call da rede já povoada, sem uma seção separada.
-  const advertisedMembers = useMemo(
-    () => voice.members.map((member) => ({ id: member.id, username: member.username, muted: member.muted, screen: member.screen })),
-    [voice.members],
-  );
-  const advertisedSignature = advertisedMembers.map((member) => `${member.id}:${member.muted ? 1 : 0}${member.screen ? 1 : 0}`).join(',');
   useEffect(() => {
     if (!window.tumacordDesktop || session.connectionMode === 'server') return;
     if (voice.channelId && selfVoiceState?.isHost) {
       const callName = snapshot.channels.find((channel) => channel.id === voice.channelId)?.name ?? 'Call Geral';
-      void window.tumacordDesktop.setHosting({ hostUserId: session.user.id, hostUsername: session.user.username, callId: voice.channelId, callName, participants: advertisedMembers.length, members: advertisedMembers });
+      void window.tumacordDesktop.setHosting({ hostUserId: session.user.id, hostUsername: session.user.username, callId: voice.channelId, callName, participants: voice.members.length });
     } else {
       void window.tumacordDesktop.setHosting(null);
     }
-    // advertisedSignature resume a lista: sem ele o anúncio sairia a cada
-    // atualização de ping, que muda a cada dois segundos.
-  }, [advertisedSignature, selfVoiceState?.isHost, session.connectionMode, session.user.id, session.user.username, snapshot.channels, voice.channelId]);
+  }, [selfVoiceState?.isHost, session.connectionMode, session.user.id, session.user.username, snapshot.channels, voice.channelId, voice.members.length]);
 
   useEffect(() => () => { void window.tumacordDesktop?.setHosting(null); }, []);
 
@@ -470,23 +460,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     showToast(enabled ? 'Arquivos serão mantidos neste computador.' : 'Novos arquivos só serão baixados quando você pedir.');
   };
 
-  // Entrar na call precisa levar para onde a turma está. Sem isso, clicar em
-  // "Call Geral" abria a sala vazia do servidor local enquanto todo mundo
-  // conversava no host de outra pessoa.
-  const joinVoiceChannel = useCallback(async (channel: Channel) => {
-    if (voice.channelId === channel.id) return;
-    const remote = networkCallRef.current;
-    if (remote) {
-      showToast(`Entrando na call de ${remote.hostUsername}…`, 'join');
-      await enterDiscoveredCall(remote);
-      return;
-    }
-    await voice.join(channel.id);
-  }, [enterDiscoveredCall, showToast, voice]);
-
   const openChannel = (channel: Channel) => {
     setSelectedChannelId(channel.id);
-    if (channel.type === 'voice') void joinVoiceChannel(channel);
+    if (channel.type === 'voice' && voice.channelId !== channel.id) void voice.join(channel.id);
   };
 
   const createChannel = (type: Channel['type']) => {
@@ -499,11 +475,6 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
   const currentUser = snapshot.onlineUsers.find((user) => user.id === session.user.id) ?? session.user;
   const isServerAdmin = session.connectionMode === 'server' && Boolean(currentUser.isAdmin);
-  // Se alguém da rede já está reunido em uma call e eu não estou em nenhuma,
-  // essa é *a* call: ela aparece no canal de voz com as pessoas dentro, e
-  // entrar leva direto ao host dela.
-  const networkCall = session.connectionMode !== 'server' && !voice.channelId ? discoveredCalls[0] : undefined;
-  networkCallRef.current = networkCall;
   const activeRemoteScreen = voice.remoteMedia.find((media) => media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
   const browsingText = selectedChannel?.type !== 'voice';
   const backgroundVoiceMedia = browsingText ? voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0) : [];
@@ -521,19 +492,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     <aside className="channel-sidebar">
       <header className="server-header"><span className="brand-mark">Tuma<span>cord</span></span></header>
       <div className="channel-scroll">
+        {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
         </ChannelGroup>
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call da turma'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
-            {networkCall?.members?.map((member) => <div className="voice-member-entry" key={`rede:${member.id}`}>
-              <button className={`voice-member-mini remote ${member.screen ? 'is-streaming' : ''}`} onClick={() => void enterDiscoveredCall(networkCall)} title={`Entrar na call com ${member.username}`}>
-                <Avatar name={member.username} serverUrl="" small />
-                <span className="voice-member-copy"><strong>{member.username}</strong><small>{member.screen ? <><span className="live-dot" /> AO VIVO</> : 'na call'}</small></span>
-                <span className="voice-member-icons">{member.muted && <Icon name="micOff" />}</span>
-              </button>
-            </div>)}
             {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
               const self = member.id === session.user.id;
               const canAdjustVolume = !self && voice.members.some((candidate) => candidate.id === member.id);
@@ -575,7 +540,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       </header>
       <div className="content-row">
         {selectedChannel?.type === 'voice'
-          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} onJoin={() => void joinVoiceChannel(selectedChannel)} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
+          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} p2pMode={session.connectionMode !== 'server'} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
         {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
@@ -668,7 +633,7 @@ interface VoiceViewModel {
   user: { id: string; username: string };
 }
 
-function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, p2pMode, onJoin, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; p2pMode: boolean; onJoin: () => void; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
+function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, p2pMode, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; p2pMode: boolean; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
   const [hiddenScreenUsers, setHiddenScreenUsers] = useState<Set<string>>(() => new Set());
   const inThisCall = voice.channelId === channel.id;
@@ -832,9 +797,44 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, tit
     home.current = { parent: video.parentNode!, next: video.nextSibling };
     opened.document.title = title;
     const style = opened.document.createElement('style');
-    style.textContent = 'html,body{margin:0;height:100%;background:#06070b;overflow:hidden}video{display:block;width:100%;height:100%;object-fit:contain;background:#06070b}';
+    style.textContent = [
+      'html,body{margin:0;height:100%;background:#06070b;overflow:hidden}',
+      'video{display:block;width:100%;height:100%;object-fit:contain;background:#06070b}',
+      '.live-pin{position:fixed;top:10px;right:10px;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(9,10,15,.66);color:#c9cbd6;cursor:pointer;opacity:.28;transition:opacity .15s,background .15s,color .15s,border-color .15s;backdrop-filter:blur(8px)}',
+      'body:hover .live-pin{opacity:.92}',
+      '.live-pin:hover{opacity:1;background:rgba(9,10,15,.88);color:#fff}',
+      '.live-pin.is-pinned{border-color:rgba(125,92,255,.5);background:rgba(125,92,255,.26);color:#fff}',
+      '.live-pin svg{width:17px;height:17px}',
+    ].join('');
     opened.document.head.append(style);
     opened.document.body.append(video);
+    // O botão vive no documento da janela solta, mas o clique roda aqui: mesmo
+    // processo e mesma origem. É assim que ele alcança a ponte do Electron.
+    const desktop = window.tumacordDesktop;
+    if (desktop?.pinLiveWindow) {
+      const pin = opened.document.createElement('button');
+      pin.type = 'button';
+      let pinned = true;
+      const paint = () => {
+        pin.className = `live-pin ${pinned ? 'is-pinned' : ''}`;
+        pin.title = pinned
+          ? 'Fixada acima dos outros aplicativos — clique para soltar'
+          : 'Fixar acima dos outros aplicativos, inclusive sobre um jogo';
+        pin.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${pinned ? PIN_PATH : PIN_OFF_PATH}"/></svg>`;
+      };
+      pin.addEventListener('click', () => {
+        const next = !pinned;
+        pinned = next;
+        paint();
+        void desktop.pinLiveWindow(next).then((applied) => {
+          if (applied === next) return;
+          pinned = applied;
+          paint();
+        }).catch(() => undefined);
+      });
+      paint();
+      opened.document.body.append(pin);
+    }
     opened.addEventListener('pagehide', () => bringBackRef.current(), { once: true });
     detachedWindow.current = opened;
     setDetached(true);
