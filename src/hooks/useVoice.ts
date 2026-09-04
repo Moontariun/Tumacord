@@ -44,6 +44,8 @@ interface PeerConnectionState {
   receiverFrozenUntil: number;
   lastScreenBytes?: number;
   lastScreenPackets?: number;
+  rateBytes?: number;
+  rateAt?: number;
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
   inboundVoice: Map<string, { packets?: number; stalled: number }>;
@@ -1405,6 +1407,17 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           senderReport?.forEach((stat) => senderStats.push(stat as unknown as RtcStatLike));
           const outbound = outboundVideoMetrics(senderStats.length ? senderStats : stats);
           const config = QUALITY[qualityRef.current];
+          // Taxa real de saída nesta janela. É ela que diz se a estimativa de
+          // banda do Chromium tem algo a dizer: com a tela parada enviamos uma
+          // fração do teto, e a estimativa acompanha o envio, não a rota.
+          const elapsedSeconds = state.rateAt ? (sampledAt - state.rateAt) / 1_000 : 0;
+          const sendingBitrate = outbound.bytesSent !== undefined && state.rateBytes !== undefined && elapsedSeconds >= 0.5
+            ? Math.max(0, ((outbound.bytesSent - state.rateBytes) * 8) / elapsedSeconds)
+            : undefined;
+          if (outbound.bytesSent !== undefined) {
+            state.rateBytes = outbound.bytesSent;
+            state.rateAt = sampledAt;
+          }
           const bitrateDecision = adaptScreenBitrate({
             targetBitrate: config.bitrate,
             currentBitrate: state.screenBitrate ?? config.bitrate,
@@ -1413,6 +1426,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             availableOutgoingBitrate: path.availableOutgoingBitrate,
             fractionLost: outbound.fractionLost,
             warmingUp: sampledAt - state.screenSenderSince < SCREEN_WARMUP_MS,
+            sendingBitrate,
           });
           // Quando a janela de abertura termina, o perfil volta a mandar na
           // troca entre resolução e FPS — e isso precisa ser reaplicado.

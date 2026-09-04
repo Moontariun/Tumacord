@@ -17,7 +17,7 @@ import { VoiceRooms } from './voiceRooms.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3927);
-const serverName = process.env.SERVER_NAME?.trim() || 'Tumacord da Turma';
+const serverName = process.env.SERVER_NAME?.trim() || 'Tumacord';
 const dataDirectory = process.env.DATA_DIR ?? './data';
 const sessionTtl = Number(process.env.SESSION_TTL_DAYS ?? 30) * 86_400_000;
 const serverVersion = packageMetadata.version;

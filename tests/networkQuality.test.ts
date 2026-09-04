@@ -155,17 +155,30 @@ test('congelamento informado pelo receptor reduz resolução imediatamente', () 
   assert.equal(result.healthySamples, 0);
 });
 
-test('encoder saudável recupera resolução aos poucos sem oscilar', () => {
+test('encoder saudável recupera resolução sem arrastar por um minuto', () => {
   const result = adaptEncoderScale({
     targetFps: 60,
     currentScale: 1.5,
-    healthySamples: 5,
+    healthySamples: 2,
     pressureSamples: 0,
     averageEncodeMs: 5,
     qualityLimitationReason: 'none',
   });
-  assert.equal(result.scale, 1.35);
+  assert.equal(result.scale, 1.25);
   assert.equal(result.healthySamples, 0);
+});
+
+test('cena normal de jogo não conta como encoder atrasado', () => {
+  const result = adaptEncoderScale({
+    targetFps: 60,
+    currentScale: 1,
+    healthySamples: 0,
+    pressureSamples: 1,
+    averageEncodeMs: 14,
+    qualityLimitationReason: 'bandwidth',
+  });
+  assert.equal(result.stressed, false);
+  assert.equal(result.scale, 1);
 });
 
 test('adaptação respeita a escala mínima do perfil sem voltar à resolução máxima', () => {
@@ -180,4 +193,44 @@ test('adaptação respeita a escala mínima do perfil sem voltar à resolução 
     qualityLimitationReason: 'none',
   });
   assert.equal(result.scale, 2);
+});
+
+test('tela parada não vira congestionamento: a estimativa só vale quando estamos usando o teto', () => {
+  const idle = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 8_000_000,
+    healthySamples: 0,
+    rttMs: 12,
+    availableOutgoingBitrate: 300_000,
+    fractionLost: 0,
+    sendingBitrate: 240_000,
+  });
+  assert.equal(idle.congested, false);
+  assert.equal(idle.bitrate, 8_000_000);
+});
+
+test('com o teto realmente em uso, a estimativa volta a valer', () => {
+  const busy = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 8_000_000,
+    healthySamples: 0,
+    rttMs: 12,
+    availableOutgoingBitrate: 3_000_000,
+    fractionLost: 0,
+    sendingBitrate: 7_400_000,
+  });
+  assert.equal(busy.congested, true);
+  assert.ok(busy.bitrate < 8_000_000);
+});
+
+test('perda e latência continuam derrubando o bitrate mesmo com pouco envio', () => {
+  const lossy = adaptScreenBitrate({
+    targetBitrate: 8_000_000,
+    currentBitrate: 8_000_000,
+    healthySamples: 0,
+    rttMs: 400,
+    fractionLost: 0.12,
+    sendingBitrate: 120_000,
+  });
+  assert.equal(lossy.congested, true);
 });

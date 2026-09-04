@@ -61,6 +61,7 @@ export interface StreamAdaptationInput {
   availableOutgoingBitrate?: number;
   fractionLost?: number;
   warmingUp?: boolean;
+  sendingBitrate?: number;
 }
 
 export interface StreamAdaptationResult {
@@ -164,10 +165,15 @@ export function adaptScreenBitrate(input: StreamAdaptationInput): StreamAdaptati
   const target = Math.max(300_000, input.targetBitrate);
   const minimum = Math.min(target, Math.max(350_000, Math.min(1_500_000, target * 0.12)));
   const current = Math.min(target, Math.max(minimum, input.currentBitrate));
-  // Nos primeiros segundos o estimador do Chromium ainda sobe a partir de
-  // ~300 kbps: tratar esse valor como capacidade real fazia a live abrir
-  // borrada e levar mais de um minuto para voltar ao perfil escolhido.
-  const available = input.warmingUp ? undefined : input.availableOutgoingBitrate;
+  // A estimativa do Chromium não mede a capacidade do enlace em abstrato: ela
+  // cresce a partir do que realmente sai. Com a tela parada o envio despenca e
+  // a estimativa junto — e ler isso como congestionamento cortava o teto até o
+  // piso, deixando a live borrada assim que a cena voltava a se mexer, com
+  // ping baixo o tempo todo. Enquanto não estamos usando o teto, a estimativa
+  // não diz nada sobre capacidade. O mesmo vale nos primeiros segundos, quando
+  // ela ainda sobe a partir de ~300 kbps.
+  const probing = input.sendingBitrate === undefined || input.sendingBitrate >= current * 0.5;
+  const available = input.warmingUp || !probing ? undefined : input.availableOutgoingBitrate;
   const rtt = input.rttMs;
   const loss = input.fractionLost;
   const severelyCongested = (rtt !== undefined && rtt >= 320)
@@ -212,7 +218,10 @@ export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptat
   const minimumScale = Math.max(1, input.minimumScale ?? 1);
   const maximumScale = Math.max(minimumScale, input.maximumScale ?? 2);
   const frameBudgetMs = 1_000 / Math.max(1, input.targetFps);
-  const encoderOverBudget = input.averageEncodeMs !== undefined && input.averageEncodeMs >= frameBudgetMs * 0.82;
+  // A 60 FPS o orçamento é de 16,7 ms por quadro. Marcar pressão já em 13,7 ms
+  // derrubava a resolução em cenas normais de jogo; o encoder só está mesmo
+  // atrasado quando encosta no orçamento inteiro.
+  const encoderOverBudget = input.averageEncodeMs !== undefined && input.averageEncodeMs >= frameBudgetMs * 0.95;
   const stressed = Boolean(input.receiverFrozen) || input.qualityLimitationReason === 'cpu' || encoderOverBudget;
   const pressureSamples = stressed ? input.pressureSamples + 1 : Math.max(0, input.pressureSamples - 1);
   const pressureThreshold = input.receiverFrozen ? 1 : 2;
@@ -227,11 +236,13 @@ export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptat
 
   const healthy = !stressed
     && (input.qualityLimitationReason === undefined || input.qualityLimitationReason === 'none')
-    && (input.averageEncodeMs === undefined || input.averageEncodeMs < frameBudgetMs * 0.55);
+    && (input.averageEncodeMs === undefined || input.averageEncodeMs < frameBudgetMs * 0.7);
   const healthySamples = healthy ? input.healthySamples + 1 : Math.max(0, input.healthySamples - 1);
-  if (input.currentScale > minimumScale && healthySamples >= 6) {
+  // A resolução caía em duas amostras e voltava em seis, de 0,15 em 0,15: um
+  // engasgo isolado custava quase um minuto de imagem borrada.
+  if (input.currentScale > minimumScale && healthySamples >= 3) {
     return {
-      scale: roundedScale(Math.max(minimumScale, input.currentScale - 0.15), minimumScale, maximumScale),
+      scale: roundedScale(Math.max(minimumScale, input.currentScale - 0.25), minimumScale, maximumScale),
       healthySamples: 0,
       pressureSamples,
       stressed: false,

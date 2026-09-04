@@ -107,14 +107,14 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
         <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
         <p className="server-security-note"><Icon name="shield" /><span><strong>Conexão protegida</strong><small>HTTPS/WSS quando configurado; voz, câmera e tela usam WebRTC criptografado.</small></span></p>
       </div>}
-      <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Como a turma te chama?" required /></label>
+      <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Seu nome de usuário" required /></label>
       <label>Senha <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••" required /></label>
       {mode === 'register' && <label>Confirmar senha <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Repita a senha" required /></label>}
       <label className="remember-login"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span><strong>Continuar conectado</strong><small>Reabre o Tumacord nesta conta sem pedir login novamente.</small></span></label>
       {error && <div className="form-error">{error}</div>}
       <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar no Tumacord'}</button>
       <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
-      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para a turma. As calls da rede aparecem dentro do app; ninguém precisa copiar IP.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
+      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para o grupo. As calls da rede aparecem dentro do app; ninguém precisa copiar IP.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
       <div className="app-version" title={`Versão instalada: ${APP_VERSION}`}>Tumacord v{APP_VERSION}</div>
     </form>
   </main>;
@@ -496,7 +496,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
         </ChannelGroup>
-        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call da turma'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
             {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
@@ -531,7 +531,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       <header className="topbar">
         <Icon name={selectedChannel?.type === 'voice' ? 'voice' : 'hash'} />
         <strong>{selectedChannel?.name ?? 'Tumacord'}</strong>
-        {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa da turma sem complicação.</span>}
+        {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
         <div className="topbar-spacer" />
         <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : 'Host dinâmico pela rede local/ZeroTier'}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
         {isServerAdmin && <button className="admin-toolbar-button" onClick={() => setAdminOpen(true)} title="Painel administrativo"><Icon name="shield" /></button>}
@@ -931,7 +931,14 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     if (fullscreenRef.current) await toggleFullscreen();
     if (!await detachedLive.toggle()) onNotice?.('Não consegui soltar a live em uma janela separada neste sistema.');
   };
-  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  // Na tela cheia real o modo teatro não muda nada, então o duplo clique e o
+  // botão ficam fora de ação em vez de responderem sem efeito.
+  const toggleTheater = () => { if (!fullscreen) onTheater?.(theater ? null : mediaKey); };
+  const onTileDoubleClick = (event: React.MouseEvent) => {
+    if ((event.target as HTMLElement).closest('.video-actions')) return;
+    toggleTheater();
+  };
+  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {
@@ -1047,7 +1054,26 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
 }
 
 function VoiceMemberVolume({ member, volume, muted, onVolume, onMuted, onProfile, onClose }: { member: VoiceState; volume: number; muted: boolean; onVolume: (volume: number) => void; onMuted: (muted: boolean) => void; onProfile: () => void; onClose: () => void }) {
-  return <div className="voice-volume-popover">
+  const root = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    // O botão que abre o painel fica no mesmo bloco: tratar o bloco inteiro
+    // como "dentro" evita fechar e reabrir no mesmo clique.
+    const entry = root.current?.closest('.voice-member-entry') ?? root.current;
+    const onPointerDown = (event: PointerEvent) => {
+      if (entry?.contains(event.target as Node)) return;
+      close.current();
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close.current(); };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+  return <div className="voice-volume-popover" ref={root}>
     <header><div><strong>{member.username}</strong><small>{member.pingMs < 9999 ? `${member.pingMs} ms` : 'Na chamada'}</small></div><button onClick={onClose} title="Fechar"><Icon name="close" /></button></header>
     <label><span><Icon name={muted || volume === 0 ? 'volumeOff' : 'volume'} /> Volume da voz</span><output>{muted ? 0 : Math.round(volume * 100)}%</output><input type="range" min="0" max="2" step="0.01" value={muted ? 0 : volume} disabled={muted} onChange={(event) => onVolume(Number(event.target.value))} aria-label={`Volume da voz de ${member.username}`} /></label>
     <button className={`voice-volume-mute ${muted ? 'is-muted' : ''}`} aria-pressed={muted} onClick={() => onMuted(!muted)} title={muted ? 'A voz volta; a transmissão tem controle próprio' : 'Silencia só a voz; a transmissão tem controle próprio'}>

@@ -1,6 +1,6 @@
 # Tumacord 🍅
 
-O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele roda no seu próprio computador, usa o ZeroTier para colocar os amigos na mesma rede e envia a mídia diretamente entre os participantes com WebRTC.
+O Tumacord é um chat pessoal de voz, vídeo e texto para um grupo pequeno. Ele roda no seu próprio computador, usa o ZeroTier para colocar os amigos na mesma rede e envia a mídia diretamente entre os participantes com WebRTC.
 
 ## O que já funciona
 
@@ -43,15 +43,15 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para uma turma pequena. Ele
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/detached-live-and-tray-v0.7.6/scripts/install-v0.7.6.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-stability-and-stage-v0.7.7/scripts/install-v0.7.7.sh | bash
 ```
 
-Este comando instala a v0.7.6 a partir da branch separada `release/detached-live-and-tray-v0.7.6`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas. A partir da 0.7.1 o instalador reconhece corretamente que o código mudou: até a 0.7.0 ele identificava a build apenas pelo binário do Electron, que é igual em toda compilação, e reinstalar a mesma versão mantinha o código antigo rodando. O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.7.6, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-detached-live-and-tray-v0.7.6`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+Este comando instala a v0.7.7 a partir da branch separada `release/live-stability-and-stage-v0.7.7`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas. A partir da 0.7.1 o instalador reconhece corretamente que o código mudou: até a 0.7.0 ele identificava a build apenas pelo binário do Electron, que é igual em toda compilação, e reinstalar a mesma versão mantinha o código antigo rodando. O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.7.7, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-live-stability-and-stage-v0.7.7`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/detached-live-and-tray-v0.7.6/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-stability-and-stage-v0.7.7/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -95,7 +95,7 @@ Se houver firewall, libere TCP `3927` (sinalização), UDP `3928` (descoberta) e
 
 ## Servidor dedicado com Docker
 
-O contêiner dedicado mantém as contas e mensagens, faz a sinalização WebRTC e também hospeda a interface web. O servidor embutido do modo P2P não publica a versão web. Antes da primeira inicialização, crie a chave da turma:
+O contêiner dedicado mantém as contas e mensagens, faz a sinalização WebRTC e também hospeda a interface web. O servidor embutido do modo P2P não publica a versão web. Antes da primeira inicialização, crie a chave do servidor:
 
 ```bash
 cp .env.example .env
@@ -105,7 +105,7 @@ docker compose up -d --build
 
 Abra `http://IP-DO-SERVIDOR:4600` no navegador ou selecione **Servidor dedicado** no app e informe esse endereço e a chave. A primeira entrada com uma combinação local de usuário e senha cria a conta correspondente no servidor; as entradas seguintes autenticam essa conta. O usuário definido por `TUMACORD_ADMIN_USERNAME` — `Moontariun` por padrão — recebe o painel de administração apenas nesse modo.
 
-O arquivo `docker-compose.yml` publica a porta TCP `4600`, executa o processo como usuário sem privilégios, verifica a saúde do serviço, limita os logs e mantém contas, sessões, perfis, mensagens e anexos no volume `tumacord-data`. Senhas usam `scrypt`, tokens são armazenados somente como hashes SHA-256, a chave da turma é comparada em tempo constante e voz, câmera e tela usam DTLS-SRTP do WebRTC. Para acompanhar:
+O arquivo `docker-compose.yml` publica a porta TCP `4600`, executa o processo como usuário sem privilégios, verifica a saúde do serviço, limita os logs e mantém contas, sessões, perfis, mensagens e anexos no volume `tumacord-data`. Senhas usam `scrypt`, tokens são armazenados somente como hashes SHA-256, a chave do servidor é comparada em tempo constante e voz, câmera e tela usam DTLS-SRTP do WebRTC. Para acompanhar:
 
 ```bash
 docker compose logs -f tumacord-server
@@ -119,7 +119,7 @@ curl http://127.0.0.1:4600/api/health
 
 Nesse modo não há troca dinâmica do endereço do host: o contêiner mantém a sinalização e os dados, enquanto voz, câmera e tela continuam trafegando diretamente entre os participantes por WebRTC.
 
-Em uma rede ZeroTier privada, o túnel da rede já protege o tráfego até o servidor. Se a porta `4600` for exposta fora dessa rede, configure também `TUMACORD_TLS_CERT_FILE` e `TUMACORD_TLS_KEY_FILE` com caminhos de certificado e chave dentro da pasta `certs`; assim, login, chat e sinalização usam HTTPS/WSS. A chave da turma não substitui HTTPS em uma rede pública.
+Em uma rede ZeroTier privada, o túnel da rede já protege o tráfego até o servidor. Se a porta `4600` for exposta fora dessa rede, configure também `TUMACORD_TLS_CERT_FILE` e `TUMACORD_TLS_KEY_FILE` com caminhos de certificado e chave dentro da pasta `certs`; assim, login, chat e sinalização usam HTTPS/WSS. A chave do servidor não substitui HTTPS em uma rede pública.
 
 ## Áudio da transmissão no CachyOS
 
@@ -166,6 +166,6 @@ O servidor embutido P2P fica em `http://0.0.0.0:3927`, mas não serve páginas w
 
 ## Limites intencionais
 
-O Tumacord usa malha WebRTC, ótima para uma turma pequena (aproximadamente 2–8 pessoas, dependendo do upload de quem transmite). Uma sala grande precisaria de um SFU como mediasoup ou LiveKit. Não há recuperação de senha nem moderação avançada; a mídia é cifrada pelo próprio WebRTC, mas o chat armazenado no servidor não possui criptografia ponta a ponta adicional.
+O Tumacord usa malha WebRTC, ótima para um grupo pequeno (aproximadamente 2–8 pessoas, dependendo do upload de quem transmite). Uma sala grande precisaria de um SFU como mediasoup ou LiveKit. Não há recuperação de senha nem moderação avançada; a mídia é cifrada pelo próprio WebRTC, mas o chat armazenado no servidor não possui criptografia ponta a ponta adicional.
 
 Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre os computadores online, não é um banco global com consenso: mensagens disponíveis nos pares são preservadas, mas apagar ou editar mensagens distribuídas ainda não faz parte desta versão. Arquivos só permanecem garantidos enquanto o host atual ou algum participante que os sincronizou estiver disponível.

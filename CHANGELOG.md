@@ -1,5 +1,23 @@
 # Histórico de versões
 
+## 0.7.7 — a live para de embaçar sozinha, e o palco responde melhor
+
+**Estabilidade da imagem**
+
+- **tela parada deixou de ser lida como congestionamento.** A estimativa de banda do Chromium não mede a capacidade do enlace em abstrato: ela cresce a partir do que realmente sai. Com a tela parada o envio despenca e a estimativa junto — e o controlador cortava o teto até o piso (960 kbps em um perfil de 8 Mbps). Bastava a cena voltar a se mexer para a live aparecer borrada, com ping baixo o tempo todo, e ainda levava vários segundos para subir de novo. Agora a estimativa só pesa quando estamos de fato usando o teto; perda e latência continuam valendo sempre;
+- **o encoder deixou de ser dado como atrasado em cena normal de jogo.** A 60 FPS o orçamento é de 16,7 ms por quadro, e a marca de pressão estava em 13,7 ms — fácil de encostar sem que nada esteja errado. A pressão agora só conta ao encostar no orçamento inteiro;
+- a resolução caía em duas amostras e voltava em seis, de 0,15 em 0,15: um engasgo isolado custava quase um minuto de imagem borrada. A volta passou a ser em três amostras, de 0,25 em 0,25.
+
+**Palco**
+
+- clicar duas vezes na transmissão amplia dentro do app e clicar de novo volta à grade;
+- na tela cheia real o botão de voltar à grade fica desabilitado, em vez de responder sem efeito;
+- o painel de volume individual fecha ao clicar fora dele ou com Esc.
+
+**Texto**
+
+- as menções a "turma" saíram do aplicativo e da documentação; onde fazia falta, agora se lê "grupo".
+
 ## 0.7.6 — soltar a live volta a funcionar e a bandeja usa a marca colorida
 
 - **soltar a live parou de funcionar na 0.7.5.** Ao dar um nome próprio para a janela de cada mídia, o processo principal continuou autorizando apenas o nome exato `tumacord-live`: toda tentativa era negada e sobrava o aviso de que não deu para soltar. Agora qualquer janela da família `tumacord-live…` é autorizada, e tela e câmera podem sair juntas, cada uma na sua;
