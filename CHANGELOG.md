@@ -1,6 +1,13 @@
 # Histórico de versões
 
-## 0.7.5 — rodapé refeito, presença com ping e marca oficial na bandeja
+## 0.7.6 — soltar a live volta a funcionar e a bandeja usa a marca colorida
+
+- **soltar a live parou de funcionar na 0.7.5.** Ao dar um nome próprio para a janela de cada mídia, o processo principal continuou autorizando apenas o nome exato `tumacord-live`: toda tentativa era negada e sobrava o aviso de que não deu para soltar. Agora qualquer janela da família `tumacord-live…` é autorizada, e tela e câmera podem sair juntas, cada uma na sua;
+- o ícone da bandeja passou a ser o logo oficial do Tumacord, colorido — o mesmo do menu de aplicativos. A variante em preto e branco foi descartada.
+
+## 0.7.5 — rodapé refeito, presença com ping e marca oficial na bandeja (afetada)
+
+> **Aviso:** nesta versão a opção de soltar a live foi negada pelo processo principal e não funcionava. Corrigido na v0.7.6.
 
 **Rodapé da call**
 

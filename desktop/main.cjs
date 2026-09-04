@@ -147,7 +147,9 @@ async function createWindow() {
   // navegação e sempre acima dos outros aplicativos. Todo o resto continua
   // bloqueado.
   window.webContents.setWindowOpenHandler(({ frameName, url }) => {
-    if (frameName !== 'tumacord-live' || (url && url !== 'about:blank')) return { action: 'deny' };
+    // Cada mídia solta abre com um nome próprio (`tumacord-live-tela`,
+    // `tumacord-live-camera`…). Exigir o nome exato aqui negava todas elas.
+    if (!frameName.startsWith('tumacord-live') || (url && url !== 'about:blank')) return { action: 'deny' };
     return {
       action: 'allow',
       overrideBrowserWindowOptions: {
@@ -214,10 +216,9 @@ async function createWindow() {
 
 function createTray() {
   if (tray) return;
-  const iconPath = path.join(__dirname, '../assets/tumacord-tray.png');
+  const iconPath = path.join(__dirname, '../assets/tumacord-logo.png');
   const source = nativeImage.createFromPath(iconPath);
-  // A bandeja usa uma marca branca própria para permanecer legível nos temas
-  // escuros do KDE; o menu de aplicativos continua usando a versão colorida.
+  // A bandeja usa a marca oficial colorida, a mesma do menu de aplicativos.
   const icon = source.isEmpty() ? source : source.resize({ width: 32, height: 32 });
   tray = new Tray(icon);
   tray.setToolTip('Tumacord');
