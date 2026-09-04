@@ -3,6 +3,7 @@ type SinkCapableElement = HTMLAudioElement & { setSinkId?: (id: string) => Promi
 
 let shared: AudioContext | null = null;
 let master: GainNode | null = null;
+let limiter: DynamicsCompressorNode | null = null;
 let unavailable = false;
 let currentSink = '';
 let bridge: MediaStreamAudioDestinationNode | null = null;
@@ -25,7 +26,18 @@ function ensureBus(): { context: AudioContext; output: GainNode } | null {
   try {
     shared = new Constructor({ latencyHint: 'interactive' });
     master = shared.createGain();
-    master.connect(shared.destination);
+    // Um único limitador, no fim da mistura, só para impedir estouro. Antes
+    // cada faixa tinha o seu, com limiar de -1,5 dBFS e razão 20:1 — uma
+    // parede que devolvia 0,9 dB de diferença entre 100% e 200%, ou seja, o
+    // controle de volume por pessoa não fazia nada na metade de cima.
+    limiter = shared.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 6;
+    limiter.attack.value = 0.004;
+    limiter.release.value = 0.18;
+    master.connect(limiter);
+    limiter.connect(shared.destination);
     bridge = null;
     bridgeElement = null;
     const sink = currentSink;
@@ -34,6 +46,7 @@ function ensureBus(): { context: AudioContext; output: GainNode } | null {
   } catch {
     shared = null;
     master = null;
+    limiter = null;
     unavailable = true;
     return null;
   }
@@ -69,9 +82,10 @@ export function setSharedAudioSink(deviceId: string): void {
   if (!bus || deviceId === currentSink) return;
   const previous = currentSink;
   currentSink = deviceId;
+  const tail = limiter ?? bus.output;
   const routeToDefault = () => {
-    bus.output.disconnect();
-    bus.output.connect(bus.context.destination);
+    tail.disconnect();
+    tail.connect(bus.context.destination);
     if (bridgeElement) {
       bridgeElement.pause();
       bridgeElement.srcObject = null;
@@ -98,8 +112,8 @@ export function setSharedAudioSink(deviceId: string): void {
   void element.setSinkId(deviceId)
     .then(() => {
       if (currentSink !== deviceId) return;
-      bus.output.disconnect();
-      bus.output.connect(target);
+      tail.disconnect();
+      tail.connect(target);
       element.srcObject = target.stream;
       return element.play().catch(() => {
         // Sem reprodução no elemento não sai som nenhum: melhor voltar para a

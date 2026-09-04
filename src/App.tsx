@@ -506,7 +506,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
               return <div className="voice-member-entry" key={member.socketId}>
                 <button className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => { if (canAdjustVolume) setVoiceMenuUserId((current) => current === member.id ? null : member.id); else setProfileUser(member); }} title={canAdjustVolume ? `Ajustar volume de ${member.username}` : `Ver perfil de ${member.username}`}>
                   <Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small />
-                  <span className="voice-member-copy"><strong>{member.username}</strong><small>{member.screen ? <><span className="live-dot" /> AO VIVO</> : member.pingMs < 9999 ? `${member.pingMs} ms` : 'na call'}</small></span>
+                  {/* Quem já está na call não precisa do ping aqui: a lista de
+                      presença, à direita, é o lugar dessa informação. */}
+                  <span className="voice-member-copy"><strong>{member.username}</strong>{member.screen && <small><span className="live-dot" /> AO VIVO</small>}</span>
                   <span className="voice-member-icons">{member.isHost && <Icon name="host" />}{(member.muted || mutedUsers[member.id]) && <Icon name="micOff" />}</span>
                 </button>
                 {voiceMenuUserId === member.id && canAdjustVolume && <VoiceMemberVolume member={member} volume={memberVolume} muted={Boolean(mutedUsers[member.id])} onVolume={(volume) => setUserVolume(member.id, volume)} onMuted={(muted) => setUserMuted(member.id, muted)} onProfile={() => setProfileUser(member)} onClose={() => setVoiceMenuUserId(null)} />}
@@ -997,14 +999,10 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
     }
     const source = context.createMediaStreamSource(stream);
     const gain = context.createGain();
-    const limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = -1.5;
-    limiter.knee.value = 0;
-    limiter.ratio.value = 20;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.1;
     gain.gain.value = 0;
-    source.connect(gain).connect(limiter).connect(output);
+    // O limitador agora vive no fim da mistura, no barramento compartilhado:
+    // um por faixa achatava o volume individual antes de ele chegar à saída.
+    source.connect(gain).connect(output);
     const apply = () => {
       const current = playback.current;
       const running = context.state === 'running';
@@ -1041,7 +1039,7 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
       window.removeEventListener('keydown', resume);
       document.removeEventListener('visibilitychange', resume);
       for (const track of audioTracks) track.removeEventListener('unmute', resume);
-      source.disconnect(); gain.disconnect(); limiter.disconnect();
+      source.disconnect(); gain.disconnect();
       syncPlayback.current = () => undefined;
       applyTrackGate(false);
       media.srcObject = null;

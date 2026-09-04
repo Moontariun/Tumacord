@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics } from '../src/lib/networkQuality.js';
+import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, SCALE_HOLD_MS, shouldApplyBitrateChange, shouldApplyScaleChange } from '../src/lib/networkQuality.js';
 
 test('latência usa o par ICE selecionado e ignora rota antiga', () => {
   const metrics = activePathMetrics([
@@ -233,4 +233,21 @@ test('perda e latência continuam derrubando o bitrate mesmo com pouco envio', (
     sendingBitrate: 120_000,
   });
   assert.equal(lossy.congested, true);
+});
+
+test('a resolução só muda quando a diferença importa e depois de segurar', () => {
+  // Ruído: meia amostra de diferença não vale um keyframe.
+  assert.equal(shouldApplyScaleChange({ currentScale: 1.5, nextScale: 1.6, msSinceChange: 60_000 }), false);
+  // Diferença real, mas cedo demais depois da última mudança.
+  assert.equal(shouldApplyScaleChange({ currentScale: 1, nextScale: 1.25, msSinceChange: 4_000 }), false);
+  assert.equal(shouldApplyScaleChange({ currentScale: 1, nextScale: 1.25, msSinceChange: SCALE_HOLD_MS }), true);
+  // Salto grande é aperto de verdade e não espera.
+  assert.equal(shouldApplyScaleChange({ currentScale: 1, nextScale: 1.75, msSinceChange: 500 }), true);
+});
+
+test('o teto de bitrate não é reaplicado por ruído', () => {
+  assert.equal(shouldApplyBitrateChange(8_000_000, 8_050_000), false);
+  assert.equal(shouldApplyBitrateChange(8_000_000, 6_400_000), true);
+  assert.equal(shouldApplyBitrateChange(1_000_000, 1_160_000), true);
+  assert.equal(shouldApplyBitrateChange(1_000_000, 1_060_000), false);
 });

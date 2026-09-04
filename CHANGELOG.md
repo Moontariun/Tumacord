@@ -1,5 +1,22 @@
 # Histórico de versões
 
+## 0.7.8 — menos piscadas na transmissão e volume por pessoa funcionando
+
+**Artefatos e piscadas na live**
+
+- **a própria adaptação era a origem das piscadas.** Toda mudança de `scaleResolutionDownBy` obriga o encoder a se reconfigurar: sai um keyframe e, com ele, um quadro visivelmente quadriculado. Com uma amostra a cada dois segundos e um controlador que muda de ideia com frequência, isso virava piscada constante — e a 0.7.7, ao acelerar a volta da resolução, aumentou o número dessas reconfigurações. Agora a escala só se move quando a diferença importa (0,2 ou mais) e depois de segurar doze segundos; um salto grande, que indica aperto real, continua imediato;
+- o teto de bitrate era reaplicado por diferenças de 50 kbps — 0,6% em um perfil de 8 Mbps, ou seja, ruído. Passou a exigir 10% de diferença;
+- o estado do encoder passou a guardar o que foi realmente aplicado, e não o que o controlador gostaria de aplicar. Sem isso, a decisão seguinte partiria de um valor que o encoder nunca recebeu.
+
+**Volume de cada pessoa na call**
+
+- **o controle não fazia efeito porque cada faixa tinha o próprio limitador**, com limiar de −1,5 dBFS e razão 20:1. Na prática isso devolvia 0,9 dB de diferença entre 100% e 200%: a metade de cima do controle não existia, e a de baixo vinha achatada. O limitador saiu de cada faixa e virou um só, no fim da mistura, apenas para impedir estouro;
+- mídia sem dono identificado caía no volume padrão e ignorava o ajuste. Agora o participante é resolvido pela lista da call quando o enlace ainda não trouxe o perfil.
+
+**Interface**
+
+- os participantes na barra da esquerda não mostram mais o ping; essa informação vive na lista de presença, à direita.
+
 ## 0.7.7 — a live para de embaçar sozinha, e o palco responde melhor
 
 **Estabilidade da imagem**

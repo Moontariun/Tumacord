@@ -8,7 +8,7 @@ import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { resumeSharedAudio, sharedAudioContext } from '../lib/audioBus';
 import { isPolitePeer, planPeerRecovery, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
-import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, type RtcStatLike } from '../lib/networkQuality';
+import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, shouldApplyBitrateChange, shouldApplyScaleChange, type RtcStatLike } from '../lib/networkQuality';
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
@@ -46,6 +46,7 @@ interface PeerConnectionState {
   lastScreenPackets?: number;
   rateBytes?: number;
   rateAt?: number;
+  lastScaleChangeAt: number;
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
   inboundVoice: Map<string, { packets?: number; stalled: number }>;
@@ -450,7 +451,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       for (const stream of peer.remoteStreams.values()) {
         if (!stream.getTracks().some((track) => track.readyState !== 'ended')) continue;
         const meta = streamMeta.current.get(streamMetadataKey(peerId, stream.id));
-        media.push({ peerId, user: peer.user, stream, kind: classifyRemoteStream(meta, stream, remoteMember, liveVideoStreamCount) });
+        // Sem dono identificado, o volume individual cai no padrão e o
+        // controle da barra lateral parece não fazer efeito.
+        media.push({ peerId, user: peer.user ?? remoteMember, stream, kind: classifyRemoteStream(meta, stream, remoteMember, liveVideoStreamCount) });
       }
     }
     setRemoteMedia(media);
@@ -521,6 +524,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       connectedSince: 0,
       screenSenderSince: localStreams.current.has('screen') ? Date.now() : 0,
       screenWarmupHeld: localStreams.current.has('screen'),
+      lastScaleChangeAt: 0,
       mutedAudioTimers: new Map(),
       screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
       healthyScreenSamples: 0,
@@ -849,6 +853,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           state.screenScale = baseScale;
           state.healthyEncoderSamples = 0;
           state.encoderPressureSamples = 0;
+          state.lastScaleChangeAt = 0;
           state.lastFramesEncoded = undefined;
           state.lastTotalEncodeTime = undefined;
           state.receiverFrozenUntil = 0;
@@ -1453,15 +1458,25 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             receiverFrozen: receiverReportedFreeze,
           });
           if (receiverReportedFreeze) state.receiverFrozenUntil = 0;
-          const bitrateChanged = Math.abs(bitrateDecision.bitrate - (state.screenBitrate ?? config.bitrate)) >= 50_000;
-          const scaleChanged = Math.abs(encoderDecision.scale - state.screenScale) >= 0.01;
+          // O que o controlador decide só vira comando quando muda alguma
+          // coisa de verdade. `state` guarda o que o encoder realmente tem,
+          // para que a próxima decisão parta do valor aplicado.
+          const appliedBitrate = state.screenBitrate ?? config.bitrate;
+          const bitrateChanged = shouldApplyBitrateChange(appliedBitrate, bitrateDecision.bitrate);
+          const nextScale = shouldApplyScaleChange({
+            currentScale: state.screenScale,
+            nextScale: encoderDecision.scale,
+            msSinceChange: sampledAt - (state.lastScaleChangeAt || state.screenSenderSince),
+          }) ? encoderDecision.scale : state.screenScale;
+          const scaleChanged = Math.abs(nextScale - state.screenScale) >= 0.01;
+          if (scaleChanged) state.lastScaleChangeAt = sampledAt;
           state.healthyScreenSamples = bitrateDecision.healthySamples;
-          state.screenBitrate = bitrateDecision.bitrate;
-          state.screenScale = encoderDecision.scale;
+          if (bitrateChanged) state.screenBitrate = bitrateDecision.bitrate;
+          state.screenScale = nextScale;
           state.healthyEncoderSamples = encoderDecision.healthySamples;
           state.encoderPressureSamples = encoderDecision.pressureSamples;
           if (bitrateChanged || scaleChanged || warmupChanged || state.screenTuningPending) {
-            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, bitrateDecision.bitrate, encoderDecision.scale, holdResolution));
+            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, nextScale, holdResolution));
           }
 
           if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
@@ -1890,6 +1905,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       state.screenScale = baseScale;
       state.healthyEncoderSamples = 0;
       state.encoderPressureSamples = 0;
+      state.lastScaleChangeAt = 0;
       state.lastFramesEncoded = undefined;
       state.lastTotalEncodeTime = undefined;
       state.receiverFrozenUntil = 0;

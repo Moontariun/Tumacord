@@ -250,3 +250,24 @@ export function adaptEncoderScale(input: EncoderAdaptationInput): EncoderAdaptat
   }
   return { scale: roundedScale(input.currentScale, minimumScale, maximumScale), healthySamples, pressureSamples, stressed };
 }
+
+// Cada mudança de `scaleResolutionDownBy` obriga o encoder a se reconfigurar:
+// sai um keyframe e, com ele, um quadro visivelmente quadriculado. Com uma
+// amostra a cada dois segundos, um controlador que muda de ideia com
+// frequência transforma isso em piscadas constantes na transmissão. A escala
+// só se move quando a diferença importa e depois de segurar por um tempo —
+// exceto num salto grande, que é sinal de aperto real.
+export const SCALE_HOLD_MS = 12_000;
+
+export function shouldApplyScaleChange(input: { currentScale: number; nextScale: number; msSinceChange: number }): boolean {
+  const delta = Math.abs(input.nextScale - input.currentScale);
+  if (delta < 0.2) return false;
+  if (delta >= 0.5) return true;
+  return input.msSinceChange >= SCALE_HOLD_MS;
+}
+
+// O teto de bitrate não reconfigura o encoder, mas reaplicá-lo por causa de
+// 50 kbps em 8 Mbps é ruído: 0,6% de diferença não muda imagem nenhuma.
+export function shouldApplyBitrateChange(currentBitrate: number, nextBitrate: number): boolean {
+  return Math.abs(nextBitrate - currentBitrate) >= Math.max(150_000, currentBitrate * 0.1);
+}
