@@ -690,7 +690,7 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
     <div className="call-footer">
       <div className="call-status-tools">
         {p2pMode && inThisCall && remoteMembers.length > 0 && <div className={`p2p-route ${routeRecovering ? 'recovering' : routeConnecting ? 'connecting' : 'stable'}`} title="Estado dos enlaces diretos WebRTC pela rede ZeroTier/LAN"><span><i /><strong>{routeRecovering ? 'Recuperando rota' : routeConnecting ? 'Conectando malha' : 'Malha P2P estável'}</strong><small>{routePing === undefined ? `${remoteMembers.length} ${remoteMembers.length === 1 ? 'par' : 'pares'}` : `${routePing} ms médio`}</small></span><button onClick={() => { const count = voice.recoverAllPeers(); onNotice(count ? `Reconectando ${count} ${count === 1 ? 'enlace P2P' : 'enlaces P2P'} sem sair da call.` : 'Não há outros participantes para reconectar.'); }}><Icon name="refresh" /><span>Reconectar</span></button></div>}
-        {inThisCall && voice.screenOn && <div className="quality-picker"><span><i /> Qualidade ao vivo</span><Dropdown label="Qualidade da transmissão ao vivo" value={voice.quality} options={qualityDropdownOptions} onChange={(next) => { void voice.setQuality(next as StreamQuality).then((applied) => { if (applied) onNotice(`Live ajustada para ${SCREEN_QUALITIES[next as StreamQuality]?.label ?? next}.`); }); }} /></div>}
+        {inThisCall && voice.screenOn && <div className="quality-picker" title="Qualidade da transmissão ao vivo"><span><i /> Qualidade</span><Dropdown label="Qualidade da transmissão ao vivo" value={voice.quality} options={qualityDropdownOptions} onChange={(next) => { void voice.setQuality(next as StreamQuality).then((applied) => { if (applied) onNotice(`Live ajustada para ${SCREEN_QUALITIES[next as StreamQuality]?.label ?? next}.`); }); }} /></div>}
       </div>
       <div className="call-primary-controls">
         {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
@@ -853,23 +853,30 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, tit
       await document.exitPictureInPicture().catch(() => undefined);
       return true;
     }
+    // No aplicativo instalado a janela nomeada vem primeiro: ela é uma janela
+    // do Electron de verdade, e só ela aceita o alfinete de ficar acima dos
+    // outros programas. Ela roda no mesmo processo e na mesma origem, então o
+    // vídeo apenas muda de documento e continua tocando.
+    const openNamedWindow = () => {
+      try {
+        const opened = window.open('', 'tumacord-live', 'width=960,height=540');
+        if (opened?.document) {
+          dressWindow(opened, video);
+          return true;
+        }
+        opened?.close();
+      } catch { /* sem janela nomeada neste host */ }
+      return false;
+    };
     const factory = window.documentPictureInPicture;
+    if (window.tumacordDesktop && openNamedWindow()) return true;
     if (factory?.requestWindow) {
       try {
         dressWindow(await factory.requestWindow({ width: 960, height: 540 }), video);
         return true;
       } catch { /* segue para a janela nomeada */ }
     }
-    // A janela nomeada roda no mesmo processo e na mesma origem, então o vídeo
-    // pode simplesmente mudar de documento e continuar tocando.
-    try {
-      const opened = window.open('', 'tumacord-live', 'width=960,height=540');
-      if (opened?.document) {
-        dressWindow(opened, video);
-        return true;
-      }
-      opened?.close();
-    } catch { /* segue para o picture-in-picture de vídeo */ }
+    if (openNamedWindow()) return true;
     if (document.pictureInPictureEnabled) {
       try {
         await video.requestPictureInPicture();
@@ -882,7 +889,7 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, tit
 }
 
 function ControlButton({ icon, label, active, danger, accent, onClick }: { icon: Parameters<typeof Icon>[0]['name']; label: string; active?: boolean; danger?: boolean; accent?: boolean; onClick: () => void }) {
-  return <button className={`call-control ${active ? 'active' : ''} ${danger ? 'danger' : ''} ${accent ? 'accent' : ''}`} onClick={onClick}><Icon name={icon} /><span>{label}</span></button>;
+  return <button className={`call-control ${active ? 'active' : ''} ${danger ? 'danger' : ''} ${accent ? 'accent' : ''}`} onClick={onClick} title={label} aria-label={label}><Icon name={icon} /></button>;
 }
 
 function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState; serverUrl: string; onProfile: (user: PublicUser) => void }) {
@@ -893,7 +900,7 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const detachedLive = useDetachedLive(mediaRef, label);
-  const canDetach = Boolean(screen && remote && detachedLive.supported);
+  const canDetach = Boolean(remote && detachedLive.supported);
   const [fullscreen, setFullscreen] = useState(false);
   const fullscreenRef = useRef(false);
   fullscreenRef.current = fullscreen;
@@ -929,7 +936,7 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     if (fullscreenRef.current) await toggleFullscreen();
     if (!await detachedLive.toggle()) onNotice?.('Não consegui soltar a live em uma janela separada neste sistema.');
   };
-  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>A live está em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer a live de volta para o app' : 'Soltar a live em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  return <div ref={tileRef} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={() => onTheater?.(theater ? null : mediaKey)} title={theater ? 'Voltar à grade' : 'Ampliar dentro do app'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {

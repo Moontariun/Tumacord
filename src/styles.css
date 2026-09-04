@@ -1226,3 +1226,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .voice-volume-mute svg { width: 14px; height: 14px; }
 .voice-volume-mute:hover { border-color: var(--border-strong); background: rgba(255,255,255,.07); color: var(--ink); }
 .voice-volume-mute.is-muted { border-color: rgba(255,77,79,.28); background: rgba(255,77,79,.11); color: #ef9092; }
+
+/* 0.7.4 — a pastilha da qualidade dimensiona pelo conteúdo. Antes o rótulo
+   não encolhia e o seletor tinha piso próprio, então a soma passava da
+   largura da pastilha e o botão saía por cima da borda. */
+.quality-picker { overflow: hidden; }
+.quality-picker > span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quality-picker .dropdown { flex: 1 1 auto; min-width: 118px; }
+.dropdown { min-width: 0; }
+.dropdown-trigger { min-width: 0; }
+
+/* Controles da call sem rótulo: o ícone fala por si e o nome fica na dica. */
+.call-control { min-width: 0; width: auto; padding: 0; gap: 0; font-size: 0; }
+.call-control svg { padding: 14px; }

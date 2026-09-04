@@ -1,5 +1,23 @@
 # Histórico de versões
 
+## 0.7.4 — microfone audível desde a abertura, alfinete que segura e rodapé sem sobreposição
+
+**Microfone**
+
+- **o microfone podia abrir mudo para os outros e só começar a funcionar depois de mexer nas configurações.** Sem um gesto do usuário o Chromium mantém o `AudioContext` do filtro neural suspenso: a faixa continua "live" e habilitada, mas o worklet não processa nada e só silêncio chega do outro lado. Trocar o dispositivo acontecia depois de um clique e por isso "consertava". Agora a captura confirma que o processamento está mesmo rodando e, se não estiver, cai na hora para o caminho simples — que não depende de contexto nenhum;
+- o vigia do microfone passou a reconhecer um contexto suspenso. Antes ele comparava a energia antes e depois do filtro, e um contexto parado não move nenhum dos dois medidores: a falha ficava invisível para ele.
+
+**Janela solta da live**
+
+- **o alfinete não segurava a janela.** Uma janela aberta pela principal nasce como filha dela no Electron: acompanha a janela-mãe, some quando ela é minimizada e não consegue subir acima de outro programa. Agora ela é solta do pai assim que aparece, e o alfinete volta a valer;
+- no aplicativo instalado a janela do Electron passou a ser a primeira opção, à frente do picture-in-picture do Chromium — só a janela do Electron aceita o alfinete;
+- a câmera de quem está na call também pode ser solta em janela, com o mesmo alfinete.
+
+**Rodapé da call**
+
+- o seletor de qualidade saía por cima da borda da pastilha: o rótulo não encolhia e o seletor tinha largura mínima própria, então a soma passava do espaço disponível. Agora a pastilha dimensiona pelo conteúdo e nada escapa;
+- os botões da call ficaram só com o ícone, em quadrados iguais. Os rótulos truncavam ("Ativar microf…") e agora vivem na dica de cada botão.
+
 ## 0.7.3 — a call volta ao que funcionava e a live solta ganha o alfinete
 
 - **a "Call Geral" voltou ao comportamento da 0.7.1.** A mudança da 0.7.2, que fazia a call de quem está na rede aparecer dentro do canal de voz, não funcionou na prática e foi desfeita por inteiro: a seção "Calls na rede" está de volta no topo da barra lateral e entrar no canal volta a abrir a call deste computador. A descoberta também voltou a anunciar apenas a contagem de participantes;

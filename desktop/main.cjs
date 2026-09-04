@@ -171,6 +171,10 @@ async function createWindow() {
   });
   window.webContents.on('did-create-window', (child) => {
     liveWindow = child;
+    // Sem soltar do pai, a janela é arrastada junto com a principal: ela some
+    // quando o Tumacord é minimizado e não consegue subir acima de outro app.
+    try { child.setParentWindow(null); } catch { /* alguns compositores recusam */ }
+    try { child.setSkipTaskbar(false); } catch { /* idem */ }
     applyLivePin(child, true);
     child.setMenuBarVisibility(false);
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

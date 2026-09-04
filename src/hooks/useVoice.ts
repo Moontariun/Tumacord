@@ -235,7 +235,12 @@ async function createNeuralMicrophone(rawStream: MediaStream, deviceId: string):
   if (!AudioContextClass || typeof AudioWorkletNode === 'undefined') throw new Error('AudioWorklet não está disponível.');
   const context = new AudioContextClass({ sampleRate: 48_000, latencyHint: 'interactive' });
   try {
-    await context.resume();
+    // Sem um gesto do usuário o Chromium mantém o contexto suspenso e o
+    // worklet não processa nada: a faixa continua "live" e habilitada, mas só
+    // silêncio chega do outro lado. Era isso que fazia o microfone não sair ao
+    // abrir o aplicativo e voltar sozinho depois de mexer nas configurações.
+    await Promise.race([context.resume(), new Promise((resolve) => window.setTimeout(resolve, 400))]);
+    if (context.state !== 'running') throw new Error('O processamento do microfone não iniciou nesta sessão.');
     const workletUrl = URL.createObjectURL(new Blob([gtcrnWorkletSource], { type: 'text/javascript' }));
     try {
       await context.audioWorklet.addModule(workletUrl);
@@ -1493,6 +1498,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const track = processing?.outputStream.getAudioTracks()[0];
       if (!processing?.neural || !track || track.readyState !== 'live' || !track.enabled || mutedRef.current) {
         silentSamples = 0;
+        return;
+      }
+      // Um contexto suspenso não move nenhum medidor, então a comparação de
+      // energia sozinha nunca perceberia a falha.
+      if (processing.context && processing.context.state !== 'running') {
+        void processing.context.resume().catch(() => undefined);
+        silentSamples += 1;
+        if (silentSamples < 4) return;
+        silentSamples = 0;
+        neuralFallback.current = true;
+        onError('O processamento do microfone não retomou; seu áudio voltou pelo caminho simples.');
+        void ensureMicrophoneRef.current().catch(() => undefined);
         return;
       }
       const raw = analyserLevel(processing.inputMeter);
