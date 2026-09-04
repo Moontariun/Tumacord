@@ -1228,4 +1228,3 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .voice-volume-mute svg { width: 14px; height: 14px; }
 .voice-volume-mute:hover { border-color: var(--border-strong); background: rgba(255,255,255,.07); color: var(--ink); }
 .voice-volume-mute.is-muted { border-color: rgba(255,77,79,.28); background: rgba(255,77,79,.11); color: #ef9092; }
-.voice-volume-note { color: #74778a; font-size: 9px; line-height: 1.45; text-align: center; }

@@ -1048,11 +1048,10 @@ function VoiceMemberVolume({ member, volume, muted, onVolume, onMuted, onProfile
   return <div className="voice-volume-popover">
     <header><div><strong>{member.username}</strong><small>{member.pingMs < 9999 ? `${member.pingMs} ms` : 'Na chamada'}</small></div><button onClick={onClose} title="Fechar"><Icon name="close" /></button></header>
     <label><span><Icon name={muted || volume === 0 ? 'volumeOff' : 'volume'} /> Volume da voz</span><output>{muted ? 0 : Math.round(volume * 100)}%</output><input type="range" min="0" max="2" step="0.01" value={muted ? 0 : volume} disabled={muted} onChange={(event) => onVolume(Number(event.target.value))} aria-label={`Volume da voz de ${member.username}`} /></label>
-    <button className={`voice-volume-mute ${muted ? 'is-muted' : ''}`} aria-pressed={muted} onClick={() => onMuted(!muted)}>
+    <button className={`voice-volume-mute ${muted ? 'is-muted' : ''}`} aria-pressed={muted} onClick={() => onMuted(!muted)} title={muted ? 'A voz volta; a transmissão tem controle próprio' : 'Silencia só a voz; a transmissão tem controle próprio'}>
       <Icon name={muted ? 'micOff' : 'mic'} />
-      <span>{muted ? `Ouvir ${member.username}` : `Silenciar ${member.username}`}</span>
+      <span>{muted ? 'Ouvir' : 'Silenciar'}</span>
     </button>
-    <small className="voice-volume-note">A transmissão dessa pessoa continua com o próprio volume.</small>
     <button className="voice-volume-profile" onClick={onProfile}>Ver perfil</button>
   </div>;
 }
