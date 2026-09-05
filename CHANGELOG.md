@@ -2,6 +2,12 @@
 
 ## 0.8.2 — o relay estava fora do ar desde que nasceu, e agora é escolha de cada um
 
+**O caminho de instalação apontava para a versão anterior**
+
+- o README mandava copiar `install-v0.8.1.sh`, da branch da 0.8.1. Pior do que um comando quebrado: ele funcionava, e instalava a versão errada em silêncio;
+- **`scripts/update-server.sh` sem argumento tinha como alvo padrão a branch da 0.8.1** — rodá-lo no servidor rebaixaria a instalação e traria o coturn de volta ao laço de reinício descrito abaixo;
+- um teste novo amarra README, instalador e atualizador à versão do `package.json`: ele lê a versão, exige que exista `install-v<versão>.sh`, extrai a branch de dentro desse script e cobra que README e atualizador apontem para ela. Verificado que **reprova o estado anterior**, restaurando os arquivos e rodando.
+
 **O relay nunca subiu. Nem uma vez.**
 
 - `tumacord-turn` estava em laço de reinício no servidor de produção — **298 reinícios**, saindo com 255 a cada tentativa. A primeira linha do log dizia: `turnserver: unrecognized option: no-loopback-peers`. O coturn **removeu** essa opção; hoje ele nega loopback por padrão e só aceita a inversa, `--allow-loopback-peers`. Uma opção desconhecida não é ignorada — o turnserver imprime o help e sai;

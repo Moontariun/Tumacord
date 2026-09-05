@@ -112,6 +112,31 @@ test('o instalador da 0.8.2 aponta para a branch da 0.8.2', () => {
   assert.match(bootstrap, /install-from-github\.sh/);
 });
 
+// Um comando de instalação que aponta para a versão anterior é pior do que um
+// comando quebrado: ele funciona, e instala a coisa errada em silêncio. Foi o
+// que houve na 0.8.2 — o `install-v0.8.2.sh` foi criado e o README continuou
+// mandando copiar o da 0.8.1, enquanto `update-server.sh` sem argumento
+// rebaixava o servidor para a versão com o relay em laço de reinício.
+//
+// A versão vem do package.json de propósito: um `npm version` sozinho passa a
+// reprovar aqui até que README, instalador e atualizador acompanhem.
+test('README, instalador e atualizador seguem a versão do package.json', () => {
+  const { version } = JSON.parse(readFileSync(path.join(projectRoot, 'package.json'), 'utf8')) as { version: string };
+  const instalador = `install-v${version}.sh`;
+  const bootstrap = readFileSync(path.join(scripts, instalador), 'utf8');
+  const branch = /branch="([^"]+)"/.exec(bootstrap)?.[1];
+  assert.ok(branch, `${instalador} precisa declarar a branch que instala`);
+
+  const readme = readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
+  const citados = [...new Set([...readme.matchAll(/install-v(\d+\.\d+\.\d+)\.sh/g)].map((achado) => achado[1]))];
+  assert.deepEqual(citados, [version], 'o README não pode mandar copiar instalador de outra versão');
+  assert.ok(readme.includes(`/${branch}/scripts/${instalador}`), `o README precisa apontar ${instalador} na branch ${branch}`);
+  assert.ok(readme.includes(`/${branch}/scripts/install-from-github.sh`), `o instalador genérico do README precisa vir da branch ${branch}`);
+
+  const atualizador = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.ok(atualizador.includes(`\${1:-${branch}}`), `update-server.sh sem argumento precisa ir para ${branch}, não para uma versão anterior`);
+});
+
 test('o bootstrap do GitHub prefere o instalador novo e mantém o nome antigo como reserva', () => {
   const bootstrap = readFileSync(path.join(scripts, 'install-from-github.sh'), 'utf8');
   assert.match(bootstrap, /installer="\$source_directory\/scripts\/install-linux\.sh"/);
