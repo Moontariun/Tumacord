@@ -17,7 +17,7 @@ const SHELL_SCRIPTS = [
   'install-linux.sh',
   'install-cachyos.sh',
   'install-from-github.sh',
-  'install-v0.8.4.sh',
+  'install-v0.8.5.sh',
   'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
@@ -100,8 +100,8 @@ test('sem nenhum gerenciador conhecido o instalador explica o que instalar à m�
 });
 
 test('o instalador da versão aponta para a branch da 0.8.0', () => {
-  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.4.sh'), 'utf8');
-  assert.match(bootstrap, /branch="release\/env-recovery-v0\.8\.4"/);
+  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.5.sh'), 'utf8');
+  assert.match(bootstrap, /branch="release\/compose-v2-guard-v0\.8\.5"/);
   assert.match(bootstrap, /install-from-github\.sh/);
 });
 
@@ -153,4 +153,24 @@ test('a atualização recupera o .env do contêiner em execução em vez de pedi
 test('a recuperação do .env exige que a chave exista, em vez de gerar um arquivo pela metade', () => {
   const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
   assert.match(script, /grep -q '\^SERVER_ACCESS_KEY=\.' <<<"\$env_atual" \|\| return 1/);
+});
+
+// O docker-compose v1 quebra com Docker Engine moderno e morre no meio da
+// recriação, depois de já ter parado o contêiner antigo.
+test('a atualização recusa o docker-compose v1 em vez de deixá-lo falhar no meio', () => {
+  const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.match(script, /docker compose version/, 'precisa preferir o plugin v2');
+  assert.match(script, /ContainerConfig/, 'precisa nomear a falha para quem for procurar');
+  assert.match(script, /docker-compose-plugin/, 'precisa dizer como resolver');
+  assert.match(script, /verificar_compose \|\| exit 1/, 'a verificação vem antes de qualquer alteração');
+  // A verificação precisa vir antes do backup e do checkout, não depois.
+  assert.ok(script.indexOf('verificar_compose || exit 1') < script.indexOf('tar czf'), 'verificar depois de mexer não ajuda ninguém');
+});
+
+test('contêiner de outra configuração é apontado antes, com o comando exato', () => {
+  const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.match(script, /com\.docker\.compose\.project/, 'precisa checar de quem é o contêiner');
+  assert.match(script, /docker rm -f/, 'precisa dizer como remover');
+  assert.match(script, /docker inspect \$nome --format '\{\{json \.Config\.Cmd\}\}'/, 'precisa mandar guardar a configuração antiga antes de remover');
+  assert.ok(script.indexOf('com.docker.compose.project') < script.indexOf('up -d --build'), 'o aviso vem antes de tentar subir');
 });

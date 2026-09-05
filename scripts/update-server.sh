@@ -18,7 +18,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/env-recovery-v0.8.4}"
+alvo="${1:-release/compose-v2-guard-v0.8.5}"
 
 # A pasta do servidor. Quando o script é executado do próprio repositório, ela
 # sai do caminho do arquivo; quando ele chega por `curl … | bash` — que é como
@@ -67,11 +67,37 @@ recuperar_env_do_conteiner() {
   return 0
 }
 
-compose() {
-  if docker compose version >/dev/null 2>&1; then docker compose "$@";
-  elif command -v docker-compose >/dev/null 2>&1; then docker-compose "$@";
-  else echo "Docker Compose não encontrado." >&2; return 1; fi
+# O `docker-compose` v1, em Python, está fora de suporte e quebra com Docker
+# Engine moderno: ele lê um campo `ContainerConfig` que as imagens novas não
+# trazem mais, e morre com um traceback no meio da recriação — depois de já ter
+# parado o contêiner antigo. Cair nele em silêncio seria entregar um servidor
+# fora do ar com uma pilha de Python na tela.
+verificar_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    modo_compose="v2"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    echo "Encontrei apenas o docker-compose v1 ($(docker-compose version --short 2>/dev/null || echo 'versão desconhecida'))." >&2
+    echo "Ele não funciona com o Docker Engine atual: falha com KeyError: 'ContainerConfig'" >&2
+    echo "no meio da recriação, deixando o serviço fora do ar." >&2
+    echo >&2
+    echo "Instale o plugin v2 e rode de novo:" >&2
+    echo "  sudo apt-get update && sudo apt-get install -y docker-compose-plugin" >&2
+    echo "  # ou, em Fedora/CachyOS: sudo dnf install docker-compose-plugin / sudo pacman -S docker-compose" >&2
+    echo >&2
+    echo "Confira com: docker compose version" >&2
+    return 1
+  fi
+  echo "Docker Compose não encontrado." >&2
+  return 1
 }
+
+compose() {
+  docker compose "$@"
+}
+
+verificar_compose || exit 1
 
 echo "── Tumacord · atualização do servidor"
 echo "   pasta: $projeto"
@@ -119,6 +145,26 @@ if docker ps --format '{{.Names}}' | grep -q '^tumacord-turn$'; then
   perfis=(--profile turn)
   echo "   relay TURN está no ar; ele será mantido"
 fi
+
+# 2b. Contêiner com o mesmo nome, criado por outra configuração, impede a
+#     recriação — e o Compose só descobre isso no meio do caminho. Melhor
+#     apontar antes, com o comando exato, do que deixar a mensagem crua.
+projeto_compose="$(basename "$projeto" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+for nome in tumacord-server tumacord-turn; do
+  docker inspect "$nome" >/dev/null 2>&1 || continue
+  dono="$(docker inspect "$nome" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+  [[ -z "$dono" || "$dono" == "$projeto_compose" ]] && continue
+  echo "O contêiner \"$nome\" pertence a outra configuração (projeto \"$dono\")." >&2
+  echo "Ele impede a recriação a partir desta pasta." >&2
+  echo >&2
+  echo "Antes de removê-lo, guarde como ele estava configurado:" >&2
+  echo "  docker inspect $nome --format '{{json .Config.Cmd}}'" >&2
+  echo "  docker inspect $nome --format '{{range .Config.Env}}{{println .}}{{end}}'" >&2
+  echo >&2
+  echo "Depois remova e rode este script de novo:" >&2
+  echo "  docker rm -f $nome" >&2
+  exit 1
+done
 
 # 3. Backup do volume. É a rede de segurança de tudo que vem depois.
 volume="$(compose "${perfis[@]}" config --volumes 2>/dev/null | head -1 || true)"

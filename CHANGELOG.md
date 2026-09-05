@@ -1,5 +1,11 @@
 # Histórico de versões
 
+## 0.8.5 — a atualização recusa o Compose v1 antes de mexer em qualquer coisa
+
+- **o `docker-compose` v1, em Python, quebra com Docker Engine moderno.** Ele lê um campo `ContainerConfig` que as imagens novas não trazem mais e morre com um traceback **no meio da recriação** — depois de já ter parado o contêiner antigo. A atualização passa a verificar isso antes de tocar em qualquer coisa, nomeia a falha para quem for procurar, e diz como instalar o plugin v2;
+- **contêiner com o mesmo nome, criado por outra configuração**, impedia a recriação e só aparecia no meio do caminho. Agora é apontado antes, junto com os comandos para guardar como ele estava configurado — e só então removê-lo;
+- as duas verificações vêm antes do backup e do `checkout`. Verificar depois de mexer não ajuda ninguém.
+
 ## 0.8.4 — um clone novo não perde mais a chave do servidor
 
 - **um clone novo nasce sem `.env`, e o Compose para antes de tudo.** O arquivo guarda a chave de acesso do servidor e não é versionado, de propósito — mas isso significa que quem recria a pasta bate em `Defina TUMACORD_SERVER_ACCESS_KEY` e fica sem a chave que o grupo inteiro já usa;
