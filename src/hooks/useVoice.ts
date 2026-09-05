@@ -7,14 +7,17 @@ import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { resumeSharedAudio, sharedAudioContext } from '../lib/audioBus';
-import { isPolitePeer, planPeerRecovery, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
+import { isPolitePeer, planPeerRecovery, shouldClearIgnoredOffer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, shouldApplyBitrateChange, shouldApplyScaleChange, type RtcStatLike } from '../lib/networkQuality';
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
 import { currentNetworkPreferences } from '../lib/networkPreferences';
 import { iceServers } from '../lib/iceServers';
-import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromLevel, microphoneIdentityOf, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity } from '../lib/microphoneHealth';
+import { selectedCandidatePath, type SelectedPath } from '../lib/iceDiagnostics';
+import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/mediaDiagnostics';
+import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
+import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 
 export type { StreamQuality } from '../lib/screenQuality';
@@ -60,6 +63,12 @@ interface PeerConnectionState {
   remoteStreams: Map<string, MediaStream>;
   screenTuning: Promise<void>;
   screenTuningPending: boolean;
+  // Qual mídia local cada sender carrega. `RTCRtpSender` não tem identidade
+  // própria, e sem isso não dá para distinguir trocar o microfone de abrir
+  // mais uma trilha de áudio quando o enlace precisa ser reconciliado.
+  senderMedia: Map<RTCRtpSender, LocalMediaKind>;
+  // Por onde a mídia deste enlace está realmente passando.
+  selectedPath: SelectedPath | null;
 }
 
 function closePeerState(state: PeerConnectionState): void {
@@ -73,6 +82,8 @@ function closePeerState(state: PeerConnectionState): void {
   state.pc.onnegotiationneeded = null;
   state.pc.ontrack = null;
   state.pc.onconnectionstatechange = null;
+  state.pc.onsignalingstatechange = null;
+  state.senderMedia.clear();
   for (const receiver of state.pc.getReceivers()) receiver.track?.stop();
   state.remoteStreams.clear();
   state.pc.close();
@@ -374,7 +385,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const neuralFallback = useRef(false);
   const microphoneFallbackNotice = useRef(false);
   const microphoneSignal = useRef({ lastSignalAt: 0, warned: false });
-  const microphoneFault = useRef<{ kind: MicrophoneFault; since: number; recaptures: number; lastRecaptureAt: number; warned: boolean }>({ kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false });
+  // A reconciliação é uma rede de segurança, não o caminho normal: rodar a
+  // cada leitura de estatística seria caro sem necessidade.
+  const reconcileTick = useRef(0);
+  const microphoneFault = useRef<MicrophoneFaultState>(initialMicrophoneFault());
   const ensureMicrophoneRef = useRef<(options?: { force?: boolean }) => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
@@ -401,6 +415,63 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // Uma falha do microfone é registrada com o instante em que começou. O que
   // fazer com ela — esperar, recapturar ou avisar — é decidido por
   // `planMicrophoneRecovery`, no monitor mais abaixo.
+  // Medidor e contexto vêm sempre do mesmo pipeline. O caminho neural mede no
+  // AudioContext do próprio processamento; o simples, no contexto
+  // compartilhado do monitor de fala. Misturar os dois foi o defeito que
+  // desligava a recuperação automática sem ninguém perceber.
+  const readMicrophone = useCallback((): MicrophoneReading => {
+    const processing = microphoneProcessing.current;
+    const track = processing?.outputStream.getAudioTracks()[0] ?? null;
+    const rawTrack = processing?.rawStream.getAudioTracks()[0] ?? null;
+    const source = processing?.neural
+      ? { meter: processing.inputMeter, context: processing.context }
+      : { meter: speakingMonitor.current?.analyser, context: speakingMonitor.current?.context };
+    const observed = rawTrack ?? track;
+    return {
+      level: source.meter ? analyserLevel(source.meter) : null,
+      contextState: (source.context?.state as MicrophoneReading['contextState']) ?? 'unknown',
+      track: observed ? { readyState: observed.readyState, enabled: track?.enabled ?? observed.enabled, muted: observed.muted } : null,
+      userMuted: mutedRef.current,
+    };
+  }, []);
+
+  // Retrato da mídia local para o painel de diagnóstico. Ele responde a
+  // pergunta que a interface sozinha não consegue: em qual camada parou. Nada
+  // aqui carrega token, chave ou credencial.
+  const peers_current = () => peers.current;
+  const mediaSnapshot = useCallback((): MicrophonePipelineSnapshot & { paths: Array<{ peerId: string; path: SelectedPath | null }> } => {
+    const processing = microphoneProcessing.current;
+    const raw = processing?.rawStream.getAudioTracks()[0] ?? null;
+    const output = processing?.outputStream.getAudioTracks()[0] ?? null;
+    const retrato = (track: MediaStreamTrack | null) => (track ? { readyState: track.readyState, enabled: track.enabled, muted: track.muted } : null);
+    const meter = processing?.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
+    const peers: PeerAudioSnapshot[] = [];
+    const paths: Array<{ peerId: string; path: SelectedPath | null }> = [];
+    for (const [peerId, state] of peers_current()) {
+      const audioSenders = state.pc.getSenders().filter((sender) => sender.track?.kind === 'audio' || state.senderMedia.get(sender) === 'microphone');
+      peers.push({
+        peerId,
+        hasAudioSender: audioSenders.length > 0,
+        senderHasTrack: audioSenders.some((sender) => sender.track !== null && sender.track.readyState === 'live'),
+        connectionState: state.pc.connectionState,
+      });
+      paths.push({ peerId, path: state.selectedPath });
+    }
+    return {
+      desired: Boolean(channelRef.current),
+      userMuted: mutedRef.current,
+      requestedDeviceId: preferencesRef.current.microphoneId,
+      acquiredDeviceId: processing?.identity.deviceId ?? '',
+      raw: retrato(raw),
+      rawLevel: meter ? analyserLevel(meter) : null,
+      neural: Boolean(processing?.neural),
+      processedLevel: processing?.outputMeter ? analyserLevel(processing.outputMeter) : null,
+      output: retrato(output),
+      peers,
+      paths,
+    };
+  }, []);
+
   const noteMicrophoneFault = useCallback((kind: MicrophoneFault) => {
     const state = microphoneFault.current;
     if (kind === 'none') {
@@ -502,10 +573,23 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket?.emit('rtc:stream-meta', { target, meta: { streamId: stream.id, kind } });
   }, [socket]);
 
-  const addLocalStreams = useCallback((target: string, state: PeerConnectionState) => {
-    for (const [kind, stream] of localStreams.current) {
-      for (const track of stream.getTracks()) {
+  // Um enlace novo precisa reconstruir o estado ATUAL da mídia local sem ter
+  // presenciado os eventos que o criaram. Quem entra depois da live, quem sai
+  // e volta no meio dela, e o enlace refeito depois de uma reconexão passam
+  // todos por aqui — a fonte é o que existe agora, não o histórico.
+  const syncLocalMediaToPeer = useCallback((target: string, state: PeerConnectionState) => {
+    for (const [kind, stream] of [...localStreams.current]) {
+      // Uma faixa encerrada que ainda não foi recolhida enviaria ao enlace
+      // novo um sender morto, que nunca produz mídia e ainda assim aparece
+      // como "transmitindo" para quem olha o estado.
+      const live = stream.getTracks().filter((track) => track.readyState === 'live');
+      if (!live.length) {
+        if (localStreams.current.get(kind) === stream) localStreams.current.delete(kind);
+        continue;
+      }
+      for (const track of live) {
         const sender = state.pc.addTrack(track, stream);
+        state.senderMedia.set(sender, kind);
         if (kind === 'microphone') void tuneVoiceSender(sender);
         if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
         if (kind === 'screen' && track.kind === 'video') {
@@ -526,6 +610,58 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (kind === 'camera' || kind === 'screen') sendStreamMeta(target, stream, kind);
     }
   }, [onError, sendStreamMeta]);
+
+  // Reconciliação: o enlace converge para o estado ATUAL da mídia local,
+  // independentemente de quais eventos ele presenciou. Aplica apenas os
+  // reparos que não mudam a topologia — trocar a faixa de um sender existente
+  // e soltar um sender preso a faixa morta. Abrir trilha nova continua com
+  // quem inicia a captura, para uma reconciliação periódica nunca virar uma
+  // tempestade de renegociação.
+  const reconcilePeerMedia = useCallback(async (state: PeerConnectionState): Promise<{ repaired: number; missing: number }> => {
+    if (state.pc.signalingState === 'closed') return { repaired: 0, missing: 0 };
+    const local: LocalTrack[] = [];
+    const tracksById = new Map<string, MediaStreamTrack>();
+    for (const [media, stream] of localStreams.current) {
+      for (const track of stream.getTracks()) {
+        local.push({ media, trackId: track.id, kind: track.kind as TrackKind, streamId: stream.id, readyState: track.readyState });
+        tracksById.set(track.id, track);
+      }
+    }
+    const senders = state.pc.getSenders();
+    const byId = new Map<string, RTCRtpSender>();
+    const descriptors: PeerSender[] = senders.map((sender, index) => {
+      const senderId = `s${index}`;
+      byId.set(senderId, sender);
+      const kind = (sender.track?.kind ?? state.senderMedia.get(sender) === 'microphone' ? 'audio' : 'video') as TrackKind;
+      return {
+        senderId,
+        kind: (sender.track?.kind as TrackKind) ?? kind,
+        trackId: sender.track?.id ?? null,
+        media: state.senderMedia.get(sender),
+        trackEnded: sender.track?.readyState === 'ended',
+      };
+    });
+    const plan = planPeerMediaSync(local, descriptors);
+    let repaired = 0;
+    let missing = 0;
+    for (const action of plan.actions) {
+      if (action.type === 'add') { missing += 1; continue; }
+      const sender = byId.get(action.senderId);
+      if (!sender) continue;
+      if (action.type === 'clear') {
+        await sender.replaceTrack(null).catch(() => undefined);
+        state.senderMedia.delete(sender);
+        repaired += 1;
+        continue;
+      }
+      const track = tracksById.get(action.trackId);
+      if (!track) continue;
+      await sender.replaceTrack(track).catch(() => undefined);
+      state.senderMedia.set(sender, action.media);
+      repaired += 1;
+    }
+    return { repaired, missing };
+  }, []);
 
   const createPeer = useCallback((peerId: string, remoteUser?: PublicUser) => {
     const found = peers.current.get(peerId);
@@ -572,11 +708,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       remoteStreams: new Map(),
       screenTuning: Promise.resolve(),
       screenTuningPending: localStreams.current.has('screen'),
+      senderMedia: new Map<RTCRtpSender, LocalMediaKind>(),
+      selectedPath: null,
     };
     peers.current.set(peerId, state);
     updatePeerHealth(peerId, 'connecting');
-    addLocalStreams(peerId, state);
+    syncLocalMediaToPeer(peerId, state);
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
+    // Terminada a negociação, o descarte de ICE daquela colisão deixa de valer.
+    // Sem isto o sinalizador ficava travado e o enlace podia chegar a
+    // "connected" sem mídia nenhuma.
+    pc.onsignalingstatechange = () => {
+      if (shouldClearIgnoredOffer(pc.signalingState)) state.ignoreOffer = false;
+    };
     pc.onnegotiationneeded = () => void negotiateRef.current(peerId);
     pc.ontrack = (event) => {
       for (const stream of event.streams) state.remoteStreams.set(stream.id, stream);
@@ -678,7 +822,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
     };
     return state;
-  }, [addLocalStreams, refreshRemote, socket, updatePeerHealth]);
+  }, [syncLocalMediaToPeer, refreshRemote, socket, updatePeerHealth]);
 
   const negotiate = useCallback(async (peerId: string, iceRestart = false) => {
     const state = peers.current.get(peerId);
@@ -1173,6 +1317,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     void window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     channelRef.current = null;
     handoffStarted.current = false;
+    // Sair precisa devolver a saúde do microfone ao começo: o orçamento de
+    // recapturas gasto na call anterior deixaria a recuperação desligada na
+    // próxima, e a marca de último sinal, velha, dispararia uma recaptura
+    // espúria assim que alguém voltasse.
+    microphoneFault.current = initialMicrophoneFault();
+    microphoneSignal.current = { lastSignalAt: 0, warned: false };
+    reconcileTick.current = 0;
+    // Restos da chamada anterior que não fazem sentido na próxima: a câmera
+    // ativa, um aviso de microfone pendente e opções de transmissão que nunca
+    // chegaram a ser usadas.
+    activeCameraDeviceId.current = '';
+    cameraSwitching.current = false;
+    microphoneFallbackNotice.current = false;
+    pendingShareOptions.current = { includeAudio: true, quality: qualityRef.current };
+    selfId.current = '';
     setChannelId(null);
     setMembers([]);
     setRemoteMedia([]);
@@ -1242,6 +1401,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (shouldInitiateRecovery(selfId.current, peer.socketId)) void negotiateRef.current(peer.socketId);
     };
     const onOffer = async ({ from, user: remoteUser, sdp }: { from: string; user: PublicUser; sdp: RTCSessionDescriptionInit }) => {
+      // Era o único handler que criava enlace sem conferir se ainda estamos na
+      // call. Uma oferta em trânsito no momento da saída — ou vinda de quem
+      // ainda não soube que saímos — criava um `RTCPeerConnection` depois de
+      // `leave()` já ter recolhido tudo: um zumbi que ninguém mais fecha.
+      if (!channelRef.current) return;
       const state = createPeer(from, remoteUser);
       const collision = state.makingOffer || state.pc.signalingState !== 'stable';
       const polite = isPolitePeer(selfId.current, from);
@@ -1361,6 +1525,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     if (!socket || !channelId) return;
     let running = false;
     const publishLatency = async () => {
+      reconcileTick.current += 1;
       if (running) return;
       running = true;
       const samples: number[] = [];
@@ -1375,6 +1540,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           report.forEach((stat) => stats.push(stat as unknown as RtcStatLike));
           const path = activePathMetrics(stats);
           if (path.rttMs !== undefined) samples.push(path.rttMs);
+          // Por onde a mídia deste enlace está passando: direto, furando o
+          // NAT, ou pelo relay. Custa nada, já que o relatório está aqui.
+          state.selectedPath = selectedCandidatePath(stats) ?? state.selectedPath;
+          // A cada cinco leituras — cerca de dez segundos — o enlace é
+          // comparado com o estado atual da mídia local e reparado se tiver
+          // ficado para trás. Serve para o que os eventos não cobriram.
+          if (reconcileTick.current % 5 === 0) {
+            const repair = await reconcilePeerMedia(state);
+            if (repair.repaired) console.info('[media] enlace reconciliado', { peer: peerId, reparos: repair.repaired, faltando: repair.missing });
+          }
 
           const sampledAt = Date.now();
           // Enquanto o enlace acabou de ser reconstruído, os contadores RTP
@@ -1563,7 +1738,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     void publishLatency();
     const timer = window.setInterval(() => void publishLatency(), 2000);
     return () => window.clearInterval(timer);
-  }, [channelId, socket]);
+  }, [channelId, reconcilePeerMedia, socket]);
 
   useEffect(() => {
     if (!channelRef.current || !localStreams.current.has('microphone')) return;
@@ -1634,14 +1809,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       // `muted` e a troca do dispositivo padrão são detectados por evento e já
       // chegam registrados; aqui resta medir a energia que entra.
       if (state.kind === 'none' || state.kind === 'silent' || state.kind === 'dead') {
-        const meter = processing.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
-        const measurable = Boolean(meter) && speakingMonitor.current?.context.state === 'running' && !rawTrack?.muted;
-        if (!measurable) {
+        const reading = readMicrophone();
+        // Uma faixa que já nasce silenciada pelo sistema nunca dispara
+        // `onmute`: o evento marca a transição, e aqui ela já aconteceu antes
+        // de existir ouvinte. Sem esta checagem o caso ficava invisível.
+        if (reading.track?.muted) {
+          noteMicrophoneFault('muted');
+          return;
+        }
+        if (!microphoneIsMeasurable(reading)) {
           signal.lastSignalAt = now;
           noteMicrophoneFault('none');
           return;
         }
-        const measured = faultFromLevel(analyserLevel(meter));
+        const measured = faultFromReading(reading);
         if (measured === 'none') {
           signal.lastSignalAt = now;
           signal.warned = false;
@@ -1678,7 +1859,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         .finally(() => { recapturing = false; });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [channelId, noteMicrophoneFault, onError]);
+  }, [channelId, noteMicrophoneFault, onError, readMicrophone]);
 
   // Trocar o dispositivo padrão do sistema não termina nem silencia a faixa
   // aberta: ela simplesmente continua presa ao aparelho anterior. Foi o que
@@ -2040,6 +2221,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   };
 
   return {
+    mediaSnapshot,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,

@@ -67,3 +67,17 @@ export function planPeerRecovery(input: RecoveryPlanInput): RecoveryPlan {
 export function stallSignalIsTrustworthy(input: { connectionState: string; msSinceLastRecovery: number; graceMs?: number }): boolean {
   return input.connectionState === 'connected' && input.msSinceLastRecovery >= (input.graceMs ?? RECOVERY_GRACE_MS);
 }
+
+
+// `ignoreOffer` marca que estamos descartando uma oferta perdida em uma
+// colisão — e, com ela, os candidatos ICE daquela geração. Ele vale enquanto
+// a negociação está em curso e precisa cair quando ela termina.
+//
+// Sem esse desarme o sinalizador fica travado: bastava uma colisão sem
+// resposta — o outro lado saiu no meio, ou a resposta chegou fora do estado
+// esperado — para TODO candidato ICE seguinte daquele enlace ser descartado.
+// O enlace então podia ficar em "connected" sem mídia nenhuma, que é o pior
+// sintoma possível: a interface diz que está tudo bem.
+export function shouldClearIgnoredOffer(signalingState: string): boolean {
+  return signalingState === 'stable';
+}

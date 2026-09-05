@@ -11,6 +11,7 @@ import {
   defaultAudioInputSignature,
   describeMicrophoneFault,
   faultFromLevel,
+  initialMicrophoneFault,
   microphoneIdentityOf,
   planMicrophoneRecovery,
   type MicrophoneFault,
@@ -102,4 +103,71 @@ test('cada falha se explica em português para quem está na call', () => {
   assert.match(describeMicrophoneFault('dead'), /nenhuma amostra/);
   assert.match(describeMicrophoneFault('silent'), /não capta som/);
   assert.equal(describeMicrophoneFault('none'), '');
+});
+
+// --- leitura por pipeline (medidor e contexto sempre do mesmo lugar) ---
+
+import { faultFromReading, microphoneIsMeasurable, type MicrophoneReading } from '../src/lib/microphoneHealth';
+
+const faixaViva = { readyState: 'live', enabled: true, muted: false };
+
+function leitura(patch: Partial<MicrophoneReading> = {}): MicrophoneReading {
+  return { level: 0.05, contextState: 'running', track: faixaViva, userMuted: false, ...patch };
+}
+
+// O defeito corrigido: o caminho neural media no medidor do próprio
+// processamento, mas a saúde consultava o AudioContext compartilhado. Com o
+// compartilhado suspenso, a recuperação se desligava sozinha.
+test('o contexto avaliado é o que acompanha o medidor, não outro qualquer', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'running' })), true);
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'suspended' })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'unknown' })), false);
+});
+
+test('sem medidor a leitura não vira silêncio — ela simplesmente não diz nada', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ level: null })), false);
+  assert.equal(faultFromReading(leitura({ level: null })), 'none', 'ausência de medida não pode disparar recaptura');
+});
+
+test('a faixa precisa estar viva, habilitada e não silenciada para a medida valer', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, readyState: 'ended' } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, enabled: false } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, muted: true } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: null })), false);
+});
+
+test('faixa silenciada pelo sistema é falha de mic, mesmo sem o evento onmute', () => {
+  assert.equal(faultFromReading(leitura({ track: { ...faixaViva, muted: true } })), 'muted');
+});
+
+test('quem se mutou de propósito nunca é tratado como microfone quebrado', () => {
+  assert.equal(faultFromReading(leitura({ userMuted: true, level: 0 })), 'none');
+  assert.equal(microphoneIsMeasurable(leitura({ userMuted: true })), false);
+});
+
+test('com tudo no lugar, a energia decide entre captura morta, sala quieta e ok', () => {
+  assert.equal(faultFromReading(leitura({ level: 0 })), 'dead');
+  assert.equal(faultFromReading(leitura({ level: 0.001 })), 'silent');
+  assert.equal(faultFromReading(leitura({ level: 0.05 })), 'none');
+});
+
+// Sair da call precisa devolver a saúde do microfone ao começo. Sem isso o
+// orçamento gasto na chamada anterior deixava a recuperação desligada na
+// seguinte — justamente quando alguém saiu e voltou por causa de áudio.
+test('o estado inicial da falha começa zerado e não é compartilhado', () => {
+  const primeiro = initialMicrophoneFault();
+  assert.deepEqual(primeiro, { kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false });
+  primeiro.recaptures = 3;
+  primeiro.warned = true;
+  const segundo = initialMicrophoneFault();
+  assert.equal(segundo.recaptures, 0, 'cada chamada devolve um objeto próprio');
+  assert.equal(segundo.warned, false);
+});
+
+test('com o orçamento devolvido, a recuperação volta a agir', () => {
+  const agora = 1_000_000;
+  const gasto = { now: agora, fault: 'dead' as const, faultSince: agora - DEAD_HOLD_MS, lastRecaptureAt: 0, recaptures: MAX_AUTOMATIC_RECAPTURES, warned: true };
+  assert.equal(planMicrophoneRecovery(gasto).action, 'wait', 'esgotado, ele desiste');
+  const devolvido = { ...gasto, ...initialMicrophoneFault(), now: agora, fault: 'dead' as const, faultSince: agora - DEAD_HOLD_MS };
+  assert.equal(planMicrophoneRecovery(devolvido).action, 'recapture');
 });

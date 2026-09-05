@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isPolitePeer, planPeerRecovery, recoveryCooldownMs, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy } from '../src/lib/rtcPolicy.js';
+import { isPolitePeer, planPeerRecovery, recoveryCooldownMs, shouldClearIgnoredOffer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy } from '../src/lib/rtcPolicy.js';
 
 test('cada par escolhe exatamente um lado educado para colisões de oferta', () => {
   assert.notEqual(isPolitePeer('peer-a', 'peer-b'), isPolitePeer('peer-b', 'peer-a'));
@@ -48,4 +48,16 @@ test('estatística de recuperação só vale com o enlace de pé e fora da janel
   assert.equal(stallSignalIsTrustworthy({ connectionState: 'connected', msSinceLastRecovery: 30_000 }), true);
   assert.equal(stallSignalIsTrustworthy({ connectionState: 'connected', msSinceLastRecovery: 3_000 }), false);
   assert.equal(stallSignalIsTrustworthy({ connectionState: 'connecting', msSinceLastRecovery: 30_000 }), false);
+});
+
+// Uma colisão de ofertas faz o lado impolido descartar a oferta do outro e,
+// com ela, os candidatos ICE daquela geração. O sinalizador precisa cair
+// quando a negociação termina — travado, ele descartava TODO candidato
+// seguinte, e o enlace chegava a "connected" sem mídia nenhuma.
+test('o descarte de oferta é desarmado quando a negociação volta a estável', () => {
+  assert.equal(shouldClearIgnoredOffer('stable'), true);
+  assert.equal(shouldClearIgnoredOffer('have-local-offer'), false);
+  assert.equal(shouldClearIgnoredOffer('have-remote-offer'), false);
+  assert.equal(shouldClearIgnoredOffer('have-local-pranswer'), false);
+  assert.equal(shouldClearIgnoredOffer('closed'), false, 'enlace fechado não precisa de desarme');
 });

@@ -4,6 +4,18 @@ export interface Channel {
   id: string;
   name: string;
   type: ChannelType;
+  // Todos opcionais: instalações vindas da 0.8.0 não os têm, e carregar sem
+  // eles precisa continuar funcionando.
+  categoryId?: string;
+  position?: number;
+  topic?: string;
+  userLimit?: number;
+}
+
+export interface ChannelCategory {
+  id: string;
+  name: string;
+  position?: number;
 }
 
 export interface ProfileMedia {
@@ -24,11 +36,16 @@ export interface ReplicatedProfile {
   profile: UserProfile;
 }
 
+export type ServerRole = 'owner' | 'admin' | 'member';
+
 export interface PublicUser {
   id: string;
   username: string;
   profile?: UserProfile;
+  // `isAdmin` continua derivado do papel, para clientes anteriores à 0.8.1
+  // que não conhecem `role` seguirem funcionando.
   isAdmin?: boolean;
+  role?: ServerRole;
 }
 
 export interface ChatAttachment {
@@ -85,12 +102,15 @@ export interface AdminOverview {
   uptimeSeconds: number;
   onlineUsers: PublicUser[];
   channels: Channel[];
+  categories: ChannelCategory[];
   voiceRooms: Record<string, VoiceState[]>;
   security: {
     accessKeyRequired: boolean;
     tls: boolean;
     media: 'DTLS-SRTP';
   };
+  // Apenas se existe relay configurado. Segredo e credencial nunca saem daqui.
+  turn: boolean;
 }
 
 export interface StreamMeta {
