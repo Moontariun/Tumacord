@@ -47,10 +47,34 @@ export async function readDirectReport(options: { force?: boolean } = {}): Promi
   }
 }
 
+// O convite precisa ser o mesmo texto enquanto a call for a mesma e os
+// caminhos não mudarem. Sem esta memória, `issuedAt` era carimbado a cada
+// chamada: como a tela da call re-renderiza a cada atualização de ping, o
+// código mudava por inteiro várias vezes por segundo — e mudar o valor de um
+// campo enquanto a pessoa seleciona o texto atrapalha até a cópia.
+//
+// O que identifica um convite é a call, a chave e os endereços de entrada. Se
+// nada disso mudou, o código anterior continua valendo e é ele que aparece.
+const INVITE_RENEWAL_MARGIN_MS = 60 * 60 * 1000;
+
+let cachedInvite: { signature: string; code: string; issuedAt: number } | null = null;
+
+function inviteSignature(report: DirectReport, call: { callId: string; callName: string; hostUsername: string }, paths: DirectPath[]): string {
+  return [call.callId, call.callName, call.hostUsername, report.key, ...paths.map((path) => `${path.kind}:${path.host}:${path.port}`)].join('|');
+}
+
 export function buildInvite(report: DirectReport, call: { callId: string; callName: string; hostUsername: string }, now = Date.now()): string | null {
   const paths = orderPaths(report.paths);
   if (!paths.length || !report.key) return null;
-  return encodeInvite({
+  const signature = inviteSignature(report, call, paths);
+  // Renova com uma hora de folga: um código que vence no bolso de quem
+  // recebeu é pior do que um código novo.
+  const stillUseful = cachedInvite
+    && cachedInvite.signature === signature
+    && now >= cachedInvite.issuedAt
+    && now < cachedInvite.issuedAt + DIRECT_INVITE_TTL_MS - INVITE_RENEWAL_MARGIN_MS;
+  if (stillUseful && cachedInvite) return cachedInvite.code;
+  const code = encodeInvite({
     version: 1,
     callId: call.callId,
     callName: call.callName,
@@ -60,6 +84,14 @@ export function buildInvite(report: DirectReport, call: { callId: string; callNa
     issuedAt: now,
     ttlMs: DIRECT_INVITE_TTL_MS,
   });
+  cachedInvite = { signature, code, issuedAt: now };
+  return code;
+}
+
+// Existe para os testes e para o caso de a pessoa querer explicitamente um
+// código novo; o uso normal nunca precisa disso.
+export function forgetCachedInvite(): void {
+  cachedInvite = null;
 }
 
 export function readInvite(code: string): DirectInvite | null {
