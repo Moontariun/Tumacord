@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminOverview, Channel, ChannelCategory, ServerRole } from '../../shared/types';
 import { Icon } from './Icon';
 import { Dropdown } from './Dropdown';
+import { describeMissing, readCapabilities, type ServerCapabilities } from '../lib/capabilities';
 
 // Painel de administração do servidor.
 //
@@ -80,6 +81,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [servidor, setServidor] = useState<ServerCapabilities | null>(null);
   const montado = useRef(true);
 
   useEffect(() => { montado.current = true; return () => { montado.current = false; }; }, []);
@@ -107,6 +109,17 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
 
   const carregar = useCallback(async () => {
     if (montado.current) { setLoading(true); setError(''); }
+    // Antes de qualquer coisa, o que este servidor sabe fazer. Um servidor
+    // anterior à 0.8.1 não tem estes endpoints, e a pessoa precisa ler isso em
+    // vez de receber um erro sem explicação a cada clique.
+    const saude = await fetch(`${serverUrl}/api/health`).then((r) => r.json()).catch(() => null);
+    const capacidades = readCapabilities(saude);
+    if (montado.current) setServidor(capacidades);
+    const faltando = describeMissing(capacidades, ['adminChannels', 'adminUsers', 'adminAudit']);
+    if (faltando) {
+      if (montado.current) { setError(faltando); setLoading(false); }
+      return;
+    }
     const geral = await chamar<AdminOverview & { channels: Channel[]; categories?: ChannelCategory[] }>('/api/admin/overview');
     if (!montado.current) return;
     if (!geral) { setError('Não foi possível carregar o painel.'); setLoading(false); return; }
@@ -118,7 +131,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
     const registro = await chamar<{ entries: AuditEntry[] }>('/api/admin/audit');
     if (montado.current && registro) setAudit(registro.entries);
     if (montado.current) setLoading(false);
-  }, [chamar]);
+  }, [chamar, serverUrl]);
 
   useEffect(() => { void carregar(); }, [carregar]);
 
@@ -137,7 +150,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
       <aside>
         <h2>Servidor</h2>
         {AREAS.map((entrada) => <button key={entrada.id} className={area === entrada.id ? 'selected' : ''} onClick={() => setArea(entrada.id)}>{entrada.label}</button>)}
-        <span className="settings-version">{overview ? `v${overview.version}` : ''}</span>
+        <span className="settings-version">{overview ? `v${overview.version}` : servidor?.version ? `v${servidor.version}` : ''}</span>
       </aside>
       <section>
         <button className="modal-close" onClick={onClose}><Icon name="close" /></button>

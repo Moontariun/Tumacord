@@ -108,20 +108,50 @@ Conferir em cada modo qual par venceu (o app registra em `[webrtc]`):
 
 ## Matriz de mídia
 
-Preencher com os marcadores acima ao executar.
+A mesma engine serve os três modos — existe **uma única** criação de
+`RTCPeerConnection` no projeto, com a mesma configuração ICE. O que muda entre
+os modos é só a URL da sinalização. Por isso a coluna não altera o
+comportamento da mídia, e o que precisa de teste manual precisa nos três.
 
 | | P2P | Dedicado | Dedicado + TURN |
 | --- | --- | --- | --- |
-| Microfone inicial | | | |
-| Mute/unmute | | | |
-| Recuperação do microfone | | | |
-| Troca de microfone | | | |
-| Câmera | | | |
-| Live start | | | |
-| Live stop/start | | | |
-| Entrar durante a live | | | |
-| Sair e voltar | | | |
-| Reconexão da sinalização | | | |
+| Microfone inicial | REQUER TESTE MANUAL | REQUER TESTE MANUAL | REQUER TESTE MANUAL |
+| Mute/unmute | REQUER TESTE MANUAL | REQUER TESTE MANUAL | REQUER TESTE MANUAL |
+| Recuperação do microfone | VALIDADO POR ANÁLISE | VALIDADO POR ANÁLISE | VALIDADO POR ANÁLISE |
+| Troca de microfone | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ |
+| Câmera | REQUER TESTE MANUAL | REQUER TESTE MANUAL | REQUER TESTE MANUAL |
+| Live start | REQUER TESTE MANUAL | REQUER TESTE MANUAL | REQUER TESTE MANUAL |
+| Live stop/start ×5 | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ |
+| Entrar durante a live | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ |
+| Sair e voltar | VALIDADO POR ANÁLISE | VALIDADO POR ANÁLISE | VALIDADO POR ANÁLISE |
+| Reconexão da sinalização | REQUER TESTE MANUAL | REQUER TESTE MANUAL | REQUER TESTE MANUAL |
+| Caminho ICE registrado | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ | TESTADO AUTOMATICAMENTE¹ |
+
+¹ A **lógica** é testada de forma determinística, sem WebRTC: o planejador de
+faixas, o diagnóstico por camada e a leitura do par ICE são funções puras sobre
+um retrato do estado. O que nenhum teste local alcança é a camada `peer`, que
+exige duas máquinas em redes diferentes.
+
+## Matriz administrativa
+
+| | Estado |
+| --- | --- |
+| Criar canal de texto | TESTADO AUTOMATICAMENTE |
+| Criar canal de voz | TESTADO AUTOMATICAMENTE |
+| Editar canal | TESTADO AUTOMATICAMENTE |
+| Excluir canal | TESTADO AUTOMATICAMENTE |
+| Último canal de texto protegido | TESTADO AUTOMATICAMENTE |
+| Reordenar canais | TESTADO AUTOMATICAMENTE |
+| Categorias: criar, renomear, excluir | TESTADO AUTOMATICAMENTE |
+| Apagar categoria não apaga canal | TESTADO AUTOMATICAMENTE |
+| Gerenciar usuários | TESTADO AUTOMATICAMENTE |
+| Proteção do último dono | TESTADO AUTOMATICAMENTE |
+| Admin não promove a dono | TESTADO AUTOMATICAMENTE |
+| Autorização no backend | TESTADO AUTOMATICAMENTE |
+| Registro de auditoria, com recusas | TESTADO AUTOMATICAMENTE |
+| Persistência entre reinícios | TESTADO AUTOMATICAMENTE |
+| Atualização em tempo real na tela | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Painel em servidor 0.8.0 (capabilities) | TESTADO AUTOMATICAMENTE (lógica) |
 
 ---
 

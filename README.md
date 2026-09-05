@@ -40,7 +40,10 @@ A partir da 0.7.9 o **enlace direto** substitui o ZeroTier como caminho padrão:
 - aplicativo Electron instalável no Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE, e cliente web servido pelo contêiner dedicado;
 - ícone no menu de aplicativos e na bandeja do KDE, com atalho para abrir ou sair;
 - versão instalada visível no login e nas configurações;
-- painel administrativo no modo servidor para o usuário configurado (por padrão, `Moontariun`);
+- **papéis de servidor** — dono, administrador e membro —, persistidos e com proteção contra deixar o servidor sem dono;
+- **painel de administração** com quatro áreas: visão geral, canais, usuários e registro de auditoria;
+- canais com categoria, posição, tópico e limite de pessoas, editáveis pelo painel e aplicados em tempo real;
+- **diagnóstico de mídia por camada** — captura, processamento, faixa, envio, enlace e recepção — com botão de copiar sem token nem endereço;
 - interface original inspirada na organização familiar de apps de comunidade, sem copiar a marca do Discord.
 
 ## Instalação no Linux
@@ -52,19 +55,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/rendezvous-and-turn-v0.8.0/scripts/install-v0.8.0.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-v0.8.1.sh | bash
 ```
 
-Este comando instala a v0.8.0 a partir da branch separada `release/rendezvous-and-turn-v0.8.0`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.1 a partir da branch separada `release/stability-and-admin-v0.8.1`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.0, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-rendezvous-and-turn-v0.8.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.1, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-stability-and-admin-v0.8.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/rendezvous-and-turn-v0.8.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -300,3 +303,47 @@ O servidor embutido P2P escuta em `::` na porta `3927` — IPv4 e IPv6 na mesma 
 O Tumacord usa malha WebRTC, ótima para um grupo pequeno (aproximadamente 2–8 pessoas, dependendo do upload de quem transmite). Uma sala grande precisaria de um SFU como mediasoup ou LiveKit. Não há recuperação de senha nem moderação avançada; a mídia é cifrada pelo próprio WebRTC, mas o chat armazenado no servidor não possui criptografia ponta a ponta adicional.
 
 Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre os computadores online, não é um banco global com consenso: mensagens disponíveis nos pares são preservadas, mas apagar ou editar mensagens distribuídas ainda não faz parte desta versão. Arquivos só permanecem garantidos enquanto o host atual ou algum participante que os sincronizou estiver disponível.
+
+## Atualizar um servidor existente
+
+A 0.8.1 muda o formato guardado — canais ganham posição, contas ganham papel, e o registro de auditoria passa a existir. **A migração é automática e não apaga nada.**
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+O que acontece na primeira subida:
+
+- canais sem posição recebem uma, na ordem em que já estavam;
+- o nome apontado por `TUMACORD_ADMIN_USERNAME` vira **dono** do servidor. Se esse nome não existir entre as contas, a conta mais antiga assume — um servidor sem dono não teria como ganhar um;
+- daí em diante o papel é dado: **trocar a variável não troca mais o dono.**
+
+Contas, mensagens, anexos, perfis e canais existentes são preservados. Faça um backup do volume antes, como em qualquer atualização:
+
+```bash
+docker run --rm -v tumacord-data:/data -v "$PWD":/backup alpine tar czf /backup/tumacord-backup.tar.gz -C /data .
+```
+
+**Nunca use `docker compose down -v` para atualizar** — a flag `-v` apaga o volume com todos os dados.
+
+### Voltar atrás
+
+```bash
+git checkout release/rendezvous-and-turn-v0.8.0
+docker compose up -d --build
+```
+
+O servidor 0.8.0 ignora os campos que não conhece — posição, papel e auditoria ficam guardados sem efeito, e voltam a valer se você atualizar de novo. Se precisar restaurar o backup:
+
+```bash
+docker compose down
+docker run --rm -v tumacord-data:/data -v "$PWD":/backup alpine sh -c "rm -rf /data/* && tar xzf /backup/tumacord-backup.tar.gz -C /data"
+docker compose up -d
+```
+
+No lado do cliente, cada build fica em uma pasta imutável e a anterior continua apontada por `~/.local/share/tumacord/previous`:
+
+```bash
+ln -sfn "$(readlink -f ~/.local/share/tumacord/previous)" ~/.local/share/tumacord/current
+```

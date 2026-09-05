@@ -196,6 +196,17 @@ app.get('/api/health', (_request, response) => {
     web: serveWeb,
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
     turn: Boolean(turn),
+    // O cliente pergunta o que este servidor sabe fazer, em vez de deduzir de
+    // um número de versão. Uma instalação parada ou um fork quebrariam a
+    // dedução; a declaração, não.
+    capabilities: {
+      turn: Boolean(turn),
+      roles: !p2pMode,
+      adminChannels: !p2pMode,
+      adminUsers: !p2pMode,
+      adminAudit: !p2pMode,
+      mediaDiagnostics: true,
+    },
   });
 });
 

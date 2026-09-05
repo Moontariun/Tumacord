@@ -1,5 +1,53 @@
 # Histórico de versões
 
+## 0.8.1 — estabilidade de mídia auditada e um painel de administração de verdade
+
+**O bug do microfone: o que a medição derrubou**
+
+- a suspeita era que o cancelamento de eco do Chromium precisasse de uma referência de reprodução já aberta, e que abrir o Discord fornecesse isso sem querer. **A hipótese está falsificada.** `scripts/diagnose-microphone.cjs` mede a energia que realmente entra, em oito combinações — eco ligado e desligado, com e sem saída ativa antes, com e sem filtro neural, e cinco ciclos seguidos. Em Fedora 44 com PipeWire 1.6.8, as oito capturaram sinal. O nó do PipeWire sai de `suspended` sozinho;
+- isso deixa captura e processamento fora de suspeita e joga o defeito para as camadas seguintes — track, sender e peer —, que é onde os defeitos abaixo foram encontrados.
+
+**Três defeitos de ciclo de vida, todos com a mesma assinatura: sinalizador de curta duração guardado como estado permanente**
+
+- **`ignoreOffer` ficava travado.** Ele marca que descartamos uma oferta perdida em uma colisão — e, com ela, os candidatos ICE daquela geração. Só era desarmado em dois caminhos de sucesso. Bastava uma colisão sem resposta para todo candidato ICE seguinte daquele enlace ser descartado, e o enlace chegava a `connected` **sem mídia nenhuma** — o pior sintoma possível, porque a interface diz que está tudo bem. Agora ele cai quando a negociação volta a estável, por evento;
+- **sair da call não zerava a saúde do microfone.** O orçamento de recapturas gasto na chamada anterior continuava gasto, deixando a recuperação automática desligada na seguinte — justamente quando alguém sai e volta por causa de áudio. E a marca de último sinal, velha, disparava uma recaptura espúria na entrada;
+- **`onOffer` criava enlace depois de sair.** Era o único handler sem a verificação que os outros já tinham. Uma oferta em trânsito no instante da saída criava um `RTCPeerConnection` que ninguém mais fecharia.
+
+**Mídia: uma pergunta, uma resposta**
+
+- havia **três laços** aplicando faixas a peers, cada um com a própria regra de `addTrack` contra `replaceTrack`; qual caminho era tomado dependia de quem chegasse primeiro. `planPeerMediaSync` responde uma vez só, e o ciclo `start → stop → start → stop → start` virou teste — incluindo a verificação de que o número de senders não cresce;
+- **reconciliação periódica**: a cada dez segundos o enlace é comparado com o estado atual da mídia local e reparado. Um enlace novo reconstrói o estado atual sem depender de ter presenciado o evento que o criou;
+- **diagnóstico por camada** — captura, processamento, faixa, envio, enlace, recepção — apontando a primeira quebrada. "Sem medida" é estado próprio: sala silenciosa e captura morta deixam de ser a mesma coisa;
+- **caminho ICE registrado**: direto por host, direto furando o NAT, ou pelo relay, com família do endereço e RTT.
+
+**Segurança: quatro furos fechados antes de qualquer tela nova**
+
+- `channel:create` **não verificava nada** — qualquer usuário autenticado criava canal no servidor dedicado;
+- `chat:sync:push` era o segundo caminho para o mesmo estrago, por sincronização;
+- `/api/peer/attachments` entregava arquivo **sem pedir login**. A rota nasceu para a troca entre pares no P2P; no servidor dedicado ficava aberta na internet, enquanto a mesma rota autenticada exigia sessão;
+- **doze senhas erradas seguidas levavam 595 ms e nenhuma barreira.** O limite agora é por par usuário/origem — só por IP puniria um NAT compartilhado, só por usuário permitiria distribuir entre máquinas;
+- e o que mais incomodava na prática: **o histórico do P2P era enviado ao servidor dedicado em toda conexão**, guardado lá e distribuído a todos. A replicação existe para o P2P; fora dele, não.
+
+**Papéis: owner, admin, member**
+
+- ser administrador era ter o nome igual a uma variável de ambiente. Promover alguém exigia reiniciar o contêiner, e mudar a variável trocava silenciosamente quem manda no servidor;
+- a regra que sustenta o resto: **um servidor nunca fica sem dono.** Toda operação que zeraria a contagem é recusada, inclusive um dono tentando se rebaixar sendo o último. E só dono mexe em dono;
+- a migração usa a variável uma vez, para eleger o dono inicial, e depois ela perde o poder: apontá-la para outra conta amanhã não promove ninguém.
+
+**Painel de administração**
+
+- quatro áreas: visão geral, canais, usuários e registro;
+- canais ganharam categoria, posição, tópico e limite de pessoas — todos opcionais, para instalações da 0.8.0 carregarem sem conversão;
+- ordenação por inteiro esparso: dois administradores arrastando ao mesmo tempo produzem uma ordem inesperada, **nunca um canal perdido**;
+- o último canal de texto não pode ser apagado, e apagar categoria **solta** os canais em vez de levá-los junto;
+- **registro de auditoria**, incluindo as ações recusadas — são elas que explicam por que algo não funcionou. A redação corta o que parece segredo e prefere apagar demais a deixar passar;
+- toda ação sem volta pede confirmação dizendo o que vai acontecer, em vez de um "tem certeza?" genérico;
+- nada na interface autoriza nada: o mesmo pedido feito à mão continua recusado.
+
+**Compatibilidade**
+
+- `/api/health` passou a declarar `capabilities`. Comparar versão como texto responde a pergunta errada — uma instalação parada ou um fork quebram a dedução. O cliente novo em servidor antigo diz o que falta e o que fazer, em vez de dar erro sem explicação.
+
 ## 0.8.0 — servidor de encontro e relay TURN: a call deixa de depender de alguém ser alcançável
 
 **O problema que sobrava**
