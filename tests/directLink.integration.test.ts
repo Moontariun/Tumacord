@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { freePort } from './freePort';
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -34,7 +35,7 @@ const DIRECT_KEY = 'chave-de-convite-para-o-teste-de-integracao';
 
 test('o host prova a própria identidade e adota a chave da call', { timeout: 25_000 }, async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-direct-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
@@ -100,7 +101,7 @@ test('o host prova a própria identidade e adota a chave da call', { timeout: 25
 
 test('sem chave de enlace direto o servidor não passa a exigir convite de ninguém', { timeout: 25_000 }, async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-direct-open-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
@@ -136,7 +137,7 @@ test('sem chave de enlace direto o servidor não passa a exigir convite de ningu
 
 test('a porta em `::` atende IPv4 e IPv6 na mesma escuta', { timeout: 25_000 }, async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-direct-dual-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
     env: {
@@ -168,7 +169,7 @@ test('a porta em `::` atende IPv4 e IPv6 na mesma escuta', { timeout: 25_000 }, 
 
 test('o servidor entrega credenciais de TURN temporárias, e só a quem tem sessão', { timeout: 25_000 }, async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-turn-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const secret = 'segredo-do-coturn-para-o-teste';
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
@@ -225,7 +226,7 @@ test('o servidor entrega credenciais de TURN temporárias, e só a quem tem sess
 
 test('sem TURN configurado o servidor responde uma lista vazia, sem inventar relay', { timeout: 25_000 }, async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-noturn-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),

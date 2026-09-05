@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { freePort } from './freePort';
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 160; attempt += 1) {
@@ -23,7 +24,7 @@ async function stopServer(child: ChildProcess): Promise<void> {
 
 async function servidor(context: { after: (fn: () => Promise<void>) => void }) {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-adminapi-'));
-  const port = 33_000 + Math.floor(Math.random() * 6_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),

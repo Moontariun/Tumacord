@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { io, type Socket } from 'socket.io-client';
 import type { VoiceState } from '../shared/types.js';
+import { freePort } from './freePort';
 
 function waitForEvent<T>(socket: Socket, event: string, predicate: (payload: T) => boolean = () => true, timeoutMs = 3_000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -65,7 +66,7 @@ function join(socket: Socket, channelId: string): Promise<{ ok: boolean; selfId:
 
 test('sinalização preserva live ao reconectar e permite reconstruir o enlace', { timeout: 20_000 }, async (context) => {
   const dataDirectory = await mkdtemp(path.join(tmpdir(), 'tumacord-signaling-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
