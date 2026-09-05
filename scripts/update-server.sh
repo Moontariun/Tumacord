@@ -18,8 +18,24 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/stability-and-admin-v0.8.1}"
-projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+alvo="${1:-release/server-update-and-turn-fix-v0.8.2}"
+
+# A pasta do servidor. Quando o script é executado do próprio repositório, ela
+# sai do caminho do arquivo; quando ele chega por `curl … | bash` — que é como
+# alguém o usa da primeira vez, antes de tê-lo — o arquivo não existe em disco,
+# e a referência é o diretório atual.
+if [[ -n "${TUMACORD_DIR:-}" ]]; then
+  projeto="$TUMACORD_DIR"
+elif [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+  projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+else
+  projeto="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [[ -z "$projeto" || ! -f "$projeto/docker-compose.yml" ]]; then
+  echo "Não encontrei a pasta do servidor Tumacord." >&2
+  echo "Entre nela e rode de novo, ou aponte com: TUMACORD_DIR=/caminho/para/Tumacord" >&2
+  exit 1
+fi
 cd "$projeto"
 
 compose() {

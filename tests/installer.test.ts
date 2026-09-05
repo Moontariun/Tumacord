@@ -17,7 +17,7 @@ const SHELL_SCRIPTS = [
   'install-linux.sh',
   'install-cachyos.sh',
   'install-from-github.sh',
-  'install-v0.8.1.sh',
+  'install-v0.8.2.sh',
   'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
@@ -100,8 +100,8 @@ test('sem nenhum gerenciador conhecido o instalador explica o que instalar à m�
 });
 
 test('o instalador da versão aponta para a branch da 0.8.0', () => {
-  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.1.sh'), 'utf8');
-  assert.match(bootstrap, /branch="release\/stability-and-admin-v0\.8\.1"/);
+  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.2.sh'), 'utf8');
+  assert.match(bootstrap, /branch="release\/server-update-and-turn-fix-v0\.8\.2"/);
   assert.match(bootstrap, /install-from-github\.sh/);
 });
 
