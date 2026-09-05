@@ -24,11 +24,16 @@ export interface ReplicatedProfile {
   profile: UserProfile;
 }
 
+export type ServerRole = 'owner' | 'admin' | 'member';
+
 export interface PublicUser {
   id: string;
   username: string;
   profile?: UserProfile;
+  // `isAdmin` continua derivado do papel, para clientes anteriores à 0.8.1
+  // que não conhecem `role` seguirem funcionando.
   isAdmin?: boolean;
+  role?: ServerRole;
 }
 
 export interface ChatAttachment {

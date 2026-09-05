@@ -3,6 +3,7 @@ import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import type { Channel, ChatAttachment, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
 import { profileIsNewer } from '../shared/profileVersion.js';
+import { countOwners, migrateRoles, normalizeRole, type Role } from './roles.js';
 
 export interface StoredUser {
   id: string;
@@ -11,6 +12,11 @@ export interface StoredUser {
   passwordHash: string;
   createdAt: string;
   profile?: UserProfile;
+  // Ausente nas contas vindas da 0.8.0. A migração de papéis preenche na
+  // primeira subida e a partir daí o valor é o que manda — não a variável de
+  // ambiente.
+  role?: Role;
+  lastSeenAt?: string;
 }
 
 export interface StoredSession {
@@ -166,6 +172,59 @@ export class JsonStore {
     else this.data.profiles[index] = replicated;
     await this.save();
     return user;
+  }
+
+  // Migração de papéis vinda da 0.8.0. Roda na subida, grava só se algo mudou,
+  // e nunca reescreve um dono já definido — trocar `ADMIN_USERNAME` depois não
+  // pode sequestrar o servidor.
+  async migrateUserRoles(adminUsername: string): Promise<{ changed: boolean; ownerId: string | null }> {
+    const resultado = migrateRoles(this.data.users, adminUsername);
+    if (resultado.changed) {
+      for (const migrado of resultado.users) {
+        const atual = this.data.users.find((candidate) => candidate.id === migrado.id);
+        if (atual) atual.role = migrado.role;
+      }
+      await this.save();
+    }
+    return { changed: resultado.changed, ownerId: resultado.ownerId };
+  }
+
+  roleOf(userId: string): Role {
+    return normalizeRole(this.data.users.find((candidate) => candidate.id === userId)?.role);
+  }
+
+  get ownerCount(): number {
+    return countOwners(this.data.users);
+  }
+
+  async setUserRole(userId: string, role: Role): Promise<StoredUser | undefined> {
+    const user = this.data.users.find((candidate) => candidate.id === userId);
+    if (!user) return undefined;
+    user.role = role;
+    await this.save();
+    return user;
+  }
+
+  async touchUser(userId: string): Promise<void> {
+    const user = this.data.users.find((candidate) => candidate.id === userId);
+    if (!user) return;
+    const agora = new Date().toISOString();
+    // Um carimbo por minuto basta para "último acesso" e evita gravar o
+    // arquivo inteiro a cada requisição.
+    if (user.lastSeenAt && agora.slice(0, 16) === user.lastSeenAt.slice(0, 16)) return;
+    user.lastSeenAt = agora;
+    await this.save();
+  }
+
+  async removeUser(userId: string): Promise<boolean> {
+    const index = this.data.users.findIndex((candidate) => candidate.id === userId);
+    if (index < 0) return false;
+    this.data.users.splice(index, 1);
+    // As sessões do removido morrem junto; deixá-las vivas seria manter o
+    // acesso de quem acabou de perder a conta.
+    this.data.sessions = this.data.sessions.filter((session) => session.userId !== userId);
+    await this.save();
+    return true;
   }
 
   profileForUsername(username: string): UserProfile | undefined {

@@ -15,6 +15,7 @@ import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter } from './rateLimit.js';
+import { canManageChannels, isAdministrator, normalizeRole, roleForNewUser, type Role } from './roles.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -269,6 +270,7 @@ app.post('/api/auth/register', async (request, response) => {
     normalizedUsername,
     passwordHash: await hashPassword(parsed.data.password),
     createdAt: new Date().toISOString(),
+    role: p2pMode ? 'member' : roleForNewUser(store.users, normalizedUsername, adminUsername),
   } satisfies StoredUser;
   await store.addUser(user);
   response.status(201).json({ token: await issueSession(user), user: publicUser(user), serverName, created: true });
@@ -309,6 +311,7 @@ app.post('/api/auth/login', async (request, response) => {
       normalizedUsername,
       passwordHash: await hashPassword(parsed.data.password),
       createdAt: new Date().toISOString(),
+      role: p2pMode ? 'member' : roleForNewUser(store.users, normalizedUsername, adminUsername),
     } satisfies StoredUser;
     await store.addUser(user);
   }
@@ -322,12 +325,20 @@ app.post('/api/auth/login', async (request, response) => {
 });
 
 function publicUser(user: StoredUser): PublicUser {
+  // No modo P2P não existe administração de servidor: cada pessoa é dona do
+  // próprio servidor embutido, e um papel ali não significaria nada.
+  const role = p2pMode ? 'member' : normalizeRole(user.role);
   return {
     id: user.id,
     username: user.username,
     profile: store.profileForUsername(user.username) ?? user.profile,
-    ...(!p2pMode && user.normalizedUsername === adminUsername ? { isAdmin: true } : {}),
+    ...(isAdministrator(role) ? { isAdmin: true } : {}),
+    ...(p2pMode ? {} : { role }),
   };
+}
+
+function roleOfSocket(socket: { data: { user?: PublicUser } }): Role {
+  return p2pMode ? 'member' : normalizeRole(socket.data.user?.role);
 }
 
 function authenticatedUser(token: unknown): PublicUser | undefined {
@@ -603,7 +614,7 @@ io.on('connection', (socket) => {
     // A sincronização era um segundo caminho para criar canal: qualquer
     // usuário empurrava um pacote com canais novos e eles entravam. Fora do
     // P2P, só a administração define a lista de canais.
-    const mayDefineChannels = !p2pMode && Boolean((socket.data.user as PublicUser)?.isAdmin);
+    const mayDefineChannels = !p2pMode && canManageChannels(roleOfSocket(socket));
     const addedChannels = mayDefineChannels ? await store.mergeChannels(parsed.data.channels) : [];
     const addedMessages = await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
     const changedProfiles = await store.mergeProfiles(parsed.data.profiles);
@@ -639,7 +650,7 @@ io.on('connection', (socket) => {
     if (p2pMode) return acknowledge?.({ ok: false, error: 'O modo P2P possui somente uma conversa e uma call.' });
     // Não havia verificação nenhuma: qualquer usuário autenticado criava canal
     // de texto e de voz no servidor dedicado.
-    if (!(socket.data.user as PublicUser)?.isAdmin) return acknowledge?.({ ok: false, error: 'Apenas a administração do servidor cria canais.' });
+    if (!canManageChannels(roleOfSocket(socket))) return acknowledge?.({ ok: false, error: 'Apenas a administração do servidor cria canais.' });
     const parsed = z.object({ name: z.string().trim().min(1).max(32), type: z.enum(['text', 'voice']) }).safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
     const slug = parsed.data.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || randomUUID().slice(0, 8);
@@ -773,6 +784,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 
 storeReady.then(async () => {
   await store.pruneSessions();
+  if (!p2pMode) {
+    const migracao = await store.migrateUserRoles(adminUsername);
+    if (migracao.changed) console.log(`Tumacord: papéis migrados${migracao.ownerId ? ' — dono definido' : ''}.`);
+  }
   for (const storedSession of store.sessions) {
     const storedTokenHash = storedSession.tokenHash ?? (storedSession.token ? hashToken(storedSession.token) : '');
     if (storedTokenHash) sessions.set(storedTokenHash, { userId: storedSession.userId, expiresAt: storedSession.expiresAt });

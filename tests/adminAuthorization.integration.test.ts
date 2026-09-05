@@ -46,10 +46,14 @@ async function entrar(url: string, username: string, password: string) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username, password, allowCreate: true }),
   });
-  return { status: response.status, body: await response.json() as { token: string; user: { isAdmin?: boolean } } };
+  return { status: response.status, body: await response.json() as { token: string; user: { isAdmin?: boolean; role?: string } } };
 }
 
-async function servidorDedicado(context: { after: (fn: () => Promise<void>) => void }) {
+// Por padrão o helper já cria a conta dona antes de tudo, que é como um
+// servidor real nasce: o operador sobe o contêiner e faz a própria conta. Sem
+// isso, a primeira pessoa a entrar viraria dona — a proteção que impede um
+// servidor de existir sem ninguém capaz de administrá-lo.
+async function servidorDedicado(context: { after: (fn: () => Promise<void>) => void }, criarDono = true) {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-admin-'));
   const port = 32_000 + Math.floor(Math.random() * 8_000);
   const url = `http://127.0.0.1:${port}`;
@@ -70,6 +74,7 @@ async function servidorDedicado(context: { after: (fn: () => Promise<void>) => v
     await rm(root, { recursive: true, force: true });
   });
   await waitForServer(url, child);
+  if (criarDono) await entrar(url, 'Chefe', 'senha-do-chefe');
   return { url, sockets };
 }
 
@@ -91,6 +96,7 @@ test('usuário comum não cria canal; a administração cria', { timeout: 30_000
   assert.equal(recusadoVoz.ok, false, 'canal de voz também precisa ser bloqueado');
 
   const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  assert.equal(chefe.body.user.role, 'owner');
   assert.equal(chefe.body.user.isAdmin, true);
   const socketChefe = await connect(url, chefe.body.token);
   sockets.push(socketChefe);
@@ -168,4 +174,52 @@ test('o anexo entre pares continua servindo a rede local, sem regressão', { tim
   const local = await fetch(`${url}/api/peer/attachments/${anexo.id}`);
   assert.equal(local.status, 200);
   assert.equal(await local.text(), 'conteudo do grupo');
+});
+
+// Migração vinda da 0.8.0: o `ADMIN_USERNAME` vira o dono inicial e, a partir
+// daí, o papel persistido é que manda.
+test('a primeira conta de um servidor novo vira dona, e o papel persiste', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context, false);
+  const primeiro = await entrar(url, 'Pioneiro', 'senha-do-pioneiro');
+  assert.equal(primeiro.body.user.role, 'owner', 'quem cria o servidor fica com ele');
+  assert.equal(primeiro.body.user.isAdmin, true, 'clientes antigos continuam enxergando administração');
+
+  const segundo = await entrar(url, 'Chegou Depois', 'senha-qualquer');
+  assert.equal(segundo.body.user.role, 'member');
+  assert.equal(segundo.body.user.isAdmin ?? false, false);
+
+  // O nome apontado por ADMIN_USERNAME entra como admin quando o servidor já
+  // tem dono: a variável não sequestra um servidor em uso.
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  assert.equal(chefe.body.user.role, 'admin');
+  assert.equal(chefe.body.user.isAdmin, true);
+});
+
+test('o papel sobrevive ao reinício do servidor', { timeout: 40_000 }, async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tumacord-papel-'));
+  const port = 32_000 + Math.floor(Math.random() * 8_000);
+  const url = `http://127.0.0.1:${port}`;
+  const ambiente = (adminUsername: string) => ({
+    ...process.env,
+    HOST: '127.0.0.1', PORT: String(port), DATA_DIR: path.join(root, 'data'),
+    TUMACORD_P2P_MODE: '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
+    ADMIN_USERNAME: adminUsername, TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
+  });
+  const subir = (adminUsername: string) => spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env: ambiente(adminUsername), stdio: 'ignore' });
+
+  let child = subir('Pioneiro');
+  context.after(async () => { await stopServer(child); await rm(root, { recursive: true, force: true }); });
+  await waitForServer(url, child);
+  assert.equal((await entrar(url, 'Pioneiro', 'senha-do-pioneiro')).body.user.role, 'owner');
+  await entrar(url, 'Outro', 'senha-do-outro');
+  await stopServer(child);
+
+  // Sobe de novo com OUTRO nome na variável: o dono precisa continuar o mesmo.
+  child = subir('Outro');
+  await waitForServer(url, child);
+  assert.equal((await entrar(url, 'Pioneiro', 'senha-do-pioneiro')).body.user.role, 'owner', 'trocar a variável não pode sequestrar o servidor');
+  // A variável só decide papel no momento em que a conta é criada. Depois
+  // disso o papel é dado, e apontá-la para uma conta existente não promove
+  // ninguém — senão bastaria editar o ambiente para virar administrador.
+  assert.equal((await entrar(url, 'Outro', 'senha-do-outro')).body.user.role, 'member');
 });
