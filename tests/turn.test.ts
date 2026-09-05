@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_TURN_TTL_SECONDS,
+  describeTurnSettings,
+  mergeTurnSettings,
   ephemeralTurnCredentials,
   parseTurnUrls,
   turnConfiguration,
@@ -73,4 +75,43 @@ test('as URLs saem em um bloco único, com a credencial junto', () => {
   }]);
   assert.deepEqual(turnIceServers(null, credentials), []);
   assert.deepEqual(turnIceServers(configuration, null), []);
+});
+
+// Ligar o relay sem editar arquivo e reiniciar contêiner.
+test('o que o painel salvou tem precedência sobre o ambiente', () => {
+  const ambiente = { TURN_URLS: 'turn:antigo:3478', TURN_SECRET: 'segredo-do-ambiente' };
+  const doPainel = mergeTurnSettings(ambiente, { urls: ['turn:novo:3478'], secret: 'segredo-do-painel' });
+  assert.deepEqual(doPainel?.urls, ['turn:novo:3478']);
+  assert.equal(doPainel?.secret, 'segredo-do-painel');
+});
+
+test('sem nada no painel, o ambiente continua valendo', () => {
+  const ambiente = { TURN_URLS: 'turn:a:3478', TURN_SECRET: SECRET };
+  assert.deepEqual(mergeTurnSettings(ambiente, undefined)?.urls, ['turn:a:3478']);
+  assert.deepEqual(mergeTurnSettings(ambiente, {})?.urls, ['turn:a:3478']);
+});
+
+test('metade da configuração não liga relay pela metade', () => {
+  assert.equal(mergeTurnSettings({}, { urls: ['turn:a:3478'] }), null, 'URL sem segredo não autentica');
+  assert.equal(mergeTurnSettings({}, { secret: SECRET }), null, 'segredo sem URL não tem para onde apontar');
+  assert.equal(mergeTurnSettings({}, {}), null);
+});
+
+test('o painel completa o que falta no ambiente, e vice-versa', () => {
+  assert.deepEqual(mergeTurnSettings({ TURN_SECRET: SECRET }, { urls: ['turn:a:3478'] })?.urls, ['turn:a:3478']);
+  assert.equal(mergeTurnSettings({ TURN_URLS: 'turn:a:3478' }, { secret: SECRET })?.secret, SECRET);
+});
+
+// O segredo nunca sai do servidor.
+test('a descrição para o painel diz que existe segredo, nunca qual é', () => {
+  const configuracao = mergeTurnSettings({}, { urls: ['turn:a:3478'], secret: 'segredo-muito-secreto' });
+  const descricao = describeTurnSettings(configuracao, { urls: ['turn:a:3478'], secret: 'segredo-muito-secreto' });
+  assert.deepEqual(descricao, { urls: ['turn:a:3478'], secretConfigured: true, ttlSeconds: DEFAULT_TURN_TTL_SECONDS, managedBy: 'painel' });
+  assert.equal(JSON.stringify(descricao).includes('segredo-muito-secreto'), false, 'o segredo não pode aparecer');
+});
+
+test('a descrição distingue quem está configurando', () => {
+  assert.equal(describeTurnSettings(mergeTurnSettings({ TURN_URLS: 'turn:a:3478', TURN_SECRET: SECRET }, undefined), undefined).managedBy, 'ambiente');
+  assert.equal(describeTurnSettings(null, undefined).managedBy, 'nenhum');
+  assert.equal(describeTurnSettings(null, undefined).secretConfigured, false);
 });

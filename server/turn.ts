@@ -40,6 +40,46 @@ export function parseTurnUrls(raw: string | undefined): string[] {
     .slice(0, 8);
 }
 
+export interface TurnSettings {
+  urls?: string[];
+  secret?: string;
+  ttlSeconds?: number;
+}
+
+// O que foi salvo pelo painel tem precedência sobre o ambiente. Assim dá para
+// ligar o relay sem editar arquivo e reiniciar contêiner — e a variável de
+// ambiente continua valendo como valor inicial de quem prefere configurar por
+// lá.
+export function mergeTurnSettings(environment: NodeJS.ProcessEnv, settings: TurnSettings | undefined): TurnConfiguration | null {
+  // As partes do ambiente são lidas cruas, e não pela configuração já
+  // validada: aquela devolve nulo quando falta uma metade, e perderia a outra
+  // — impedindo o painel de completar o que o `.env` deixou pela metade.
+  const urlsDoAmbiente = parseTurnUrls(environment.TURN_URLS);
+  const segredoDoAmbiente = environment.TURN_SECRET?.trim() ?? '';
+  const ttlDoAmbiente = Number(environment.TURN_TTL_SECONDS);
+
+  const urls = settings?.urls?.length ? parseTurnUrls(settings.urls.join(',')) : urlsDoAmbiente;
+  const secret = settings?.secret?.trim() || segredoDoAmbiente;
+  if (!urls.length || !secret) return null;
+  const ttl = settings?.ttlSeconds ?? (Number.isFinite(ttlDoAmbiente) ? ttlDoAmbiente : DEFAULT_TURN_TTL_SECONDS);
+  return { urls, secret, ttlSeconds: Number.isFinite(ttl) && ttl >= 300 && ttl <= 86_400 ? Math.floor(ttl) : DEFAULT_TURN_TTL_SECONDS };
+}
+
+// O que o painel pode mostrar. O segredo nunca sai daqui — só se ele existe.
+export function describeTurnSettings(configuration: TurnConfiguration | null, settings: TurnSettings | undefined): {
+  urls: string[];
+  secretConfigured: boolean;
+  ttlSeconds: number;
+  managedBy: 'painel' | 'ambiente' | 'nenhum';
+} {
+  return {
+    urls: configuration?.urls ?? [],
+    secretConfigured: Boolean(configuration?.secret),
+    ttlSeconds: configuration?.ttlSeconds ?? DEFAULT_TURN_TTL_SECONDS,
+    managedBy: settings?.secret || settings?.urls?.length ? 'painel' : configuration ? 'ambiente' : 'nenhum',
+  };
+}
+
 export function turnConfiguration(environment: NodeJS.ProcessEnv): TurnConfiguration | null {
   const urls = parseTurnUrls(environment.TURN_URLS);
   const secret = environment.TURN_SECRET?.trim() ?? '';

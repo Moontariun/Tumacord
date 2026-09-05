@@ -1,5 +1,18 @@
 # Histórico de versões
 
+## 0.8.3 — subir sem relay volta a funcionar, e o relay se configura pelo painel
+
+**O que impedia de subir**
+
+- **as variáveis do relay eram obrigatórias na interpolação, e isso travava o servidor inteiro.** O Compose interpola *todos* os serviços antes de olhar perfil: um `${VAR:?}` no coturn fazia `docker compose up` falhar mesmo para quem nunca quis relay nenhum, e a mensagem falava de uma variável que essa pessoa não tinha motivo para definir. Agora as três têm padrão vazio, e é o próprio contêiner do relay que recusa subir mal configurado, com uma mensagem que diz o que falta;
+- na prática: `docker compose up -d --build` volta a funcionar sem nenhuma variável de TURN definida.
+
+**Relay configurável pelo painel**
+
+- **Rede / TURN** é uma área nova do painel administrativo: endereços, segredo compartilhado e validade das credenciais. O que for salvo lá passa a valer **sem reiniciar o servidor**, e tem precedência sobre o `.env` — que continua funcionando como valor inicial;
+- **o segredo entra e nunca sai.** Não existe caminho que devolva o valor guardado: o painel mostra apenas se ele está configurado, deixar em branco mantém o atual, e o registro de auditoria anota o que mudou, nunca o valor. Um segredo em log de auditoria é um segredo vazado;
+- o painel completa o que o `.env` deixou pela metade. Um teste encontrou a versão errada disso: eu lia a configuração já validada do ambiente, que devolve nulo quando falta uma metade — e perdia a outra.
+
 ## 0.8.2 — a imagem do relay existe, e atualizar o servidor virou um comando
 
 - **`coturn/coturn:4.6-alpine` não existe.** A numeração do coturn saltou de 4.5 para 4.17, e a tag inventada na 0.8.0 só apareceria na máquina de quem fosse hospedar, como `manifest unknown` no primeiro `docker compose --profile turn up`. Passa a usar `4.17-alpine`, e um teste trava o formato para a próxima tag errada falhar no CI e não na produção de alguém;
