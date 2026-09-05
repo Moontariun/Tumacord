@@ -15,6 +15,7 @@ import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from
 import { currentNetworkPreferences } from '../lib/networkPreferences';
 import { iceServers } from '../lib/iceServers';
 import { selectedCandidatePath, type SelectedPath } from '../lib/iceDiagnostics';
+import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/mediaDiagnostics';
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
@@ -429,6 +430,43 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       contextState: (source.context?.state as MicrophoneReading['contextState']) ?? 'unknown',
       track: observed ? { readyState: observed.readyState, enabled: track?.enabled ?? observed.enabled, muted: observed.muted } : null,
       userMuted: mutedRef.current,
+    };
+  }, []);
+
+  // Retrato da mídia local para o painel de diagnóstico. Ele responde a
+  // pergunta que a interface sozinha não consegue: em qual camada parou. Nada
+  // aqui carrega token, chave ou credencial.
+  const peers_current = () => peers.current;
+  const mediaSnapshot = useCallback((): MicrophonePipelineSnapshot & { paths: Array<{ peerId: string; path: SelectedPath | null }> } => {
+    const processing = microphoneProcessing.current;
+    const raw = processing?.rawStream.getAudioTracks()[0] ?? null;
+    const output = processing?.outputStream.getAudioTracks()[0] ?? null;
+    const retrato = (track: MediaStreamTrack | null) => (track ? { readyState: track.readyState, enabled: track.enabled, muted: track.muted } : null);
+    const meter = processing?.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
+    const peers: PeerAudioSnapshot[] = [];
+    const paths: Array<{ peerId: string; path: SelectedPath | null }> = [];
+    for (const [peerId, state] of peers_current()) {
+      const audioSenders = state.pc.getSenders().filter((sender) => sender.track?.kind === 'audio' || state.senderMedia.get(sender) === 'microphone');
+      peers.push({
+        peerId,
+        hasAudioSender: audioSenders.length > 0,
+        senderHasTrack: audioSenders.some((sender) => sender.track !== null && sender.track.readyState === 'live'),
+        connectionState: state.pc.connectionState,
+      });
+      paths.push({ peerId, path: state.selectedPath });
+    }
+    return {
+      desired: Boolean(channelRef.current),
+      userMuted: mutedRef.current,
+      requestedDeviceId: preferencesRef.current.microphoneId,
+      acquiredDeviceId: processing?.identity.deviceId ?? '',
+      raw: retrato(raw),
+      rawLevel: meter ? analyserLevel(meter) : null,
+      neural: Boolean(processing?.neural),
+      processedLevel: processing?.outputMeter ? analyserLevel(processing.outputMeter) : null,
+      output: retrato(output),
+      peers,
+      paths,
     };
   }, []);
 
@@ -2155,6 +2193,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   };
 
   return {
+    mediaSnapshot,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,

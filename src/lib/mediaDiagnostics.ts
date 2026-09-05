@@ -148,3 +148,66 @@ export function deviceMismatch(snapshot: Pick<MicrophonePipelineSnapshot, 'reque
   if (!snapshot.acquiredDeviceId) return false;
   return snapshot.requestedDeviceId !== snapshot.acquiredDeviceId;
 }
+
+// Relatório para "Copiar diagnóstico".
+//
+// Ele existe para ser colado em uma conversa, então tudo que identifica ou dá
+// acesso fica de fora: token de sessão, chave de servidor, credencial de TURN,
+// segredo de convite e endereço IP. O que sobra é o suficiente para dizer em
+// qual camada parou.
+
+export interface DiagnosticPath {
+  peerId: string;
+  path: { local: string; remote: string; protocol: string; family: string; relayed: boolean; roundTripMs?: number } | null;
+}
+
+export interface DiagnosticContext {
+  version: string;
+  connectionMode: 'p2p' | 'server';
+  stunConfigured: boolean;
+  turnConfigured: boolean;
+  paths: readonly DiagnosticPath[];
+}
+
+// Identificadores viram um prefixo curto: bastam para casar duas linhas do
+// mesmo relatório, e não servem para reconstruir nada.
+function shortId(value: string): string {
+  return value ? `${value.slice(0, 6)}…` : '—';
+}
+
+function trackLine(label: string, track: TrackSnapshot | null): string {
+  if (!track) return `  ${label}: ausente`;
+  return `  ${label}: ${track.readyState} · ${track.enabled ? 'habilitada' : 'desabilitada'} · ${track.muted ? 'silenciada pelo sistema' : 'não silenciada'}`;
+}
+
+export function formatDiagnosticReport(snapshot: MicrophonePipelineSnapshot, context: DiagnosticContext): string {
+  const verdicts = diagnoseMicrophone(snapshot);
+  const linhas: string[] = [
+    `Tumacord ${context.version} · modo ${context.connectionMode === 'server' ? 'servidor' : 'P2P'}`,
+    `STUN ${context.stunConfigured ? 'configurado' : 'desligado'} · TURN ${context.turnConfigured ? 'disponível' : 'indisponível'}`,
+    '',
+    'Camadas do microfone:',
+    ...verdicts.map((verdict) => `  ${verdict.layer.padEnd(11)} ${verdict.status.toUpperCase().padEnd(8)} ${verdict.detail}`),
+    '',
+    'Faixas:',
+    trackLine('crua     ', snapshot.raw),
+    trackLine('enviada  ', snapshot.output),
+    `  dispositivo pedido: ${snapshot.requestedDeviceId ? shortId(snapshot.requestedDeviceId) : '(padrão do sistema)'}`,
+    `  dispositivo aberto: ${shortId(snapshot.acquiredDeviceId)}`,
+    `  filtro neural: ${snapshot.neural ? 'ligado' : 'desligado'}`,
+    `  energia entrada: ${snapshot.rawLevel === null ? 'não medida' : snapshot.rawLevel.toFixed(4)}`,
+    `  energia saída: ${snapshot.processedLevel === null ? 'não medida' : snapshot.processedLevel.toFixed(4)}`,
+    '',
+    `Enlaces (${snapshot.peers.length}):`,
+  ];
+  for (const peer of snapshot.peers) {
+    const caminho = context.paths.find((entry) => entry.peerId === peer.peerId)?.path ?? null;
+    const rota = caminho
+      ? `${caminho.relayed ? 'relay' : `${caminho.local}/${caminho.remote}`} · ${caminho.family} · ${caminho.protocol.toUpperCase()}${caminho.roundTripMs === undefined ? '' : ` · ${caminho.roundTripMs} ms`}`
+      : 'caminho não escolhido';
+    linhas.push(`  ${shortId(peer.peerId)} ${peer.connectionState.padEnd(12)} sender=${peer.hasAudioSender ? (peer.senderHasTrack ? 'com faixa' : 'sem faixa') : 'ausente'} · ${rota}`);
+  }
+  if (!snapshot.peers.length) linhas.push('  ninguém mais na call');
+  linhas.push('', describeMicrophonePipeline(snapshot));
+  return linhas.join('\n');
+}

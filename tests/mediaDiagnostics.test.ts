@@ -138,3 +138,50 @@ test('divergência entre o dispositivo pedido e o adquirido é detectada', () =>
   assert.equal(deviceMismatch({ requestedDeviceId: '', acquiredDeviceId: 'id-webcam' }), false, 'pedir o padrão não é divergência');
   assert.equal(deviceMismatch({ requestedDeviceId: 'id-fifine', acquiredDeviceId: '' }), false, 'sem informação não se acusa');
 });
+
+// --- relatório copiável ---
+
+import { formatDiagnosticReport, type DiagnosticContext } from '../src/lib/mediaDiagnostics';
+
+const contexto: DiagnosticContext = {
+  version: '0.8.1',
+  connectionMode: 'server',
+  stunConfigured: true,
+  turnConfigured: true,
+  paths: [{ peerId: 'socket-abcdef123456', path: { local: 'relay', remote: 'srflx', protocol: 'udp', family: 'IPv4', relayed: true, roundTripMs: 42 } }],
+};
+
+test('o relatório nomeia a camada quebrada e o caminho de cada enlace', () => {
+  const texto = formatDiagnosticReport(retrato({
+    rawLevel: 0,
+    peers: [{ peerId: 'socket-abcdef123456', hasAudioSender: true, senderHasTrack: true, connectionState: 'connected' }],
+  }), contexto);
+  assert.match(texto, /capture\s+BROKEN/);
+  assert.match(texto, /relay · IPv4 · UDP · 42 ms/);
+  assert.match(texto, /^Captura:/m);
+  assert.match(texto, /Tumacord 0\.8\.1 · modo servidor/);
+});
+
+// O relatório é feito para ser colado em uma conversa.
+test('nada que dê acesso ou identifique aparece no relatório', () => {
+  const texto = formatDiagnosticReport(retrato({
+    requestedDeviceId: 'a'.repeat(64),
+    acquiredDeviceId: 'b'.repeat(64),
+    peers: [{ peerId: 'socket-abcdef123456', hasAudioSender: true, senderHasTrack: true, connectionState: 'connected' }],
+  }), contexto);
+  assert.equal(texto.includes('a'.repeat(64)), false, 'o id completo do dispositivo não sai');
+  assert.equal(texto.includes('socket-abcdef123456'), false, 'o id completo do enlace não sai');
+  assert.equal(/\d{1,3}(\.\d{1,3}){3}/.test(texto), false, 'nenhum endereço IPv4');
+  for (const proibido of ['token', 'Bearer', 'credential', 'senha', 'password', 'secret', 'TUMA1.']) {
+    assert.equal(texto.toLowerCase().includes(proibido.toLowerCase()), false, `"${proibido}" não pode aparecer`);
+  }
+});
+
+test('sozinho na call o relatório diz isso em vez de mostrar uma lista vazia', () => {
+  assert.match(formatDiagnosticReport(retrato({ peers: [] }), { ...contexto, paths: [] }), /ninguém mais na call/);
+});
+
+test('sem TURN configurado o relatório não sugere que ele existe', () => {
+  const texto = formatDiagnosticReport(retrato(), { ...contexto, turnConfigured: false, stunConfigured: false });
+  assert.match(texto, /STUN desligado · TURN indisponível/);
+});
