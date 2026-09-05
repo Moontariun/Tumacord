@@ -15,7 +15,7 @@ import { describeMissing, readCapabilities, type ServerCapabilities } from '../l
 // acontecendo, como o servidor está arrumado, quem está nele, e o que foi
 // feito.
 
-type Area = 'overview' | 'channels' | 'users' | 'network' | 'logs';
+type Area = 'overview' | 'channels' | 'users' | 'logs';
 
 interface AdminUser {
   id: string;
@@ -25,13 +25,6 @@ interface AdminUser {
   lastSeenAt?: string;
   online: boolean;
   sessions: number;
-}
-
-interface TurnState {
-  urls: string[];
-  secretConfigured: boolean;
-  ttlSeconds: number;
-  managedBy: 'painel' | 'ambiente' | 'nenhum';
 }
 
 interface AuditEntry {
@@ -48,7 +41,6 @@ const AREAS: Array<{ id: Area; label: string }> = [
   { id: 'overview', label: 'Visão geral' },
   { id: 'channels', label: 'Canais' },
   { id: 'users', label: 'Usuários' },
-  { id: 'network', label: 'Rede / TURN' },
   { id: 'logs', label: 'Registro' },
 ];
 
@@ -86,7 +78,6 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
   const [categories, setCategories] = useState<ChannelCategory[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
-  const [turn, setTurn] = useState<TurnState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -139,8 +130,6 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
     if (montado.current && lista) setUsers(lista.users);
     const registro = await chamar<{ entries: AuditEntry[] }>('/api/admin/audit');
     if (montado.current && registro) setAudit(registro.entries);
-    const rede = await chamar<{ turn: TurnState }>('/api/admin/settings');
-    if (montado.current && rede) setTurn(rede.turn);
     if (montado.current) setLoading(false);
   }, [chamar, serverUrl]);
 
@@ -183,10 +172,6 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
           onRole={(id, role, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }), `${nome} agora é ${ROLE_LABEL[role].toLowerCase()}.`)}
           onRemove={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}`, 'DELETE'), `${nome} foi removido do servidor.`)}
           onDisconnect={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/disconnect`, 'POST'), `${nome} foi desconectado.`)}
-        />}
-        {!loading && !error && area === 'network' && <Network
-          turn={turn} busy={busy}
-          onSave={(corpo) => executar('turn', () => chamar('/api/admin/settings', 'PATCH', corpo), 'Configuração do relay salva.')}
         />}
         {!loading && !error && area === 'logs' && <Logs entries={audit} />}
       </section>
@@ -326,60 +311,6 @@ function Users({ users, currentUserId, busy, onRole, onRemove, onDisconnect }: {
       </li>)}
       {!users.length && <p className="invite-status">Nenhuma conta neste servidor.</p>}
     </ul>
-  </>;
-}
-
-function Network({ turn, busy, onSave }: {
-  turn: TurnState | null;
-  busy: string | null;
-  onSave: (corpo: { turnUrls?: string[]; turnSecret?: string; turnTtlSeconds?: number }) => Promise<boolean>;
-}) {
-  const [urls, setUrls] = useState(turn?.urls.join('\n') ?? '');
-  const [segredo, setSegredo] = useState('');
-  const [validade, setValidade] = useState(String(turn?.ttlSeconds ?? 28800));
-  const origem = turn?.managedBy === 'painel' ? 'definido aqui no painel'
-    : turn?.managedBy === 'ambiente' ? 'vindo do arquivo .env do servidor'
-    : 'não configurado';
-
-  return <>
-    <p className="settings-intro">
-      O relay TURN é a reserva para quando nenhum caminho direto se forma — os dois lados atrás de CGNAT simétrico, sem IPv6.
-      O que você salvar aqui passa a valer <strong>sem reiniciar o servidor</strong> e tem precedência sobre o `.env`.
-    </p>
-    <ul className="admin-cards">
-      <li><span>Estado</span><strong>{turn?.urls.length && turn.secretConfigured ? 'ativo' : 'inativo'}</strong></li>
-      <li><span>Origem</span><strong>{origem}</strong></li>
-      <li><span>Segredo</span><strong>{turn?.secretConfigured ? '•••••••• configurado' : 'ausente'}</strong></li>
-      <li><span>Validade</span><strong>{Math.round((turn?.ttlSeconds ?? 0) / 3600)} h</strong></li>
-    </ul>
-
-    <div className="setting-label">
-      <span className="setting-title">Endereços do relay<small>Um por linha, começando com `turn:` ou `turns:`.</small></span>
-      <textarea className="invite-code" rows={3} value={urls} spellCheck={false} placeholder="turn:turn.seudominio.com:3478" onChange={(evento) => setUrls(evento.target.value)} />
-    </div>
-    <div className="setting-label">
-      <span className="setting-title">Segredo compartilhado<small>O mesmo valor do coturn. Ele nunca é devolvido por aqui — deixe em branco para manter o atual.</small></span>
-      <input type="password" autoComplete="new-password" value={segredo} placeholder={turn?.secretConfigured ? '•••••••• (mantém o atual)' : 'pelo menos 12 caracteres'} onChange={(evento) => setSegredo(evento.target.value)} />
-    </div>
-    <div className="setting-label">
-      <span className="setting-title">Validade das credenciais<small>Em segundos, entre 300 e 86400.</small></span>
-      <input value={validade} inputMode="numeric" onChange={(evento) => setValidade(evento.target.value)} />
-    </div>
-
-    <button className="primary-button" disabled={busy === 'turn'} onClick={() => {
-      const corpo: { turnUrls?: string[]; turnSecret?: string; turnTtlSeconds?: number } = {
-        turnUrls: urls.split('\n').map((linha) => linha.trim()).filter(Boolean),
-        turnTtlSeconds: Number(validade),
-      };
-      // Segredo em branco significa "não mexa", e não "apague".
-      if (segredo.trim()) corpo.turnSecret = segredo.trim();
-      void onSave(corpo).then((ok) => { if (ok) setSegredo(''); });
-    }}>{busy === 'turn' ? 'Salvando…' : 'Salvar configuração do relay'}</button>
-
-    <div className="quality-note">
-      <strong>O relay ainda precisa existir</strong>
-      <span>Isto diz ao aplicativo onde encontrar o relay e como se autenticar. O coturn em si sobe na máquina com `docker compose --profile turn up -d`, e o segredo aqui precisa ser o mesmo que ele usa. Libere `3478/udp`, `3478/tcp` e a faixa `49160-49200/udp` no firewall.</span>
-    </div>
   </>;
 }
 

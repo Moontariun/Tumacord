@@ -38,15 +38,6 @@ interface StoredData {
   profiles: ReplicatedProfile[];
   sessions: StoredSession[];
   auditLog: AuditEntry[];
-  // Configurações que o painel altera sem exigir reinício. O segredo do relay
-  // mora aqui e nunca é devolvido a cliente nenhum.
-  settings: StoredSettings;
-}
-
-export interface StoredSettings {
-  turnUrls?: string[];
-  turnSecret?: string;
-  turnTtlSeconds?: number;
 }
 
 type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
@@ -65,7 +56,6 @@ const initialData = (): StoredData => ({
   profiles: [],
   sessions: [],
   auditLog: [],
-  settings: {},
 });
 
 function profileKey(username: string): string {
@@ -138,7 +128,6 @@ export class JsonStore {
         profiles: [...profiles.values()],
         sessions,
         auditLog: parsed.auditLog ?? [],
-        settings: parsed.settings ?? {},
       };
       if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
@@ -322,17 +311,6 @@ export class JsonStore {
     this.data.categories = applyOrder(this.data.categories, orderedIds);
     await this.save();
     return this.data.categories;
-  }
-
-  get settings(): Readonly<StoredSettings> { return this.data.settings; }
-
-  async updateSettings(patch: Partial<StoredSettings>): Promise<Readonly<StoredSettings>> {
-    this.data.settings = { ...this.data.settings, ...patch };
-    for (const chave of Object.keys(patch) as Array<keyof StoredSettings>) {
-      if (patch[chave] === undefined) delete this.data.settings[chave];
-    }
-    await this.save();
-    return this.data.settings;
   }
 
   async recordAudit(entry: AuditEntry): Promise<void> {

@@ -1,37 +1,5 @@
 # Histórico de versões
 
-## 0.8.5 — a atualização recusa o Compose v1 antes de mexer em qualquer coisa
-
-- **o `docker-compose` v1, em Python, quebra com Docker Engine moderno.** Ele lê um campo `ContainerConfig` que as imagens novas não trazem mais e morre com um traceback **no meio da recriação** — depois de já ter parado o contêiner antigo. A atualização passa a verificar isso antes de tocar em qualquer coisa, nomeia a falha para quem for procurar, e diz como instalar o plugin v2;
-- **contêiner com o mesmo nome, criado por outra configuração**, impedia a recriação e só aparecia no meio do caminho. Agora é apontado antes, junto com os comandos para guardar como ele estava configurado — e só então removê-lo;
-- as duas verificações vêm antes do backup e do `checkout`. Verificar depois de mexer não ajuda ninguém.
-
-## 0.8.4 — um clone novo não perde mais a chave do servidor
-
-- **um clone novo nasce sem `.env`, e o Compose para antes de tudo.** O arquivo guarda a chave de acesso do servidor e não é versionado, de propósito — mas isso significa que quem recria a pasta bate em `Defina TUMACORD_SERVER_ACCESS_KEY` e fica sem a chave que o grupo inteiro já usa;
-- **o contêiner que está no ar carrega esses valores desde que foi criado.** A atualização passa a reconstruir o `.env` a partir dele: chave de acesso, nome do administrador, caminhos de TLS e configuração do relay voltam exatamente como estavam. Nada é inventado, nada é impresso no terminal, e o arquivo nasce legível só pelo dono;
-- quando não há contêiner de onde recuperar, o script diz onde procurar a chave e avisa o que está em jogo: trocá-la obriga todo o grupo a informar a nova ao entrar.
-
-## 0.8.3 — subir sem relay volta a funcionar, e o relay se configura pelo painel
-
-**O que impedia de subir**
-
-- **as variáveis do relay eram obrigatórias na interpolação, e isso travava o servidor inteiro.** O Compose interpola *todos* os serviços antes de olhar perfil: um `${VAR:?}` no coturn fazia `docker compose up` falhar mesmo para quem nunca quis relay nenhum, e a mensagem falava de uma variável que essa pessoa não tinha motivo para definir. Agora as três têm padrão vazio, e é o próprio contêiner do relay que recusa subir mal configurado, com uma mensagem que diz o que falta;
-- na prática: `docker compose up -d --build` volta a funcionar sem nenhuma variável de TURN definida.
-
-**Relay configurável pelo painel**
-
-- **Rede / TURN** é uma área nova do painel administrativo: endereços, segredo compartilhado e validade das credenciais. O que for salvo lá passa a valer **sem reiniciar o servidor**, e tem precedência sobre o `.env` — que continua funcionando como valor inicial;
-- **o segredo entra e nunca sai.** Não existe caminho que devolva o valor guardado: o painel mostra apenas se ele está configurado, deixar em branco mantém o atual, e o registro de auditoria anota o que mudou, nunca o valor. Um segredo em log de auditoria é um segredo vazado;
-- o painel completa o que o `.env` deixou pela metade. Um teste encontrou a versão errada disso: eu lia a configuração já validada do ambiente, que devolve nulo quando falta uma metade — e perdia a outra.
-
-## 0.8.2 — a imagem do relay existe, e atualizar o servidor virou um comando
-
-- **`coturn/coturn:4.6-alpine` não existe.** A numeração do coturn saltou de 4.5 para 4.17, e a tag inventada na 0.8.0 só apareceria na máquina de quem fosse hospedar, como `manifest unknown` no primeiro `docker compose --profile turn up`. Passa a usar `4.17-alpine`, e um teste trava o formato para a próxima tag errada falhar no CI e não na produção de alguém;
-- **`scripts/update-server.sh`** faz, nesta ordem: backup do volume, atualização, conferência. A ordem não é estética — procurar o backup depois do problema é tarde. Ele para se houver alteração local no `docker-compose.yml`, porque quem trocou a imagem do relay ou ajustou uma porta precisa saber antes; mantém o relay subindo apenas se ele já estava; e, quando o servidor não responde em sessenta segundos, imprime o caminho de volta e o de restauração em vez de deixar alguém procurar;
-- ele nunca usa `docker compose down -v`. Há teste conferindo isso, e a verificação precisou distinguir o comando da explicação sobre o comando — o script documenta justamente que não o usa;
-- funciona também por `curl … | bash`, que é como alguém o executa da primeira vez, antes de tê-lo em disco.
-
 ## 0.8.1 — estabilidade de mídia auditada e um painel de administração de verdade
 
 **O bug do microfone: o que a medição derrubou**

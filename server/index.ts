@@ -13,7 +13,7 @@ import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, Us
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
-import { describeTurnSettings, ephemeralTurnCredentials, mergeTurnSettings, parseTurnUrls, turnIceServers, type TurnSettings } from './turn.js';
+import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter } from './rateLimit.js';
 import { canManageChannels, canManageUsers, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
 import { applyOrder, buildChannelTree, canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
@@ -40,17 +40,7 @@ const directKey = process.env.TUMACORD_DIRECT_KEY?.trim() ?? '';
 // O relay TURN é a rede de segurança para o caso em que nem o enlace direto
 // nem o ICE atravessam: os dois lados atrás de CGNAT simétrico, sem IPv6.
 // Quando não está configurado, o servidor simplesmente não anuncia nada.
-// Resolvido a cada uso, e não uma vez na subida: o painel pode ligar o relay
-// sem reiniciar o contêiner.
-// O armazenamento nomeia os campos com o prefixo `turn` porque convive com
-// outras configurações; o módulo de relay não precisa desse prefixo. A tradução
-// fica em um lugar só.
-const turnSettings = (): TurnSettings => ({
-  urls: store.settings.turnUrls,
-  secret: store.settings.turnSecret,
-  ttlSeconds: store.settings.turnTtlSeconds,
-});
-const currentTurn = () => mergeTurnSettings(process.env, turnSettings());
+const turn = turnConfiguration(process.env);
 const loginLimiter = new AuthRateLimiter();
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
@@ -205,12 +195,12 @@ app.get('/api/health', (_request, response) => {
     mode: p2pMode ? 'p2p' : 'server',
     web: serveWeb,
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
-    turn: Boolean(currentTurn()),
+    turn: Boolean(turn),
     // O cliente pergunta o que este servidor sabe fazer, em vez de deduzir de
     // um número de versão. Uma instalação parada ou um fork quebrariam a
     // dedução; a declaração, não.
     capabilities: {
-      turn: Boolean(currentTurn()),
+      turn: Boolean(turn),
       roles: !p2pMode,
       adminChannels: !p2pMode,
       adminUsers: !p2pMode,
@@ -226,7 +216,6 @@ app.get('/api/health', (_request, response) => {
 app.get('/api/turn', (request, response) => {
   const user = httpUser(request);
   if (!user) return void response.status(401).json({ error: 'Sessão inválida.' });
-  const turn = currentTurn();
   if (!turn) return void response.json({ iceServers: [], expiresAt: 0 });
   const credentials = ephemeralTurnCredentials(turn, user.username);
   response.json({ iceServers: turnIceServers(turn, credentials), expiresAt: credentials.expiresAt });
@@ -394,7 +383,7 @@ function adminOverview(): AdminOverview {
     categories: [...store.categories],
     voiceRooms: rooms.snapshot(),
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
-    turn: Boolean(currentTurn()),
+    turn: Boolean(turn),
   };
 }
 
@@ -428,42 +417,6 @@ function broadcastChannels(): void {
 function refuse(response: express.Response, status: number, error: string): void {
   response.status(status).json({ error });
 }
-
-app.get('/api/admin/settings', (request, response) => {
-  const context = requireAdmin(request, response);
-  if (!context) return;
-  response.json({ turn: describeTurnSettings(currentTurn(), turnSettings()) });
-});
-
-// O segredo entra e nunca sai. O painel envia um valor novo ou não envia nada;
-// não existe caminho que devolva o que já está guardado.
-app.patch('/api/admin/settings', async (request, response) => {
-  const context = requireAdmin(request, response);
-  if (!context) return;
-  const corpo = request.body as { turnUrls?: unknown; turnSecret?: unknown; turnTtlSeconds?: unknown } | undefined;
-  const patch: { turnUrls?: string[]; turnSecret?: string; turnTtlSeconds?: number } = {};
-  if (corpo?.turnUrls !== undefined) {
-    const bruto = Array.isArray(corpo.turnUrls) ? corpo.turnUrls.join(',') : String(corpo.turnUrls ?? '');
-    const urls = parseTurnUrls(bruto);
-    if (bruto.trim() && !urls.length) return refuse(response, 400, 'Use endereços começando com turn: ou turns:.');
-    patch.turnUrls = urls;
-  }
-  if (corpo?.turnSecret !== undefined) {
-    const segredo = String(corpo.turnSecret ?? '').trim();
-    if (segredo && segredo.length < 12) return refuse(response, 400, 'O segredo do relay precisa de pelo menos 12 caracteres.');
-    patch.turnSecret = segredo || undefined;
-  }
-  if (corpo?.turnTtlSeconds !== undefined) {
-    const ttl = Number(corpo.turnTtlSeconds);
-    if (!Number.isInteger(ttl) || ttl < 300 || ttl > 86_400) return refuse(response, 400, 'A validade das credenciais fica entre 300 e 86400 segundos.');
-    patch.turnTtlSeconds = ttl;
-  }
-  await store.updateSettings(patch);
-  // O detalhe registra o que mudou, nunca o valor: um segredo em log de
-  // auditoria é um segredo vazado.
-  await audit(context.user, 'server.settings', 'relay TURN', 'ok', Object.keys(patch).join(', '));
-  response.json({ ok: true, turn: describeTurnSettings(currentTurn(), turnSettings()) });
-});
 
 app.get('/api/admin/audit', (request, response) => {
   const context = requireAdmin(request, response);

@@ -55,19 +55,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/compose-v2-guard-v0.8.5/scripts/install-v0.8.5.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-v0.8.1.sh | bash
 ```
 
-Este comando instala a v0.8.5 a partir da branch separada `release/compose-v2-guard-v0.8.5`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.1 a partir da branch separada `release/stability-and-admin-v0.8.1`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.5, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-compose-v2-guard-v0.8.5`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.1, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-stability-and-admin-v0.8.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/compose-v2-guard-v0.8.5/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -191,11 +191,6 @@ docker compose --profile turn up -d
 
 O relay fica fora do perfil padrão de propósito: ele só faz sentido em uma máquina com IP público e é a única peça que chega a carregar mídia — e, portanto, banda.
 
-O relay também pode ser configurado **pelo painel administrativo**, em
-**Rede / TURN**: endereços, segredo e validade das credenciais passam a valer
-sem reiniciar o servidor, e têm precedência sobre o `.env`. O segredo entra e
-nunca é devolvido — o painel mostra apenas se ele está configurado.
-
 ### Variáveis do relay
 
 | Variável | Para que serve |
@@ -311,23 +306,10 @@ Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre 
 
 ## Atualizar um servidor existente
 
-> **Requer Docker Compose v2** (`docker compose`, o plugin). O `docker-compose`
-> v1 em Python está fora de suporte e falha com `KeyError: 'ContainerConfig'`
-> em Docker Engine moderno, no meio da recriação. Instale com
-> `sudo apt-get install docker-compose-plugin` e confira com
-> `docker compose version`.
-
 A 0.8.1 muda o formato guardado — canais ganham posição, contas ganham papel, e o registro de auditoria passa a existir. **A migração é automática e não apaga nada.**
 
 ```bash
 ./scripts/update-server.sh
-```
-
-Na primeira vez, quando o script ainda não está na sua pasta, rode-o direto da
-internet — de dentro da pasta do servidor:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/main/scripts/update-server.sh | bash
 ```
 
 Ele faz backup do volume, busca a versão publicada, reconstrói preservando o
