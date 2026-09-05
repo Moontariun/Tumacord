@@ -80,10 +80,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          # As notas da Release saem do CHANGELOG: é lá que a versão está
+          # explicada, e uma lista de commits gerada automaticamente não conta
+          # a mesma história para quem só quer saber o que mudou.
+          notes_file="$(mktemp)"
+          awk -v version="${tag#v}" '
+            index($0, "## " version " ") == 1 { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' CHANGELOG.md > "$notes_file"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             extra=()
             [[ "$tag" == *-* ]] && extra+=(--prerelease)
-            gh release create "$tag" --title "Tumacord $tag" --generate-notes "${extra[@]}"
+            if [[ -s "$notes_file" ]]; then
+              gh release create "$tag" --title "Tumacord $tag" --notes-file "$notes_file" "${extra[@]}"
+            else
+              echo "::warning::CHANGELOG sem seção para $tag; usando notas geradas."
+              gh release create "$tag" --title "Tumacord $tag" --generate-notes "${extra[@]}"
+            fi
+          elif [[ -s "$notes_file" ]]; then
+            gh release edit "$tag" --title "Tumacord $tag" --notes-file "$notes_file"
           fi
           gh release upload "$tag" --clobber \
             release/Tumacord-*.AppImage \

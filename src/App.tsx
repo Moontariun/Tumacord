@@ -11,6 +11,9 @@ import { clearSession, defaultServerUrl, loadSession, login, register, saveSessi
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
+import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, resolveInvite, type DirectReport } from './lib/directLink';
+import { currentNetworkPreferences, loadNetworkPreferences, subscribeNetworkPreferences, updateNetworkPreferences, type NetworkPreferences } from './lib/networkPreferences';
+import { describeReachability } from '../shared/directLink';
 import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext, sharedAudioOutput } from './lib/audioBus';
 import { profileMediaUrl, updateProfile, uploadProfileMedia } from './lib/profile';
 import logoUrl from '../assets/tumacord-logo.png';
@@ -68,6 +71,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   const [error, setError] = useState('');
   const [connectionMode, setConnectionMode] = useState<'p2p' | 'server'>(() => window.tumacordDesktop ? 'p2p' : 'server');
   const [rememberMe, setRememberMe] = useState(true);
+  const [inviteCode, setInviteCode] = useState('');
   const isDesktop = Boolean(window.tumacordDesktop);
 
   const submit = async (event: FormEvent) => {
@@ -81,11 +85,28 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       playSound('error');
       return;
     }
-    const target = connectionMode === 'p2p' && isDesktop ? 'http://127.0.0.1:3927' : serverUrl;
+    // Com um convite colado, entrar significa alcançar o computador de quem
+    // convidou — não o servidor local. Os caminhos do convite são tentados em
+    // paralelo e o primeiro que responder vira o alvo do login.
+    let target = connectionMode === 'p2p' && isDesktop ? 'http://127.0.0.1:3927' : serverUrl;
+    let inviteKey = '';
+    let resumeCall: string | undefined;
+    if (connectionMode === 'p2p' && isDesktop && inviteCode.trim()) {
+      const resolved = await resolveInvite(inviteCode).catch(() => null);
+      if (!resolved) {
+        setError(readInvite(inviteCode) ? 'O convite é válido, mas não consegui alcançar o host por nenhum caminho. Peça um código novo.' : 'Código de convite inválido ou vencido.');
+        setLoading(false);
+        return;
+      }
+      target = resolved.url;
+      inviteKey = resolved.invite.key;
+      resumeCall = resolved.invite.callId;
+    }
     try {
       const authenticated = mode === 'register'
-        ? await register(target, username, password, undefined, connectionMode, rememberMe, serverKey)
-        : await login(target, username, password, undefined, connectionMode === 'server', connectionMode, rememberMe, serverKey);
+        ? await register(target, username, password, resumeCall, connectionMode, rememberMe, inviteKey || serverKey)
+        : await login(target, username, password, resumeCall, connectionMode === 'server' || Boolean(inviteKey), connectionMode, rememberMe, inviteKey || serverKey);
+      if (inviteKey) await adoptDirectKey(inviteKey);
       onLogin(authenticated);
       playSound('connect');
     }
@@ -99,9 +120,10 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       <img className="login-logo" src={logoUrl} alt="Marca do Tumacord" />
       <div className="brand-title">Tuma<span>cord</span></div>
       <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
-        <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'ZeroTier/LAN, host dinâmico' : 'Disponível no aplicativo'}</small></span></button>
+        <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'Enlace direto, rede local e convite' : 'Disponível no aplicativo'}</small></span></button>
         <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
       </div>
+      {connectionMode === 'p2p' && isDesktop && <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call para entrar de qualquer rede.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA1.…" /></label>}
       {connectionMode === 'server' && <div className="server-login-fields">
         <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
         <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
@@ -114,7 +136,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       {error && <div className="form-error">{error}</div>}
       <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar no Tumacord'}</button>
       <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
-      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para o grupo. As calls da rede aparecem dentro do app; ninguém precisa copiar IP.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
+      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para o grupo. Na mesma rede as calls aparecem sozinhas; fora dela, um código de convite basta — sem ZeroTier.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
       <div className="app-version" title={`Versão instalada: ${APP_VERSION}`}>Tumacord v{APP_VERSION}</div>
     </form>
   </main>;
@@ -138,6 +160,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const [soundVolume, setFeedbackVolume] = useState(readSoundVolume);
   const [appFullscreen, setAppFullscreen] = useState(false);
   const [discoveredCalls, setDiscoveredCalls] = useState<DiscoveredCall[]>([]);
+  const [networkPreferences, setNetworkPreferences] = useState<NetworkPreferences>(() => currentNetworkPreferences());
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [joinInviteOpen, setJoinInviteOpen] = useState(false);
   const [profileUser, setProfileUser] = useState<PublicUser | null>(null);
   const [streamVolume, setStreamVolumeState] = useState(() => {
     const saved = Number(localStorage.getItem('tumacord.stream-volume') ?? 1);
@@ -237,14 +262,44 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     return window.tumacordDesktop.onCallsChanged(setDiscoveredCalls);
   }, [session.connectionMode]);
 
+  useEffect(() => {
+    void loadNetworkPreferences().then(setNetworkPreferences);
+    return subscribeNetworkPreferences(setNetworkPreferences);
+  }, []);
+
+  // Reabrir o app não pode invalidar o convite que já circulou: o servidor
+  // embutido volta a aceitar a chave da call assim que a sessão é restaurada.
+  useEffect(() => {
+    if (session.connectionMode === 'server' || !session.directKey) return;
+    void adoptDirectKey(session.directKey);
+  }, [session.connectionMode, session.directKey]);
+
   const enterDiscoveredCall = useCallback(async (call: DiscoveredCall) => {
     if (!session.password) return onLogout();
     try {
-      onSessionChange(await login(call.url, session.user.username, session.password, call.callId, true, 'p2p', session.rememberMe ?? true));
+      const key = call.key ?? '';
+      onSessionChange(await login(call.url, session.user.username, session.password, call.callId, true, 'p2p', session.rememberMe ?? true, key));
+      if (key) await adoptDirectKey(key);
     } catch {
       showToast('Não consegui entrar nessa call. Confira se o host ainda está online.');
     }
-  }, [onLogout, onSessionChange, session.password, session.user.username, showToast]);
+  }, [onLogout, onSessionChange, session.password, session.rememberMe, session.user.username, showToast]);
+
+  const enterInvitedCall = useCallback(async (code: string) => {
+    if (!session.password) {
+      onLogout();
+      return false;
+    }
+    const resolved = await resolveInvite(code).catch(() => null);
+    if (!resolved) return false;
+    try {
+      onSessionChange(await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, 'p2p', session.rememberMe ?? true, resolved.invite.key));
+      await adoptDirectKey(resolved.invite.key);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [onLogout, onSessionChange, session.password, session.rememberMe, session.user.username]);
 
   const handleHostHandoff = useCallback((host: VoiceState, channelId: string, abrupt: boolean) => {
     if (session.connectionMode === 'server') return;
@@ -258,7 +313,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       handoffTimer.current = null;
       if (!session.password) return onLogout();
       try {
-        const migrated = await login(target, session.user.username, session.password, channelId, true, 'p2p', session.rememberMe ?? true);
+        const migrated = await login(target, session.user.username, session.password, channelId, true, 'p2p', session.rememberMe ?? true, session.directKey ?? '');
         if (generation === handoffGeneration.current) onSessionChange(migrated);
       } catch {
         if (generation !== handoffGeneration.current) return;
@@ -266,7 +321,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         onLogout();
       }
     }, delay);
-  }, [onLogout, onSessionChange, session.connectionMode, session.password, session.user.id, session.user.username, showToast]);
+  }, [onLogout, onSessionChange, session.connectionMode, session.directKey, session.password, session.rememberMe, session.user.id, session.user.username, showToast]);
 
   useEffect(() => {
     const next = io(session.serverUrl, { auth: { token: session.token }, transports: ['websocket', 'polling'], reconnectionDelay: 500, reconnectionDelayMax: 3000 });
@@ -492,6 +547,11 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     <aside className="channel-sidebar">
       <header className="server-header"><span className="brand-mark">Tuma<span>cord</span></span></header>
       <div className="channel-scroll">
+        {session.connectionMode !== 'server' && window.tumacordDesktop && <section className="direct-link-actions">
+          <div className="group-title"><span>Enlace direto</span></div>
+          <button className="direct-link-button" onClick={() => setInviteOpen(true)}><Icon name="users" /><span><strong>Convidar pela internet</strong><small>Gera um código com os caminhos até este computador</small></span></button>
+          <button className="direct-link-button" onClick={() => setJoinInviteOpen(true)}><Icon name="server" /><span><strong>Entrar por convite</strong><small>Cole o código de quem já está na call</small></span></button>
+        </section>}
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
@@ -535,7 +595,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         <strong>{selectedChannel?.name ?? 'Tumacord'}</strong>
         {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
         <div className="topbar-spacer" />
-        <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : 'Host dinâmico pela rede local/ZeroTier'}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
+        <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : `Host dinâmico por enlace direto${networkPreferences.zeroTierEnabled ? ', rede local e ZeroTier' : ' e rede local'}`}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
         {isServerAdmin && <button className="admin-toolbar-button" onClick={() => setAdminOpen(true)} title="Painel administrativo"><Icon name="shield" /></button>}
         <button className={memberListOpen ? 'toolbar-active' : ''} onClick={() => setMemberListOpen((value) => !value)} title="Membros"><Icon name="users" /></button>
         <button onClick={() => void toggleAppFullscreen()} title={appFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}><Icon name={appFullscreen ? 'minimize' : 'maximize'} /></button>
@@ -551,7 +611,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(media.user?.id && mutedUsers[media.user.id])} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
-    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
+    {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
@@ -1232,13 +1294,15 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
   </div></div>;
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; onClose: () => void; onLogout: () => void }) {
+function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; onClose: () => void; onLogout: () => void }) {
+  const [tab, setTab] = useState<'media' | 'network'>('media');
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
-    <aside><h2>Configurações</h2><button className="selected">Voz e vídeo</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
-    <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
+    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
+    {tab === 'network' && <NetworkSettings preferences={networkPreferences} onChange={onNetworkPreferences} onClose={onClose} />}
+    {tab === 'media' && <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
       <DeviceSelect label="Microfone" hint="As entradas duplicadas do Chromium ficam de fora da lista." value={devices.preferences.microphoneId} devices={devices.microphones} onChange={(value) => update('microphoneId', value)} />
       <DeviceSelect label="Saída de áudio" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
       <DeviceSelect label="Câmera" value={devices.preferences.cameraId} devices={devices.cameras} onChange={(value) => update('cameraId', value)} />
@@ -1247,7 +1311,93 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
       <label className="sound-toggle"><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong><small>Entrada, saída, mensagens, microfone e troca de host.</small></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
       <div className="quality-note"><strong>Áudio da transmissão</strong><span>Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.</span></div>
-    </section>
+    </section>}
+  </div></div>;
+}
+
+function NetworkSettings({ preferences, onChange, onClose }: { preferences: NetworkPreferences; onChange: (patch: Partial<NetworkPreferences>) => void; onClose: () => void }) {
+  const [report, setReport] = useState<DirectReport | null>(null);
+  const [checking, setChecking] = useState(true);
+  const check = useCallback(async (force: boolean) => {
+    setChecking(true);
+    setReport(await readDirectReport({ force }));
+    setChecking(false);
+  }, []);
+  useEffect(() => { void check(false); }, [check]);
+  return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Rede e conexão</h1>
+    <p className="settings-intro">A call vai direto de computador para computador. O Tumacord procura sozinho o melhor caminho: rede local, IPv6 e, quando o roteador deixa, uma porta aberta para o IPv4. A mídia continua cifrada de ponta a ponta por DTLS-SRTP.</p>
+    <div className="reachability-card">
+      <div className="reachability-head"><strong>{checking ? 'Verificando os caminhos…' : `Alcance: ${describeGrade(report?.grade ?? 'blocked')}`}</strong><button disabled={checking} onClick={() => void check(true)}>Testar de novo</button></div>
+      <span>{checking ? 'Consultando STUN e o roteador; leva alguns segundos.' : report ? describeReachability({ grade: report.grade, paths: report.paths, ipv6: report.ipv6, cgnat: report.cgnat, natMapping: report.natMapping, mappedVia: report.mappedVia }) : 'A verificação de rede está disponível apenas no aplicativo instalado.'}</span>
+      {report && <ul className="reachability-facts">
+        <li><span>IPv6</span><strong>{report.ipv6 ? 'disponível' : 'ausente'}</strong></li>
+        <li><span>CGNAT</span><strong>{report.cgnat ? 'sim' : 'não'}</strong></li>
+        <li><span>NAT</span><strong>{report.natMapping === 'endpoint-independent' ? 'atravessável' : report.natMapping === 'symmetric' ? 'simétrico' : 'não medido'}</strong></li>
+        {report.mappedPort ? <li><span>Porta aberta</span><strong>{report.mappedPort} · {report.mappedVia}</strong></li> : null}
+      </ul>}
+    </div>
+    <label className="sound-toggle"><input type="checkbox" checked={preferences.stunEnabled} onChange={(event) => onChange({ stunEnabled: event.target.checked })} /><span><strong>Travessia de NAT por STUN</strong><small>Descobre o endereço público para a call furar o NAT — inclusive boa parte do CGNAT. Sem isso, só funciona na mesma rede. Os servidores STUN veem apenas o endereço, nunca a conversa.</small></span></label>
+    <label className="sound-toggle"><input type="checkbox" checked={preferences.portMapping} onChange={(event) => onChange({ portMapping: event.target.checked })} /><span><strong>Abrir porta no roteador</strong><small>Pede uma porta por PCP, NAT-PMP ou UPnP enquanto o Tumacord estiver aberto, e devolve ao fechar.</small></span></label>
+    <label className="sound-toggle"><input type="checkbox" checked={preferences.zeroTierEnabled} onChange={(event) => onChange({ zeroTierEnabled: event.target.checked })} /><span><strong>Usar a rede ZeroTier</strong><small>Desligado, o adaptador do ZeroTier fica fora da descoberta e da call. Ligue se o grupo já usa uma rede ZeroTier ou se o enlace direto não alcançar ninguém.</small></span></label>
+    {preferences.zeroTierEnabled && <div className="quality-note"><strong>ZeroTier ligado</strong><span>{report?.zeroTier.length ? `Endereços vistos: ${report.zeroTier.join(', ')}.` : 'Nenhum adaptador ZeroTier encontrado neste computador. Instale e entre na rede para usá-lo.'}</span></div>}
+    <div className="quality-note"><strong>Quando nada alcança</strong><span>Se este computador ficar sem caminho de entrada, quem tiver IPv6 ou porta aberta assume a call automaticamente. Com todos sem saída, ligar o ZeroTier acima resolve.</span></div>
+  </section>;
+}
+
+function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; onClose: () => void; onNotice: (message: string) => void }) {
+  const [report, setReport] = useState<DirectReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    void readDirectReport().then((result) => {
+      if (!active) return;
+      setReport(result);
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
+  const code = report ? buildInvite(report, { callId, callName, hostUsername }) : null;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
+    <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
+    <span className="modal-eyebrow">Enlace direto</span>
+    <h2>Convidar pela internet</h2>
+    <p>O código carrega os endereços por onde este computador aceita entrada e a chave que protege a porta. Ele vale por 12 horas; mande por onde preferir.</p>
+    {loading && <p className="invite-status">Procurando os caminhos até aqui…</p>}
+    {!loading && !code && <p className="invite-status">Nenhum caminho de entrada foi encontrado. Peça para outra pessoa do grupo gerar o convite, ou ligue o ZeroTier em Configurações → Rede e conexão.</p>}
+    {code && <>
+      <textarea className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
+      <button className="primary-button" onClick={() => { void navigator.clipboard.writeText(code).then(() => onNotice('Convite copiado.'), () => onNotice('Não consegui copiar; selecione o texto e copie manualmente.')); }}>Copiar convite</button>
+      <small className="invite-hint">Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.</small>
+    </>}
+  </div></div>;
+}
+
+function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string) => Promise<boolean>; onClose: () => void; onNotice: (message: string) => void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    if (!readInvite(code)) {
+      setError('Código inválido ou vencido. Peça um convite novo ao host.');
+      setBusy(false);
+      return;
+    }
+    const joined = await onJoin(code);
+    setBusy(false);
+    if (!joined) return setError('O convite é válido, mas nenhum dos caminhos respondeu. O host pode ter fechado o app ou trocado de rede.');
+    onNotice('Entrando na call pelo convite…');
+    onClose();
+  };
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
+    <button className="modal-close" disabled={busy} onClick={onClose}><Icon name="close" /></button>
+    <span className="modal-eyebrow">Enlace direto</span>
+    <h2>Entrar por convite</h2>
+    <p>Cole o código que você recebeu. Os caminhos são tentados em paralelo e o primeiro que responder é usado.</p>
+    <textarea className="invite-code" value={code} rows={4} spellCheck={false} placeholder="TUMA1.…" onChange={(event) => setCode(event.target.value)} />
+    {error && <p className="invite-status error">{error}</p>}
+    <button className="primary-button" disabled={busy || !code.trim()} onClick={() => void submit()}>{busy ? 'Procurando o host…' : 'Entrar na call'}</button>
   </div></div>;
 }
 

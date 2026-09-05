@@ -1,6 +1,7 @@
 const dgram = require('node:dgram');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
+const { isZeroTierInterface } = require('./direct-link.cjs');
 
 const PORT = 3928;
 const GROUP = '239.255.42.99';
@@ -18,22 +19,33 @@ function numberToIpv4(value) {
   return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.');
 }
 
-function interfaces(readNetworkInterfaces = os.networkInterfaces) {
-  return Object.values(readNetworkInterfaces()).flat().filter((entry) => entry && entry.family === 'IPv4' && !entry.internal);
+// Com o ZeroTier desligado nas configurações, o adaptador dele para de
+// receber anúncio e de entrar no multicast: a descoberta volta a ser só da
+// rede local, que é o comportamento esperado de quem não usa a malha virtual.
+function interfaces(readNetworkInterfaces = os.networkInterfaces, allowZeroTier = true) {
+  return Object.entries(readNetworkInterfaces() ?? {})
+    .flatMap(([name, list]) => (list ?? []).map((entry) => (entry ? { ...entry, interfaceName: name } : entry)))
+    .filter((entry) => entry && entry.family === 'IPv4' && !entry.internal)
+    .filter((entry) => allowZeroTier || !isZeroTierInterface(entry.interfaceName, entry.address));
 }
 
-function broadcastAddresses(readNetworkInterfaces = os.networkInterfaces) {
-  return [...new Set(interfaces(readNetworkInterfaces).map((entry) => numberToIpv4((ipv4ToNumber(entry.address) | (~ipv4ToNumber(entry.netmask) >>> 0)) >>> 0)))];
+function broadcastAddresses(readNetworkInterfaces = os.networkInterfaces, allowZeroTier = true) {
+  return [...new Set(interfaces(readNetworkInterfaces, allowZeroTier).map((entry) => numberToIpv4((ipv4ToNumber(entry.address) | (~ipv4ToNumber(entry.netmask) >>> 0)) >>> 0)))];
 }
 
 class TumacordDiscovery {
-  constructor(onChange, { createSocket = dgram.createSocket, networkInterfaces = os.networkInterfaces } = {}) {
+  constructor(onChange, { createSocket = dgram.createSocket, networkInterfaces = os.networkInterfaces, allowZeroTier = true, key = '' } = {}) {
     this.hostId = randomUUID();
     this.onChange = onChange;
     this.calls = new Map();
     this.hosting = null;
     this.closed = false;
     this.readNetworkInterfaces = networkInterfaces;
+    this.allowZeroTier = allowZeroTier;
+    // A chave do enlace direto viaja no anúncio para que entrar por uma call
+    // vista na própria rede continue sendo um clique. Fora da rede local ela
+    // só chega pelo código de convite.
+    this.key = key;
     this.memberships = new Set();
     this.socket = createSocket({ type: 'udp4', reuseAddr: true });
     this.socket.on('error', (error) => {
@@ -61,8 +73,18 @@ class TumacordDiscovery {
 
   setHosting(details) {
     if (this.closed) return;
-    this.hosting = details ? { ...details, hostId: this.hostId, port: 3927 } : null;
+    this.hosting = details ? { ...details, hostId: this.hostId, port: 3927, key: this.key } : null;
     if (this.hosting) this.broadcast({ type: 'advertise', ...this.hosting });
+  }
+
+  setNetworkPreferences({ allowZeroTier, key } = {}) {
+    if (this.closed) return;
+    if (typeof allowZeroTier === 'boolean') this.allowZeroTier = allowZeroTier;
+    if (typeof key === 'string') {
+      this.key = key;
+      if (this.hosting) this.hosting = { ...this.hosting, key };
+    }
+    this.refreshInterfaces();
   }
 
   list() {
@@ -76,7 +98,7 @@ class TumacordDiscovery {
 
   refreshInterfaces() {
     if (this.closed) return;
-    const current = new Set(interfaces(this.readNetworkInterfaces).map((entry) => entry.address));
+    const current = new Set(interfaces(this.readNetworkInterfaces, this.allowZeroTier).map((entry) => entry.address));
     for (const address of current) {
       if (this.memberships.has(address)) continue;
       try {
@@ -105,7 +127,7 @@ class TumacordDiscovery {
   broadcast(payload) {
     if (this.closed) return;
     const packet = Buffer.from(JSON.stringify({ magic: MAGIC, ...payload }));
-    for (const target of [...broadcastAddresses(this.readNetworkInterfaces), GROUP]) this.send(packet, PORT, target);
+    for (const target of [...broadcastAddresses(this.readNetworkInterfaces, this.allowZeroTier), GROUP]) this.send(packet, PORT, target);
   }
 
   onMessage(buffer, remote) {
@@ -130,6 +152,7 @@ class TumacordDiscovery {
       callName: message.callName || 'Call Geral',
       participants: Number(message.participants) || 1,
       url: `http://${remote.address}:3927`,
+      key: typeof message.key === 'string' ? message.key : '',
       pingMs: measured,
       lastSeen: Date.now(),
     });

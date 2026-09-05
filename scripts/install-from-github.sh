@@ -7,14 +7,27 @@ repository="Moontariun/Tumacord"
 repository_url="https://github.com/${repository}.git"
 source_ref="${1:-${TUMACORD_REF:-main}}"
 
+# O bootstrap precisa do Git antes de existir qualquer código clonado, então a
+# tradução do nome do pacote é repetida aqui em forma mínima.
+install_git() {
+  command -v sudo >/dev/null 2>&1 || return 1
+  if command -v dnf5 >/dev/null 2>&1; then sudo -- dnf5 install --assumeyes git
+  elif command -v dnf >/dev/null 2>&1; then sudo -- dnf install --assumeyes git
+  elif command -v pacman >/dev/null 2>&1; then sudo -- pacman --sync --needed --noconfirm git
+  elif command -v apt-get >/dev/null 2>&1; then sudo -- apt-get update && sudo -- apt-get install --yes git
+  elif command -v zypper >/dev/null 2>&1; then sudo -- zypper --non-interactive install git
+  else return 1
+  fi
+  hash -r
+}
+
 if ! command -v git >/dev/null 2>&1; then
-  if command -v pacman >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
-    echo "O Git não está instalado; instalando a dependência…"
-    sudo -- pacman --sync --needed git
-    hash -r
-  else
+  echo "O Git não está instalado; instalando a dependência…"
+  if ! install_git; then
     echo "Dependência ausente: git" >&2
-    echo "No CachyOS: sudo pacman -S --needed git" >&2
+    echo "No Fedora: sudo dnf install git" >&2
+    echo "No CachyOS/Arch: sudo pacman -S --needed git" >&2
+    echo "No Debian/Ubuntu: sudo apt install git" >&2
     exit 1
   fi
 fi
@@ -74,10 +87,15 @@ else
   clone_fresh "$source_directory"
 fi
 
-if [[ ! -x "$source_directory/scripts/install-cachyos.sh" ]]; then
+# A partir da 0.7.9 o instalador se chama `install-linux.sh`; o nome antigo
+# continua no repositório para quem apontar para uma branch anterior.
+installer="$source_directory/scripts/install-linux.sh"
+[[ -f "$installer" ]] || installer="$source_directory/scripts/install-cachyos.sh"
+if [[ ! -f "$installer" ]]; then
   echo "O clone não contém o instalador esperado." >&2
   exit 1
 fi
+chmod +x "$source_directory"/scripts/*.sh 2>/dev/null || true
 
 echo "Código-fonte mantido em: ${source_directory}"
 if [[ "${TUMACORD_CLONE_ONLY:-0}" == "1" ]]; then
@@ -85,4 +103,4 @@ if [[ "${TUMACORD_CLONE_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 echo "Compilando e instalando localmente; o AppImage não é necessário."
-"$source_directory/scripts/install-cachyos.sh"
+bash "$installer"

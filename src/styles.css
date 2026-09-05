@@ -1143,3 +1143,34 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .member-row > .live-dot { margin-left: 0; }
 .member-row > .member-ping + .live-dot { margin-left: 2px; }
 .member-name { flex: 1; }
+
+/* Enlace direto: convite, diagnóstico de alcance e atalhos da barra lateral. */
+.invite-field small { display: block; margin-top: -2px; color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: .02em; text-transform: none; }
+.direct-link-actions { margin: 0 0 17px; padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.direct-link-actions .group-title { padding-left: 7px; }
+.direct-link-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border: 1px solid rgba(125,92,255,.22); border-radius: 9px; background: rgba(125,92,255,.06); color: #c9cad4; text-align: left; }
+.direct-link-button + .direct-link-button { margin-top: 6px; }
+.direct-link-button:hover { border-color: rgba(125,92,255,.6); background: rgba(125,92,255,.13); }
+.direct-link-button svg { width: 15px; height: 15px; flex: none; color: #a894ff; }
+.direct-link-button span { min-width: 0; display: grid; gap: 3px; }
+.direct-link-button strong { color: #f2f2f7; font-size: 11px; }
+.direct-link-button small { overflow: hidden; color: #868898; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+.reachability-card { display: grid; gap: 9px; margin: 16px 0 6px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 14px; background: #15161e; }
+.reachability-head { display: flex; align-items: center; gap: 12px; }
+.reachability-head strong { flex: 1; font-size: 13px; }
+.reachability-head button { padding: 6px 12px; border-radius: 8px; background: var(--panel-hover); color: #d6d7e2; font-size: 10px; font-weight: 800; }
+.reachability-head button:hover:not(:disabled) { background: #34364a; }
+.reachability-card > span { color: var(--muted); font-size: 11px; line-height: 1.55; }
+.reachability-facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 0; padding: 0; list-style: none; }
+.reachability-facts li { display: grid; gap: 2px; padding: 7px 11px; border-radius: 9px; background: #20212c; }
+.reachability-facts span { color: #7c7e90; font-size: 8px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.reachability-facts strong { color: #e6e7ef; font-size: 11px; }
+
+.invite-modal { position: relative; width: min(560px, 94vw); max-height: 90vh; overflow-y: auto; padding: 32px; border: 1px solid rgba(255,255,255,.09); border-radius: 22px; background: #1a1c25; box-shadow: 0 35px 110px rgba(0,0,0,.62); animation: modal-in .16s ease-out; }
+.invite-modal h2 { margin: 0 0 8px; font-size: 19px; }
+.invite-modal > p { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.invite-code { width: 100%; padding: 13px 14px; border: 1px solid var(--border); border-radius: 12px; background: #101119; color: #dfe0ea; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; resize: vertical; word-break: break-all; }
+.invite-status { margin: 0; padding: 12px 14px; border-radius: 12px; background: #20212c; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.invite-status.error { border: 1px solid rgba(255,77,79,.3); background: rgba(255,77,79,.08); color: #ffb4b5; }
+.invite-hint { display: block; margin-top: 12px; color: #7c7e90; font-size: 10px; line-height: 1.6; }

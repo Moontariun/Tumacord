@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     return () => ipcRenderer.removeListener('tumacord:calls-changed', handler);
   },
   setHosting: (details) => ipcRenderer.invoke('tumacord:set-hosting', details),
+  getNetworkPreferences: () => ipcRenderer.invoke('tumacord:network-preferences'),
+  setNetworkPreferences: (patch) => ipcRenderer.invoke('tumacord:set-network-preferences', patch),
+  onNetworkPreferencesChanged: (listener) => {
+    const handler = (_event, preferences) => listener(preferences);
+    ipcRenderer.on('tumacord:network-preferences-changed', handler);
+    return () => ipcRenderer.removeListener('tumacord:network-preferences-changed', handler);
+  },
+  directReport: (options) => ipcRenderer.invoke('tumacord:direct-report', options),
   toggleFullscreen: () => ipcRenderer.invoke('tumacord:toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('tumacord:is-fullscreen'),
   onFullscreenChanged: (listener) => {

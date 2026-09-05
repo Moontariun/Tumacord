@@ -11,7 +11,8 @@ import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
-import { createToken, hashPassword, hashToken, normalizeUsername, verifyPassword, verifySecret } from './auth.js';
+import { isTrustedLocalAddress } from '../shared/directLink.js';
+import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -26,6 +27,11 @@ const p2pMode = process.env.TUMACORD_P2P_MODE === '1';
 const serveWeb = process.env.TUMACORD_SERVE_WEB !== '0';
 const serverAccessKey = process.env.SERVER_ACCESS_KEY?.trim() ?? '';
 const adminUsername = normalizeUsername(process.env.ADMIN_USERNAME?.trim() || 'Moontariun');
+// Chave do enlace direto. Ela existe porque, sem ZeroTier, a porta de
+// sinalização passa a aceitar conexão vinda da internet: quem chega de fora da
+// rede local precisa apresentar o convite. Endereço da própria rede continua
+// entrando sem chave, exatamente como a descoberta por broadcast sempre fez.
+const directKey = process.env.TUMACORD_DIRECT_KEY?.trim() ?? '';
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
 if (Boolean(tlsCertificateFile) !== Boolean(tlsKeyFile)) throw new Error('TLS_CERT_FILE e TLS_KEY_FILE precisam ser configurados juntos.');
@@ -60,6 +66,57 @@ function channelIsAvailable(channelId: string, type?: Channel['type']): boolean 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
+
+function requestAddress(request: express.Request): string {
+  return request.socket.remoteAddress ?? '';
+}
+
+function presentedDirectKey(request: express.Request): string {
+  const header = request.headers['x-tumacord-key'];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  const body = request.body as { serverKey?: unknown } | undefined;
+  return typeof body?.serverKey === 'string' ? body.serverKey.trim() : '';
+}
+
+// A chave não é da máquina, é da call. Quando o host sai, quem assume precisa
+// aceitar o mesmo convite que já circulou entre os amigos — senão a troca
+// automática de host deixaria todo mundo com um código que não abre mais nada.
+// Por isso o servidor aceita um conjunto: a chave própria mais as adotadas ao
+// entrar em uma call pelo convite de outra pessoa.
+const acceptedDirectKeys = new Set<string>(directKey ? [directKey] : []);
+const MAX_ACCEPTED_DIRECT_KEYS = 8;
+
+function directKeyMatches(presented: string): boolean {
+  if (!presented) return false;
+  for (const candidate of acceptedDirectKeys) {
+    if (verifySecret(presented, candidate)) return true;
+  }
+  return false;
+}
+
+function directAccessAllowed(request: express.Request): boolean {
+  if (!acceptedDirectKeys.size) return true;
+  if (isTrustedLocalAddress(requestAddress(request))) return true;
+  if (httpUser(request)) return true;
+  return directKeyMatches(presentedDirectKey(request));
+}
+
+// A liberação vale para a API inteira, e não só para o login: anexo e
+// sincronização também são dados do grupo. Três exceções, e o motivo de cada
+// uma: `/api/health` e `/api/direct/hello` são o que o convite consulta para
+// escolher o caminho, e a leitura de mídia de perfil é o avatar dentro de uma
+// tag `<img>`, que não tem como enviar cabeçalho. Avatar e banner já são
+// replicados para todo participante e ficam atrás de um UUID sorteado.
+function directGateExempt(request: express.Request): boolean {
+  if (request.path === '/api/health' || request.path === '/api/direct/hello') return true;
+  return request.method === 'GET' && request.path.startsWith('/api/profile/media/');
+}
+
+app.use((request, response, next) => {
+  if (!request.path.startsWith('/api/') || directGateExempt(request)) return next();
+  if (directAccessAllowed(request)) return next();
+  response.status(403).json({ error: 'Esta call exige o código de convite do host.' });
+});
 
 const credentialsInput = z.object({
   username: z.string().trim().min(2).max(24).regex(/^[\p{L}\p{N}_. -]+$/u),
@@ -129,6 +186,34 @@ app.get('/api/health', (_request, response) => {
     web: serveWeb,
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
   });
+});
+
+// O host prova que é ele mesmo devolvendo um HMAC do nonce com a chave do
+// convite. Sem isso, um endereço reaproveitado por outra máquina receberia
+// usuário e senha de quem tentasse entrar por um convite antigo.
+app.get('/api/direct/hello', (request, response) => {
+  const nonce = typeof request.query.nonce === 'string' ? request.query.nonce.slice(0, 128) : '';
+  response.json({
+    ok: true,
+    version: serverVersion,
+    mode: p2pMode ? 'p2p' : 'server',
+    requiresKey: acceptedDirectKeys.size > 0,
+    // Uma prova por chave aceita. Quem chegou com o convite reconhece a sua na
+    // lista; as outras não dizem nada sobre as chaves em si.
+    proofs: nonce ? [...acceptedDirectKeys].map((candidate) => proveKey(candidate, nonce)) : [],
+  });
+});
+
+// Só o próprio computador adota chave: é a interface avisando "entrei nesta
+// call, passe a aceitar este convite também".
+app.post('/api/direct/keys', requireLoopback, (request, response) => {
+  const parsed = z.object({ key: z.string().trim().min(22).max(256) }).safeParse(request.body);
+  if (!parsed.success) return void response.status(400).json({ error: 'Chave de convite inválida.' });
+  if (!directKeyMatches(parsed.data.key)) {
+    acceptedDirectKeys.add(parsed.data.key);
+    while (acceptedDirectKeys.size > MAX_ACCEPTED_DIRECT_KEYS) acceptedDirectKeys.delete([...acceptedDirectKeys][0]);
+  }
+  response.json({ ok: true, accepted: acceptedDirectKeys.size });
 });
 
 function hasServerAccess(serverKey: string): boolean {
@@ -528,7 +613,8 @@ io.on('connection', (socket) => {
     }
     const existingPeers = rooms.members(channelId);
     socket.join(`voice:${channelId}`);
-    rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address) });
+    const reachability = z.number().finite().min(0).max(100).safeParse((input as { reachability?: unknown } | null)?.reachability).data ?? 0;
+    rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address), reachability });
     acknowledge?.({ ok: true, selfId: socket.id, peers: existingPeers });
     // Participantes que já estavam na call mantêm câmera/tela locais. Este
     // aviso faz cada um recriar apenas o enlace P2P do usuário que voltou,
@@ -546,6 +632,13 @@ io.on('connection', (socket) => {
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
     broadcastSnapshot();
+  });
+
+  socket.on('voice:reachability', (value: unknown) => {
+    const channelId = rooms.roomOf(socket.id);
+    const parsed = z.number().finite().min(0).max(100).safeParse(value);
+    if (!channelId || !parsed.success) return;
+    io.to(`voice:${channelId}`).emit('voice:members', rooms.updateReachability(channelId, socket.id, parsed.data));
   });
 
   socket.on('voice:latency', (value: unknown) => {
@@ -637,9 +730,25 @@ storeReady.then(async () => {
     const storedTokenHash = storedSession.tokenHash ?? (storedSession.token ? hashToken(storedSession.token) : '');
     if (storedTokenHash) sessions.set(storedTokenHash, { userId: storedSession.userId, expiresAt: storedSession.expiresAt });
   }
-  httpServer.listen(port, host, () => {
-    console.log(`Tumacord ${p2pMode ? 'P2P' : 'Server'} em ${tlsEnabled ? 'https' : 'http'}://${host}:${port}${serveWeb ? ' (web ativo)' : ''}`);
-  });
+  // `::` atende IPv4 e IPv6 na mesma porta na configuração padrão do Linux, e
+  // é o que permite alguém entrar pelo IPv6 do host sem ZeroTier. Em um
+  // sistema com `bindv6only` ligado — ou sem IPv6 — a abertura falha, e aí o
+  // servidor volta para IPv4 em vez de não subir.
+  const listen = (address: string, onFailure?: (error: NodeJS.ErrnoException) => void): void => {
+    const handleFailure = (error: NodeJS.ErrnoException): void => {
+      httpServer.removeListener('error', handleFailure);
+      if (onFailure) return onFailure(error);
+      console.error('Falha ao abrir a porta do servidor Tumacord:', error.message);
+      process.exitCode = 1;
+    };
+    httpServer.once('error', handleFailure);
+    httpServer.listen(port, address, () => {
+      httpServer.removeListener('error', handleFailure);
+      console.log(`Tumacord ${p2pMode ? 'P2P' : 'Server'} em ${tlsEnabled ? 'https' : 'http'}://${address}:${port}${serveWeb ? ' (web ativo)' : ''}`);
+    });
+  };
+  if (host === '::') listen('::', () => listen('0.0.0.0'));
+  else listen(host);
 }).catch((error) => {
   console.error('Falha ao iniciar o servidor Tumacord:', error);
   process.exitCode = 1;

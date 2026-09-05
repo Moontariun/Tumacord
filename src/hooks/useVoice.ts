@@ -12,6 +12,9 @@ import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioM
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
+import { currentNetworkPreferences, iceServersFor } from '../lib/networkPreferences';
+import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromLevel, microphoneIdentityOf, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity } from '../lib/microphoneHealth';
+import { readDirectReport } from '../lib/directLink';
 
 export type { StreamQuality } from '../lib/screenQuality';
 
@@ -197,6 +200,11 @@ interface MicrophoneProcessing {
   rawStream: MediaStream;
   outputStream: MediaStream;
   deviceId: string;
+  // O que a preferência pedia e o que o navegador realmente abriu são coisas
+  // diferentes: com "Padrão do sistema" a preferência é vazia e só a
+  // identidade resolvida revela para qual aparelho a captura foi.
+  identity: MicrophoneIdentity;
+  defaultSignature: string;
   neural: boolean;
   noiseSuppression: boolean;
   context?: AudioContext;
@@ -278,7 +286,7 @@ async function createNeuralMicrophone(rawStream: MediaStream, deviceId: string):
     if (!outputTrack) throw new Error('O filtro neural não criou uma faixa de áudio.');
     if ('contentHint' in outputTrack) outputTrack.contentHint = 'speech';
     const outputStream = new MediaStream([outputTrack]);
-    return { rawStream, outputStream, deviceId, neural: true, noiseSuppression: true, context, source, highPass, suppressor, compressor, destination, inputMeter, outputMeter };
+    return { rawStream, outputStream, deviceId, identity: { deviceId: '', groupId: '' }, defaultSignature: '', neural: true, noiseSuppression: true, context, source, highPass, suppressor, compressor, destination, inputMeter, outputMeter };
   } catch (error) {
     await context.close().catch(() => undefined);
     throw error;
@@ -365,7 +373,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const neuralFallback = useRef(false);
   const microphoneFallbackNotice = useRef(false);
   const microphoneSignal = useRef({ lastSignalAt: 0, warned: false });
-  const ensureMicrophoneRef = useRef<() => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
+  const microphoneFault = useRef<{ kind: MicrophoneFault; since: number; recaptures: number; lastRecaptureAt: number; warned: boolean }>({ kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false });
+  const ensureMicrophoneRef = useRef<(options?: { force?: boolean }) => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
   const recoveryCooldown = useRef(new Map<string, number>());
@@ -387,6 +396,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const preferencesRef = useRef(preferences);
   const [, retryCameraSwitch] = useState(0);
   preferencesRef.current = preferences;
+
+  // Uma falha do microfone é registrada com o instante em que começou. O que
+  // fazer com ela — esperar, recapturar ou avisar — é decidido por
+  // `planMicrophoneRecovery`, no monitor mais abaixo.
+  const noteMicrophoneFault = useCallback((kind: MicrophoneFault) => {
+    const state = microphoneFault.current;
+    if (kind === 'none') {
+      if (state.kind !== 'none') microphoneFault.current = { ...state, kind: 'none', since: 0 };
+      return;
+    }
+    if (state.kind === kind) return;
+    microphoneFault.current = { ...state, kind, since: Date.now() };
+  }, []);
 
   const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
 
@@ -510,7 +532,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (remoteUser) found.user = remoteUser;
       return found;
     }
-    const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', iceServers: [], iceCandidatePoolSize: 4 });
+    // Até a 0.7.8 a lista de servidores ICE era vazia: o navegador só oferecia
+    // o endereço da própria interface, e por isso a call exigia que todo mundo
+    // estivesse na mesma rede — na prática, no ZeroTier. Com STUN o Chromium
+    // aprende o endereço público, gera candidato refletido e fura o NAT
+    // sozinho; onde há IPv6, ele ainda oferece o endereço global, que não tem
+    // NAT no meio. A mídia continua cifrada de ponta a ponta por DTLS-SRTP e
+    // não passa por nenhum servidor: o STUN só informa o endereço.
+    const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', iceServers: iceServersFor(currentNetworkPreferences()), iceCandidatePoolSize: 4 });
     const currentScreenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
     const screenBaseScale = currentScreenTrack ? screenScaleForQuality(currentScreenTrack.getSettings(), QUALITY[qualityRef.current]) : 1;
     const state: PeerConnectionState = {
@@ -898,13 +927,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     return true;
   }, [negotiate, onError, preferences.cameraId, publishState, quality, sendStreamMeta, stopStream]);
 
-  const ensureMicrophone = useCallback(async () => {
+  const ensureMicrophone = useCallback(async ({ force = false } = {}) => {
     const current = localStreams.current.get('microphone');
     const currentProcessing = microphoneProcessing.current;
     const wantsNeural = preferences.noiseSuppression && !neuralFallback.current;
     // Incrementar a geração antes desta verificação abortava uma captura em
     // andamento mesmo quando nada mudou — e o `join` desistia da call.
-    if (current
+    //
+    // `force` existe porque a recuperação precisa refazer a captura com a
+    // mesma preferência de sempre: era justamente por cair neste atalho que a
+    // única saída era trocar o dispositivo à mão e voltar.
+    if (!force
+      && current
       && currentProcessing?.deviceId === preferences.microphoneId
       && currentProcessing.noiseSuppression === preferences.noiseSuppression
       && currentProcessing.neural === wantsNeural) return current;
@@ -947,12 +981,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         rawStream.getTracks().forEach((track) => track.stop());
         rawStream = await captureRawMicrophone(true);
         neuralFallback.current = true;
-        nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, neural: false, noiseSuppression: true };
+        nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, identity: { deviceId: '', groupId: '' }, defaultSignature: '', neural: false, noiseSuppression: true };
         onError('O filtro neural não iniciou; ativei a supressão compatível do microfone como reserva.');
       }
     } else {
-      nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, neural: false, noiseSuppression: preferences.noiseSuppression };
+      nextProcessing = { rawStream, outputStream: rawStream, deviceId: preferences.microphoneId, identity: { deviceId: '', groupId: '' }, defaultSignature: '', neural: false, noiseSuppression: preferences.noiseSuppression };
     }
+
+    // A faixa que carrega a identidade do aparelho é sempre a crua: a saída do
+    // filtro neural vem de um AudioContext e não tem `deviceId` nenhum.
+    nextProcessing.identity = microphoneIdentityOf(nextProcessing.rawStream.getAudioTracks()[0]);
+    nextProcessing.defaultSignature = preferences.microphoneId
+      ? ''
+      : defaultAudioInputSignature(await navigator.mediaDevices.enumerateDevices().catch(() => []));
 
     const stream = nextProcessing.outputStream;
     const old = localStreams.current.get('microphone') ?? currentProcessing?.outputStream;
@@ -1018,7 +1059,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         microphoneRecoveryTimer.current = undefined;
         if (!channelRef.current || localStreams.current.has('microphone')) return;
         try {
-          await ensureMicrophoneRef.current();
+          await ensureMicrophoneRef.current({ force: true });
         } catch {
           mutedRef.current = true;
           setMuted(true);
@@ -1028,10 +1069,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }, 300);
     };
     newTrack.onended = recoverEndedMicrophone;
-    if (nextProcessing.rawStream !== stream) {
-      for (const rawTrack of nextProcessing.rawStream.getAudioTracks()) rawTrack.onended = recoverEndedMicrophone;
+    // `mute` é o aviso de que a fonte parou de entregar amostras sem a faixa
+    // terminar: `readyState` segue `live`, `enabled` segue `true` e só quem
+    // escuta percebe. Era o caso mais comum de "trocar o dispositivo resolve".
+    for (const rawTrack of nextProcessing.rawStream.getAudioTracks()) {
+      if (nextProcessing.rawStream !== stream) rawTrack.onended = recoverEndedMicrophone;
+      rawTrack.onmute = () => noteMicrophoneFault('muted');
+      rawTrack.onunmute = () => noteMicrophoneFault('none');
+    }
+    if (nextProcessing.rawStream === stream) {
+      newTrack.onmute = () => noteMicrophoneFault('muted');
+      newTrack.onunmute = () => noteMicrophoneFault('none');
     }
     microphoneSignal.current = { lastSignalAt: Date.now(), warned: false };
+    microphoneFault.current = { ...microphoneFault.current, kind: 'none', since: 0, warned: false };
     if (microphoneFallbackNotice.current) {
       microphoneFallbackNotice.current = false;
       onError('O microfone escolhido não aceitou a captura; voltei para o padrão do sistema.');
@@ -1041,7 +1092,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     await onDevicesChanged();
     if (channelRef.current && localStreams.current.get('microphone') === stream) startSpeakingMonitor(stream);
     return stream;
-  }, [onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, publishState, startSpeakingMonitor]);
+  }, [noteMicrophoneFault, onDevicesChanged, onError, preferences.microphoneId, preferences.noiseSuppression, publishState, startSpeakingMonitor]);
   ensureMicrophoneRef.current = ensureMicrophone;
 
   const join = useCallback(async (nextChannelId: string) => {
@@ -1080,6 +1131,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setChannelId(nextChannelId);
       const microphone = localStreams.current.get('microphone');
       if (microphone) startSpeakingMonitor(microphone);
+      // O alcance chega depois da entrada porque a sondagem fala com STUN e
+      // com o roteador. Quem assume a call quando o host sai depende dele.
+      void readDirectReport().then((report) => {
+        if (report && channelRef.current === nextChannelId) socket.emit('voice:reachability', report.score);
+      });
       for (const peer of result.peers) {
         createPeer(peer.socketId, peer);
         void negotiate(peer.socketId);
@@ -1538,7 +1594,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         silentSamples = 0;
         neuralFallback.current = true;
         onError('O processamento do microfone não retomou; seu áudio voltou pelo caminho simples.');
-        void ensureMicrophoneRef.current().catch(() => undefined);
+        void ensureMicrophoneRef.current({ force: true }).catch(() => undefined);
         return;
       }
       const raw = analyserLevel(processing.inputMeter);
@@ -1548,41 +1604,103 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       silentSamples = 0;
       neuralFallback.current = true;
       onError('O filtro neural parou de processar; seu microfone voltou pelo caminho simples.');
-      void ensureMicrophoneRef.current().catch(() => undefined);
+      void ensureMicrophoneRef.current({ force: true }).catch(() => undefined);
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [channelId, onError]);
 
   // Um microfone que abre sem captar nada é silencioso dos dois lados: quem
-  // fala não percebe e quem ouve acha que a call caiu. Aqui o próprio app
-  // avisa em vez de deixar a pessoa descobrir sozinha.
+  // fala não percebe e quem ouve acha que a call caiu. Até a 0.7.8 o app só
+  // avisava e pedia para a pessoa trocar o dispositivo à mão — que é
+  // exatamente o que refazer a captura faz. Agora ele faz isso sozinho, com
+  // teto de tentativas para não virar um laço de renegociação.
   useEffect(() => {
     if (!channelId) return;
+    let recapturing = false;
     const timer = window.setInterval(() => {
       const processing = microphoneProcessing.current;
       const track = processing?.outputStream.getAudioTracks()[0];
+      const rawTrack = processing?.rawStream.getAudioTracks()[0];
       const signal = microphoneSignal.current;
+      const state = microphoneFault.current;
+      if (recapturing) return;
       if (!processing || !track || track.readyState !== 'live' || !track.enabled || mutedRef.current) {
         signal.lastSignalAt = Date.now();
-        return;
-      }
-      const meter = processing.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
-      if (!meter || speakingMonitor.current?.context.state !== 'running') {
-        signal.lastSignalAt = Date.now();
+        if (state.kind === 'silent') noteMicrophoneFault('none');
         return;
       }
       const now = Date.now();
-      if (analyserLevel(meter) > 0.006) {
-        signal.lastSignalAt = now;
-        signal.warned = false;
+      // `muted` e a troca do dispositivo padrão são detectados por evento e já
+      // chegam registrados; aqui resta medir a energia que entra.
+      if (state.kind === 'none' || state.kind === 'silent' || state.kind === 'dead') {
+        const meter = processing.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
+        const measurable = Boolean(meter) && speakingMonitor.current?.context.state === 'running' && !rawTrack?.muted;
+        if (!measurable) {
+          signal.lastSignalAt = now;
+          noteMicrophoneFault('none');
+          return;
+        }
+        const measured = faultFromLevel(analyserLevel(meter));
+        if (measured === 'none') {
+          signal.lastSignalAt = now;
+          signal.warned = false;
+          // Sinal de verdade é a prova de que o microfone voltou: o orçamento
+          // de recapturas automáticas pode ser devolvido.
+          microphoneFault.current = { kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: state.lastRecaptureAt, warned: false };
+          return;
+        }
+        if (measured !== state.kind) {
+          microphoneFault.current = { ...state, kind: measured, since: measured === 'silent' ? (signal.lastSignalAt || now) : now };
+        }
+      }
+      const current = microphoneFault.current;
+      if (current.kind === 'none') return;
+      const plan = planMicrophoneRecovery({
+        now,
+        fault: current.kind,
+        faultSince: current.since,
+        lastRecaptureAt: current.lastRecaptureAt,
+        recaptures: current.recaptures,
+        warned: current.warned,
+      });
+      if (plan.action === 'wait') return;
+      if (plan.action === 'warn') {
+        microphoneFault.current = { ...current, warned: true };
+        signal.warned = true;
+        onError(`${describeMicrophoneFault(current.kind)} Escolha outra entrada em Configurações › Microfone.`);
         return;
       }
-      if (signal.warned || now - signal.lastSignalAt < 25_000) return;
-      signal.warned = true;
-      onError('Seu microfone está aberto mas não capta som. Tente “Padrão do sistema” em Configurações › Microfone.');
+      recapturing = true;
+      microphoneFault.current = { ...current, recaptures: plan.recaptures, lastRecaptureAt: now, since: now };
+      void ensureMicrophoneRef.current({ force: true })
+        .catch(() => undefined)
+        .finally(() => { recapturing = false; });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [channelId, onError]);
+  }, [channelId, noteMicrophoneFault, onError]);
+
+  // Trocar o dispositivo padrão do sistema não termina nem silencia a faixa
+  // aberta: ela simplesmente continua presa ao aparelho anterior. Foi o que
+  // fez começar uma live quebrar o microfone, já que a fonte virtual da live
+  // entra no grafo do PipeWire e pode assumir o padrão.
+  useEffect(() => {
+    if (!channelId || !navigator.mediaDevices?.enumerateDevices) return;
+    const inspect = async () => {
+      const processing = microphoneProcessing.current;
+      if (!processing) return;
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
+      const gone = capturedDeviceIsGone({
+        preferenceId: processing.deviceId,
+        captured: processing.identity,
+        capturedDefaultSignature: processing.defaultSignature,
+        devices,
+      });
+      if (gone) noteMicrophoneFault('device-changed');
+    };
+    void inspect();
+    navigator.mediaDevices.addEventListener('devicechange', inspect);
+    return () => navigator.mediaDevices.removeEventListener('devicechange', inspect);
+  }, [channelId, noteMicrophoneFault]);
 
   useEffect(() => {
     if (!channelId) return;

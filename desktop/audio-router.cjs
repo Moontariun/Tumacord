@@ -6,9 +6,27 @@ const BUS_NAME = 'tumacord_stream_bus';
 const SOURCE_NAME = 'tumacord_stream_source';
 const BUS_DESCRIPTION = 'Tumacord Stream Audio';
 
+// `LC_ALL=C` porque a saída do pactl é traduzida: em português "Default
+// Source" vira "Fonte padrão", e um parser preso ao inglês simplesmente não
+// enxergaria o campo.
 async function pactl(args) {
-  const { stdout = '' } = await execFileAsync('pactl', args, { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 3_500 });
+  const { stdout = '' } = await execFileAsync('pactl', args, { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 3_500, env: { ...process.env, LC_ALL: 'C', LANGUAGE: 'C' } });
   return stdout.trim();
+}
+
+function parsePactlDefaults(info) {
+  const text = String(info ?? '');
+  return {
+    sink: /^\s*Default Sink:\s*(\S+)\s*$/m.exec(text)?.[1] ?? '',
+    source: /^\s*Default Source:\s*(\S+)\s*$/m.exec(text)?.[1] ?? '',
+  };
+}
+
+// Um nó nosso que vira o padrão do sistema é exatamente o defeito: o
+// "Padrão do sistema" do microfone passa a apontar para o barramento da live e
+// quem escuta recebe silêncio ou o som da própria transmissão.
+function isTumacordNode(name) {
+  return typeof name === 'string' && (name === BUS_NAME || name === SOURCE_NAME || name.startsWith(`${BUS_NAME}.`));
 }
 
 async function pipewireGraph() {
@@ -134,8 +152,33 @@ class ScreenAudioRouter {
     return this.enqueue(() => this.stopInternal());
   }
 
+  async defaultDevices() {
+    try {
+      return parsePactlDefaults(await this.runPactl(['info']));
+    } catch {
+      return { sink: '', source: '' };
+    }
+  }
+
+  // Só desfaz a troca quando o novo padrão é um nó do Tumacord. Se a pessoa
+  // trocou o dispositivo padrão no meio do caminho, quem manda é ela.
+  async restoreDefaultDevices(previous) {
+    if (!previous) return;
+    const current = await this.defaultDevices();
+    if (previous.source && current.source !== previous.source && isTumacordNode(current.source)) {
+      await this.runPactl(['set-default-source', previous.source]).catch(() => undefined);
+    }
+    if (previous.sink && current.sink !== previous.sink && isTumacordNode(current.sink)) {
+      await this.runPactl(['set-default-sink', previous.sink]).catch(() => undefined);
+    }
+  }
+
   async prepareInternal() {
     if (!(await this.available())) return { ok: false, error: 'pactl/PipeWire não está disponível.' };
+    // A fonte virtual da live entra no grafo como qualquer outra e, em vários
+    // sistemas, o gerenciador de sessão a promove a padrão. O microfone
+    // ficava mudo a partir daí, até a pessoa trocar o dispositivo à mão.
+    const previousDefaults = await this.defaultDevices();
     if (this.nullSinkModule && this.remapSourceModule) {
       try {
         const graph = await this.readGraph();
@@ -158,7 +201,10 @@ class ScreenAudioRouter {
       this.nullSinkModule = await this.runPactl([
         'load-module', 'module-null-sink',
         `sink_name=${BUS_NAME}`,
-        `sink_properties=device.description=${BUS_DESCRIPTION.replaceAll(' ', '_')}`,
+        // `priority.session=0` pede ao gerenciador de sessão que nunca escolha
+        // este nó como padrão. É a primeira linha de defesa; a restauração
+        // abaixo cobre os sistemas que ignoram a dica.
+        `sink_properties=device.description=${BUS_DESCRIPTION.replaceAll(' ', '_')} priority.session=0 node.dont-remix=true`,
         'rate=48000', 'channels=2',
       ]);
       // Chromium não lista fontes do tipo “monitor” em enumerateDevices().
@@ -169,9 +215,10 @@ class ScreenAudioRouter {
         'load-module', 'module-remap-source',
         `master=${BUS_NAME}.monitor`,
         `source_name=${SOURCE_NAME}`,
-        'source_properties=device.description=Tumacord_Stream_Audio',
+        'source_properties=device.description=Tumacord_Stream_Audio priority.session=0',
         'channels=2',
       ]);
+      await this.restoreDefaultDevices(previousDefaults);
       this.active = true;
       this.generation += 1;
       await this.routeUntilReady();
@@ -276,4 +323,4 @@ class ScreenAudioRouter {
   }
 }
 
-module.exports = { ScreenAudioRouter, activePipewireLinks, isCallAudio, screenAudioRoutePlan, staleModuleIds };
+module.exports = { ScreenAudioRouter, parsePactlDefaults, isTumacordNode, activePipewireLinks, isCallAudio, screenAudioRoutePlan, staleModuleIds };

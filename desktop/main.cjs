@@ -2,6 +2,8 @@ const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, session
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { TumacordDiscovery } = require('./discovery.cjs');
+const { DirectLink } = require('./direct-link.cjs');
+const { readNetworkPreferences, writeNetworkPreferences } = require('./network-preferences.cjs');
 const { ScreenAudioRouter } = require('./audio-router.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
@@ -13,7 +15,8 @@ process.env['PULSE_PROP_application.id'] = 'br.com.tumacord.app';
 process.env['PULSE_PROP_media.role'] = 'phone';
 
 // PipeWire é o caminho nativo de captura no Wayland. Expor os IPs de interface
-// permite que o ICE enxergue o adaptador virtual do ZeroTier.
+// é o que permite ao ICE oferecer o IPv6 global e o endereço da rede local —
+// e, quando o ZeroTier está ligado nas configurações, também o adaptador dele.
 const gpuVendors = detectLinuxGpuVendors();
 const runtimeHealthFile = path.join(app.getPath('userData'), 'runtime-health.json');
 const runtimeLogFile = path.join(app.getPath('userData'), 'logs', 'runtime-health.log');
@@ -30,6 +33,12 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 const isDevelopment = Boolean(process.env.TUMACORD_WEB_URL);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const networkPreferencesFile = path.join(app.getPath('userData'), 'network-preferences.json');
+let networkPreferences = readNetworkPreferences(networkPreferencesFile);
+// O enlace direto nasce junto do processo: a chave precisa existir antes de o
+// servidor embutido subir, e a sondagem de alcance precisa estar pronta antes
+// de alguém pedir um convite.
+const directLink = new DirectLink({ key: networkPreferences.directKey, preferences: networkPreferences });
 let discovery;
 let mainWindow;
 let tray;
@@ -70,6 +79,7 @@ app.on('child-process-gone', (_event, details) => {
   if (!health.shouldRelaunch || safeGpuMode || safeGpuRelaunching) return;
   safeGpuRelaunching = true;
   discovery?.close();
+  void directLink.close().catch(() => undefined);
   // O Chromium normalmente recria um processo GPU isolado. Se ele cair duas
   // vezes em dez minutos, continuar insistindo no mesmo driver arrisca levar
   // o compositor Wayland junto. A próxima execução usa software apenas nessa
@@ -87,7 +97,9 @@ function blockedCaptureSource(name) {
 
 async function startEmbeddedServer() {
   if (process.env.TUMACORD_EXTERNAL_SERVER === '1') return;
-  process.env.HOST = '0.0.0.0';
+  // `::` atende IPv4 e IPv6 na mesma porta; sem isso não existe entrada pelo
+  // IPv6, que é justamente o caminho de quem está atrás de CGNAT.
+  process.env.HOST = '::';
   process.env.PORT = process.env.PORT || '3927';
   process.env.DATA_DIR = path.join(app.getPath('userData'), 'server-data');
   // A instalação desktop carrega a interface direto do bundle local. O
@@ -95,6 +107,9 @@ async function startEmbeddedServer() {
   // publica mais uma cópia web na rede.
   process.env.TUMACORD_P2P_MODE = '1';
   process.env.TUMACORD_SERVE_WEB = '0';
+  // Sem ZeroTier a porta de sinalização aceita conexão da internet. Quem vem
+  // de fora da rede local precisa apresentar a chave que viaja no convite.
+  process.env.TUMACORD_DIRECT_KEY = directLink.key;
   // Variáveis destinadas a um contêiner dedicado não podem acidentalmente
   // bloquear ou transformar o servidor pessoal iniciado junto do desktop.
   process.env.SERVER_ACCESS_KEY = '';
@@ -238,7 +253,7 @@ app.whenReady().then(async () => {
   await startEmbeddedServer();
   discovery = new TumacordDiscovery((calls) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:calls-changed', calls);
-  });
+  }, { allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
   const trustedMediaRequest = (webContents, permission) => webContents === mainWindow?.webContents && ['media', 'display-capture'].includes(permission);
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => trustedMediaRequest(webContents, permission));
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(trustedMediaRequest(webContents, permission)));
@@ -260,6 +275,23 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:prepare-screen-audio', () => screenAudioRouter.prepare());
   ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
   ipcMain.handle('tumacord:discover-calls', () => discovery.list());
+  ipcMain.handle('tumacord:network-preferences', () => networkPreferences);
+  ipcMain.handle('tumacord:set-network-preferences', (_event, patch) => {
+    networkPreferences = writeNetworkPreferences(networkPreferencesFile, { ...networkPreferences, ...(patch && typeof patch === 'object' ? patch : {}) });
+    directLink.setPreferences(networkPreferences);
+    discovery?.setNetworkPreferences({ allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:network-preferences-changed', networkPreferences);
+    return networkPreferences;
+  });
+  // A sondagem fala com STUN e com o roteador: ela pode demorar alguns
+  // segundos, então a interface pede e espera, em vez de bloquear a abertura.
+  ipcMain.handle('tumacord:direct-report', async (_event, options) => {
+    try {
+      return await directLink.probe({ force: Boolean(options && options.force) });
+    } catch {
+      return directLink.emptyReport();
+    }
+  });
   ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery.setHosting(details));
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
@@ -299,5 +331,7 @@ app.on('before-quit', (event) => {
   quittingAfterAudioCleanup = true;
   discovery?.close();
   event.preventDefault();
-  void screenAudioRouter.stop().finally(() => app.quit());
+  // Fechar o app sem devolver a regra de porta deixaria o roteador aceitando
+  // conexão para uma porta que não atende mais ninguém.
+  void Promise.allSettled([screenAudioRouter.stop(), directLink.close()]).finally(() => app.quit());
 });

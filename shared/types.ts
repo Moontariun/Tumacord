@@ -60,6 +60,9 @@ export interface VoiceState extends PublicUser {
   endpoint: string;
   isHost: boolean;
   pingMs: number;
+  // Nota de 0 a 100 de quão alcançável este participante é de fora da rede
+  // local. Ela decide quem assume a call quando o host sai.
+  reachability?: number;
   muted: boolean;
   speaking: boolean;
   deafened: boolean;
@@ -110,6 +113,9 @@ export interface DiscoveredCall {
   callName: string;
   participants: number;
   url: string;
+  // Chave do enlace direto anunciada pelo host na própria rede: entrar por uma
+  // call vista aqui continua sendo um clique, sem colar convite.
+  key?: string;
   pingMs: number;
   lastSeen: number;
 }

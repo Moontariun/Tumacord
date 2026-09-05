@@ -1,5 +1,37 @@
 # Histórico de versões
 
+## 0.7.9 — P2P sem ZeroTier, instalação no Fedora e microfone que se recupera sozinho
+
+**Enlace direto: a call sem ZeroTier**
+
+- **a lista de servidores ICE estava vazia.** Sem ela o navegador só oferecia o endereço da própria interface, e por isso a call exigia que todo mundo estivesse na mesma rede — na prática, dentro do ZeroTier. Com STUN o Chromium aprende o endereço público, gera candidato refletido e fura o NAT sozinho, inclusive boa parte do CGNAT. A mídia continua cifrada de ponta a ponta por DTLS-SRTP e não passa por servidor nenhum: o STUN só informa o endereço;
+- **o servidor embutido passou a escutar em `::`**, o que abre a entrada por IPv6 na mesma porta. É o caminho mais limpo justamente para quem está atrás de CGNAT, onde o IPv4 nunca aceita conexão de fora. Em um sistema sem IPv6 a abertura volta para IPv4 sozinha, em vez de o servidor não subir;
+- o aplicativo pede uma porta ao roteador por **PCP, NAT-PMP e UPnP**, nessa ordem. O PCP vem primeiro porque é o único que uma operadora pode atender no próprio equipamento de CGNAT; o UPnP vem por último por ser o mais lento, ainda que seja o mais comum nos roteadores domésticos. A regra é renovada na metade do prazo e devolvida ao fechar o app;
+- **convite em vez de rede virtual.** O host gera um código com os caminhos por onde aceita entrada e a chave que protege a porta; quem recebe cola e entra. Os caminhos são tentados em paralelo, com a rede local primeiro, IPv6 depois e o IPv4 mapeado por último — o primeiro que responder vence;
+- **a porta exposta à internet exige o convite.** Quem chega de um endereço da própria rede continua entrando sem nada, como a descoberta por broadcast sempre fez; de fora, sem a chave, a API inteira responde 403. O host ainda devolve um HMAC do nonce, para o convidado conferir que alcançou a call certa e não um endereço que trocou de dono;
+- a chave é da call, não da máquina: quem entra por um convite passa a aceitá-lo também, e por isso a troca automática de host não invalida o código que já circulou;
+- **quem assume a call quando o host sai passou a ser escolhido pelo alcance**, e não só pelo menor ping. Um host rápido e inalcançável deixava a call inteira sem porta de entrada.
+
+**ZeroTier virou opção**
+
+- em **Configurações › Rede e conexão** há agora uma chave para ligar ou desligar o ZeroTier. Desligado — o padrão —, o adaptador dele fica fora da descoberta e da call; ligado, tudo funciona como antes. Também dá para desligar a travessia por STUN e a abertura de porta no roteador;
+- a mesma tela mostra o diagnóstico de alcance deste computador: IPv6 disponível, CGNAT, se o NAT é atravessável e qual porta foi aberta.
+
+**Instalação**
+
+- **o instalador recusava qualquer distribuição sem `pacman` na primeira linha**, e era exatamente isso que fazia o comando do README falhar no Fedora. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, e traduz os nomes dos pacotes de cada uma (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian);
+- se faltar uma biblioteca do Electron, o instalador percebe pelo `ldd` e instala o conjunto certo da distribuição, em vez de deixar o aplicativo simplesmente não abrir;
+- o auxiliar de sandbox do Chromium perde o bit setuid quando ele não pertence ao root — situação normal em uma build feita pelo usuário e outro motivo para o app não abrir no Fedora;
+- `install-cachyos.sh` e `uninstall-cachyos.sh` continuam existindo como atalho para os nomes novos, `install-linux.sh` e `uninstall-linux.sh`.
+
+**Microfone**
+
+- **a fonte virtual da live podia virar o microfone padrão do sistema.** Ela entra no grafo do PipeWire como qualquer outra fonte, e o gerenciador de sessão a promovia a padrão: quem estava com "Padrão do sistema" parava de ser ouvido no instante em que começava a transmitir. Os nós da live agora pedem prioridade zero e, se ainda assim forem promovidos, o padrão anterior é devolvido;
+- **uma faixa de microfone pode parar de entregar som sem nunca terminar.** O `readyState` continua `live`, o `enabled` continua `true`, e só quem escuta percebe. O aplicativo passou a tratar os três casos: a faixa marcada como `muted` pelo sistema, o dispositivo padrão que virou outro aparelho e a captura que abre sem receber amostra nenhuma;
+- energia exatamente zero é falha de captura e é reconhecida em três segundos; energia baixa é sala quieta e continua com a janela de vinte e cinco segundos. Em vez de só avisar, o Tumacord refaz a captura sozinho — que é exatamente o que trocar o dispositivo à mão fazia. São no máximo três tentativas, com intervalo entre elas, e o aviso só aparece se nenhuma resolver;
+- **refazer a captura com a mesma preferência não fazia nada:** havia um atalho que devolvia o fluxo quebrado quando o dispositivo escolhido não mudava. Era por isso que a única saída era trocar de dispositivo e voltar;
+- a saída do `pactl` passou a ser lida com `LC_ALL=C`. Em português os campos vêm traduzidos e o leitor preso ao inglês não enxergava nada.
+
 ## 0.7.8 — menos piscadas na transmissão e volume por pessoa funcionando
 
 **Artefatos e piscadas na live**
