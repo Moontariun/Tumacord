@@ -118,9 +118,37 @@ Duas decisões que valem registro:
 Ligar não muda a ordem de nada: o ICE compara candidatos por prioridade, e um
 par direto sempre vence um par por relay.
 
-## 5. Testes
+## 5. O caminho de instalação apontava para a versão anterior
 
-Sete testes novos. Três deles guardam o `docker-compose.yml`, e os três
+Encontrado depois de a versão já estar publicada, e por isso registrado aqui:
+`scripts/install-v0.8.2.sh` foi criado e ninguém trocou quem manda usá-lo.
+
+- **o README mandava copiar `install-v0.8.1.sh`**, da branch da 0.8.1. Pior do
+  que um comando quebrado: funcionava, e instalava a versão anterior em
+  silêncio — sem o relay corrigido e sem a chave de ligar o relay;
+- **`scripts/update-server.sh` sem argumento tinha como alvo padrão a branch da
+  0.8.1.** Este é o defeito de verdade: o script cujo propósito é atualizar
+  rebaixaria o servidor, trazendo o coturn de volta ao laço de reinício que a
+  seção 1 descreve;
+- o instalador genérico do README e o exemplo da pasta de Downloads carregavam
+  a mesma branch velha.
+
+O teste que trava isso lê a versão do `package.json`, exige que exista
+`install-v<versão>.sh`, extrai a branch de dentro desse script e cobra que o
+README e o `update-server.sh` apontem para ela. Verificado que **reprova o
+estado anterior**, restaurando os arquivos e rodando:
+
+```
+✖ README, instalador e atualizador seguem a versão do package.json
+  AssertionError: o README não pode mandar copiar instalador de outra versão
+```
+
+Subir a versão no `package.json` sozinho passa a quebrar a suíte até que os três
+acompanhem.
+
+## 6. Testes
+
+Oito testes novos. Três deles guardam o `docker-compose.yml`, e os três
 **reprovam o arquivo da 0.8.1** — verificado trocando o arquivo e rodando:
 
 ```
@@ -129,14 +157,15 @@ Sete testes novos. Três deles guardam o `docker-compose.yml`, e os três
 ✖ subir só o servidor não exige as variáveis do relay
 ```
 
-Os outros quatro cobrem a preferência: o padrão desligado (`iceServers` e
+Quatro cobrem a preferência: o padrão desligado (`iceServers` e
 `network-preferences`), a credencial em mãos não virando candidato com a chave
 desligada, e o caso sem STUN e sem relay devolvendo lista vazia em vez de cair
-no relay.
+no relay. O oitavo é o da seção 5, que amarra README, instalador e atualizador
+à versão do `package.json`.
 
-Suíte completa: **347 passam, 0 falham**. `npm run typecheck` limpo.
+Suíte completa: **348 passam, 0 falham**. `npm run typecheck` limpo.
 
-## 6. Atualizar
+## 7. Atualizar
 
 No servidor:
 
@@ -161,7 +190,7 @@ Para voltar atrás, `git checkout` da versão anterior e `up -d` de novo. O
 cliente antigo continua funcionando contra o servidor novo: `turnEnabled`
 ausente cai no padrão pela higienização, que é o mesmo `false`.
 
-## 7. Implantação e verificação em produção
+## 8. Implantação e verificação em produção
 
 Implantado em `200.9.155.102` na mesma sessão. `docker compose v2` foi instalado
 antes (`apt-get install docker-compose-v2`, 2.40.3), e adotou o projeto e o
@@ -209,7 +238,7 @@ apontando para o IP público, a mesma configuração de produção dá 0% de per
 Fica registrado porque o bloco de descoberta assusta quem for ler o log depois.
 Não há ação a tomar.
 
-## 8. O que continua sem verificação
+## 9. O que continua sem verificação
 
 - **duas pessoas reais em uma call passando pelo relay.** Exige dois pares sem
   caminho direto entre si; não dá para produzir a partir daqui. O que existe é
@@ -219,9 +248,9 @@ Não há ação a tomar.
 - **o cliente desktop empacotado.** A build web foi refeita no contêiner e o
   servidor responde 0.8.2; o AppImage sai pelo workflow.
 
-## 9. Risco conhecido
+## 10. Risco conhecido
 
 O `--no-software-attribute` está marcado `DEPRECATED` no help da 4.17, mas é
 aceito. Ficou porque removê-lo faz o servidor anunciar a própria versão. É o
-próximo candidato a virar `unrecognized option` — o teste-guarda da seção 5 vai
+próximo candidato a virar `unrecognized option` — o teste-guarda da seção 6 vai
 pegá-lo quando isso acontecer, desde que alguém rode a suíte antes de implantar.
