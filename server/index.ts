@@ -12,7 +12,7 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
-import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
+import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hashToken, normalizeInviteToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter } from './rateLimit.js';
 import { canManageChannels, canManageUsers, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
@@ -31,6 +31,9 @@ const startedAt = new Date();
 const p2pMode = process.env.TUMACORD_P2P_MODE === '1';
 const serveWeb = process.env.TUMACORD_SERVE_WEB !== '0';
 const serverAccessKey = process.env.SERVER_ACCESS_KEY?.trim() ?? '';
+// Doze horas, o mesmo prazo que o convite anterior carregava dentro do código.
+// Aqui o prazo mora no servidor, então vencer é o convite sumir do arquivo.
+const INVITE_TTL_MS = 12 * 60 * 60 * 1000;
 const adminUsername = normalizeUsername(process.env.ADMIN_USERNAME?.trim() || 'Moontariun');
 // Chave do enlace direto. Ela existe porque, sem ZeroTier, a porta de
 // sinalização passa a aceitar conexão vinda da internet: quem chega de fora da
@@ -249,8 +252,19 @@ app.post('/api/direct/keys', requireLoopback, (request, response) => {
   response.json({ ok: true, accepted: acceptedDirectKeys.size });
 });
 
+// O convite é uma chave de acesso de escopo estreito: vale enquanto não
+// vencer, e some do arquivo depois. É o que permite o código curto — a chave
+// longa do servidor deixa de viajar em algo que se cola em conversa.
+function inviteFor(presented: string): ReturnType<typeof store.inviteForHash> {
+  const token = normalizeInviteToken(presented);
+  if (token.length !== INVITE_TOKEN_LENGTH) return undefined;
+  return store.inviteForHash(hashToken(token));
+}
+
 function hasServerAccess(serverKey: string): boolean {
-  return !serverAccessKey || verifySecret(serverKey, serverAccessKey);
+  if (!serverAccessKey) return true;
+  if (verifySecret(serverKey, serverAccessKey)) return true;
+  return Boolean(inviteFor(serverKey));
 }
 
 async function issueSession(user: StoredUser): Promise<string> {
@@ -261,6 +275,48 @@ async function issueSession(user: StoredUser): Promise<string> {
   await store.addSession({ tokenHash, ...session });
   return token;
 }
+
+const inviteInput = z.object({
+  callId: z.string().min(1).max(64),
+  callName: z.string().max(64).optional().default('Call'),
+});
+
+// Emitir exige sessão: convidar é ato de quem já está dentro. O token volta
+// uma única vez, em texto; o servidor guarda só o hash.
+app.post('/api/invite', async (request, response) => {
+  const user = httpUser(request);
+  if (!user) {
+    response.status(401).json({ error: 'Entre na conta antes de gerar um convite.' });
+    return;
+  }
+  const parsed = inviteInput.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Informe a call do convite.' });
+    return;
+  }
+  const token = createInviteToken();
+  const expiresAt = Date.now() + INVITE_TTL_MS;
+  await store.addInvite({
+    tokenHash: hashToken(token),
+    callId: parsed.data.callId,
+    callName: parsed.data.callName,
+    hostUsername: user.username,
+    createdBy: user.id,
+    expiresAt,
+  });
+  response.json({ token, expiresAt });
+});
+
+// Quem recebeu o código consulta antes de entrar, para ver de que call se
+// trata. Responde só o que já estava no convite antigo — nada a mais.
+app.get('/api/invite/:token', (request, response) => {
+  const invite = inviteFor(String(request.params.token ?? ''));
+  if (!invite) {
+    response.status(404).json({ error: 'Convite inválido ou vencido.' });
+    return;
+  }
+  response.json({ callId: invite.callId, callName: invite.callName, hostUsername: invite.hostUsername, expiresAt: invite.expiresAt });
+});
 
 app.post('/api/auth/register', async (request, response) => {
   const parsed = credentialsInput.safeParse(request.body);

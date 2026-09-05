@@ -29,6 +29,18 @@ export interface StoredSession {
   expiresAt: number;
 }
 
+// Convite emitido pelo servidor. O que viaja no código é um token curto; aqui
+// fica só o hash dele, pela mesma razão das sessões: um vazamento do arquivo
+// não pode virar um convite utilizável.
+export interface StoredInvite {
+  tokenHash: string;
+  callId: string;
+  callName: string;
+  hostUsername: string;
+  createdBy: string;
+  expiresAt: number;
+}
+
 interface StoredData {
   users: StoredUser[];
   channels: Channel[];
@@ -37,6 +49,7 @@ interface StoredData {
   attachments: StoredAttachment[];
   profiles: ReplicatedProfile[];
   sessions: StoredSession[];
+  invites: StoredInvite[];
   auditLog: AuditEntry[];
 }
 
@@ -55,6 +68,7 @@ const initialData = (): StoredData => ({
   attachments: [],
   profiles: [],
   sessions: [],
+  invites: [],
   auditLog: [],
 });
 
@@ -123,6 +137,7 @@ export class JsonStore {
         users,
         channels,
         categories: parsed.categories ?? [],
+        invites: parsed.invites ?? [],
         messages: parsed.messages ?? [],
         attachments: [...attachments.values()],
         profiles: [...profiles.values()],
@@ -156,6 +171,25 @@ export class JsonStore {
     this.data.sessions.push(session);
     if (this.data.sessions.length > 500) this.data.sessions.splice(0, this.data.sessions.length - 500);
     await this.save();
+  }
+
+  get invites(): StoredInvite[] {
+    // Arquivos gravados antes da 0.8.4 não têm a lista; ausência é lista vazia.
+    return this.data.invites ?? (this.data.invites = []);
+  }
+
+  async addInvite(invite: StoredInvite): Promise<void> {
+    const now = Date.now();
+    this.data.invites = this.invites.filter((candidate) => candidate.tokenHash !== invite.tokenHash && candidate.expiresAt > now);
+    this.data.invites.push(invite);
+    // Teto para o arquivo não crescer sem limite se alguém gerar convites em
+    // laço; os mais antigos saem primeiro.
+    if (this.data.invites.length > 200) this.data.invites.splice(0, this.data.invites.length - 200);
+    await this.save();
+  }
+
+  inviteForHash(tokenHash: string, now = Date.now()): StoredInvite | undefined {
+    return this.invites.find((candidate) => candidate.tokenHash === tokenHash && candidate.expiresAt > now);
   }
 
   async removeSession(tokenHash: string): Promise<void> {

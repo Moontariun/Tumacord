@@ -12,7 +12,7 @@ import { clearSession, defaultServerUrl, loadSession, login, register, saveSessi
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
-import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, resolveInvite, type DirectReport } from './lib/directLink';
+import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, requestShortInvite, resolveInvite, resolveShortInvite, type DirectReport } from './lib/directLink';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
 import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict } from './lib/mediaDiagnostics';
@@ -320,7 +320,10 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       onLogout();
       return false;
     }
-    const resolved = await resolveInvite(code).catch(() => null);
+    // O código curto (TUMA2) é o formato atual; o TUMA1 continua sendo lido
+    // para não invalidar convite que já circulou.
+    const resolved = (await resolveShortInvite(code).catch(() => null))
+      ?? (await resolveInvite(code).catch(() => null));
     if (!resolved) return false;
     try {
       const migrated = await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, resolved.mode, session.rememberMe ?? true, resolved.invite.key);
@@ -648,7 +651,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
-    {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
+    {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
@@ -1367,27 +1370,39 @@ function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onC
   </section>;
 }
 
-function InviteModal({ callId, callName, hostUsername, server, serverKey, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; server?: string; serverKey?: string; onClose: () => void; onNotice: (message: string) => void }) {
-  // O código é gerado uma vez, dentro do efeito. Gerá-lo no corpo do render
-  // fazia a call inteira ditar o ritmo: cada atualização de ping re-renderizava
-  // este modal e produzia um código diferente na tela.
+function InviteModal({ callId, callName, hostUsername, server, serverToken, serverKey, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; server?: string; serverToken?: string; serverKey?: string; onClose: () => void; onNotice: (message: string) => void }) {
   const [code, setCode] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const codeField = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
-    setCode(buildInvite({ callId, callName, hostUsername, server, key: serverKey }));
-  }, [callId, callName, hostUsername, server, serverKey]);
+    let active = true;
+    // O código curto é emitido pelo servidor. Sem servidor não há convite, e
+    // sem sessão não há como pedir; nos dois casos o texto abaixo explica.
+    const pedido = server && serverToken
+      ? requestShortInvite(server, serverToken, { callId, callName })
+      : Promise.resolve(null);
+    void pedido.then((curto) => {
+      if (!active) return;
+      // Se o servidor for anterior à 0.8.4 ele não conhece `/api/invite`;
+      // o formato longo continua servindo como reserva.
+      setCode(curto ?? buildInvite({ callId, callName, hostUsername, server, key: serverKey }));
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [callId, callName, hostUsername, server, serverToken, serverKey]);
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
     <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
     <span className="modal-eyebrow">Convite</span>
     <h2>Convidar pela internet</h2>
-    <p>O código aponta o servidor da call e leva o segredo que dá direito de entrar. Nenhum endereço da sua máquina vai junto, e quem receber chega por conexão de saída — atravessa CGNAT sem abrir porta nenhuma.</p>
-    {!code && <p className="invite-status">{server
-      ? 'Faltou a chave de acesso deste servidor para montar o convite. Entre de novo informando a chave e tente outra vez.'
-      : 'Convidar pela internet exige um servidor. Nesta call, entre em Servidor dedicado e gere o convite de lá; no modo P2P, as calls só aparecem para quem está na mesma rede.'}</p>}
+    <p>O código aponta o servidor da call e vale por 12 horas. Nenhum endereço da sua máquina vai junto, e quem receber chega por conexão de saída — atravessa CGNAT sem abrir porta nenhuma.</p>
+    {loading && <p className="invite-status">Pedindo um código ao servidor…</p>}
+    {!loading && !code && <p className="invite-status">{server
+      ? 'O servidor não emitiu o convite. Se ele for anterior à 0.8.4, atualize-o; se você acabou de entrar, tente de novo.'
+      : 'Convidar pela internet exige um servidor. Entre em Servidor dedicado e gere o convite de lá; no modo P2P, as calls só aparecem para quem está na mesma rede.'}</p>}
     {code && <>
-      <textarea className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} ref={(field) => { codeField.current = field; }} />
+      <textarea className="invite-code" readOnly value={code} rows={2} onFocus={(event) => event.currentTarget.select()} ref={(field) => { codeField.current = field; }} />
       <button className="primary-button" onClick={() => { void copyText(code, codeField.current).then((copied) => onNotice(copied ? 'Convite copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar convite</button>
-      <small className="invite-hint">Este é o mesmo código enquanto o servidor e a chave não mudarem. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada, e não precisa de porta aberta, UPnP nem IPv6.</small>
+      <small className="invite-hint">Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. Não precisa de porta aberta, UPnP nem IPv6.</small>
     </>}
   </div></div>;
 }

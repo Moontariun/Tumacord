@@ -4,8 +4,10 @@
 import {
   DIRECT_INVITE_TTL_MS,
   decodeInvite,
+  decodeShortInvite,
   encodeBase64Url,
   encodeInvite,
+  encodeShortInvite,
   inviteExpired,
   normalizeRendezvousUrl,
   type DirectInvite,
@@ -13,6 +15,64 @@ import {
 } from '../../shared/directLink';
 
 export type { DirectInvite, DirectPath } from '../../shared/directLink';
+
+// Pedir ao servidor um convite curto. Quem chama já tem sessão: convidar é
+// ato de quem está dentro. O token volta uma vez só; o servidor guarda o hash.
+export async function requestShortInvite(
+  serverUrl: string,
+  token: string,
+  call: { callId: string; callName: string },
+  options: { fetchImpl?: typeof fetch } = {},
+): Promise<string | null> {
+  const { fetchImpl = fetch } = options;
+  const base = normalizeRendezvousUrl(serverUrl);
+  if (!base) return null;
+  try {
+    const response = await fetchImpl(`${base}/api/invite`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(call),
+    });
+    if (!response.ok) return null;
+    const body = await response.json() as { token?: unknown };
+    if (typeof body.token !== 'string' || !body.token) return null;
+    return encodeShortInvite({ server: base, token: body.token }) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Ler um convite curto é perguntar ao servidor de que call ele trata. Um
+// código vencido ou inventado devolve nada, e é o servidor que decide isso —
+// o prazo deixou de morar dentro do código.
+export async function resolveShortInvite(code: string, options: { fetchImpl?: typeof fetch } = {}): Promise<ResolvedInvite | null> {
+  const { fetchImpl = fetch } = options;
+  const parsed = decodeShortInvite(code);
+  if (!parsed) return null;
+  try {
+    const response = await fetchImpl(`${parsed.server}/api/invite/${parsed.token}`);
+    if (!response.ok) return null;
+    const body = await response.json() as { callId?: unknown; callName?: unknown; hostUsername?: unknown };
+    if (typeof body.callId !== 'string' || !body.callId) return null;
+    return {
+      invite: {
+        version: 1,
+        callId: body.callId,
+        callName: typeof body.callName === 'string' && body.callName ? body.callName : 'Call',
+        hostUsername: typeof body.hostUsername === 'string' ? body.hostUsername : '',
+        // O token faz as vezes da chave de acesso, com escopo deste convite.
+        key: parsed.token,
+        server: parsed.server,
+        issuedAt: 0,
+        ttlMs: 0,
+      },
+      url: parsed.server,
+      mode: 'server',
+    };
+  } catch {
+    return null;
+  }
+}
 
 export interface ResolvedInvite {
   invite: DirectInvite;

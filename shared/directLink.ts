@@ -347,3 +347,62 @@ export function betterHost<T extends { reachability?: number; pingMs: number; id
   const reach = (candidate: T) => Math.max(0, Math.min(100, Math.round(candidate.reachability ?? 0)));
   return reach(b) - reach(a) || a.pingMs - b.pingMs || a.id.localeCompare(b.id);
 }
+
+
+// ---------------------------------------------------------------------------
+// Convite curto (TUMA2)
+//
+// O formato anterior era um JSON em base64url e chegava a 240 caracteres —
+// grande demais para colar em conversa. Quase metade era a chave de acesso do
+// servidor, que além de longa não deveria viajar em algo tão copiável.
+//
+// Aqui o código carrega só o endereço do servidor e um token curto que o
+// próprio servidor emitiu e guarda. `TUMA2~call.exemplo.com~7K3P9QXM2W4V`.
+// O `~` separa porque nome de host nunca o contém, ao contrário do ponto.
+//
+// O esquema é `https` por padrão; um `-` na frente do host marca `http`, que
+// é o caso de servidor caseiro em IP.
+
+export const SHORT_INVITE_PREFIX = 'TUMA2';
+
+export function encodeInviteServer(url: string): string | undefined {
+  const normalized = normalizeRendezvousUrl(url);
+  if (!normalized) return undefined;
+  const parsed = new URL(normalized);
+  const plain = parsed.protocol === 'http:';
+  const defaultPort = plain ? '80' : '443';
+  const port = parsed.port && parsed.port !== defaultPort ? `:${parsed.port}` : '';
+  return `${plain ? '-' : ''}${parsed.hostname}${port}`;
+}
+
+export function decodeInviteServer(value: string): string | undefined {
+  const plain = value.startsWith('-');
+  const rest = plain ? value.slice(1) : value;
+  if (!rest || rest.includes('/') || rest.includes('~')) return undefined;
+  return normalizeRendezvousUrl(`${plain ? 'http' : 'https'}://${rest}`);
+}
+
+export interface ShortInvite {
+  server: string;
+  token: string;
+}
+
+export function encodeShortInvite(invite: ShortInvite): string | undefined {
+  const server = encodeInviteServer(invite.server);
+  const token = invite.token.trim().toUpperCase();
+  if (!server || !token) return undefined;
+  return `${SHORT_INVITE_PREFIX}~${server}~${token}`;
+}
+
+export function decodeShortInvite(code: string): ShortInvite | null {
+  const parts = code.trim().replace(/\s+/g, '').split('~');
+  if (parts.length !== 3) return null;
+  const [prefix, rawServer, rawToken] = parts;
+  if (prefix.toUpperCase() !== SHORT_INVITE_PREFIX) return null;
+  const server = decodeInviteServer(rawServer);
+  // Mesma normalização do servidor: maiúsculas, e fora o que a pessoa colou
+  // junto. O alfabeto já evita os caracteres que se confundem digitando.
+  const token = rawToken.toUpperCase().replace(/[^2-9A-HJ-KM-NP-TV-Z]/g, '');
+  if (!server || token.length !== 12) return null;
+  return { server, token };
+}
