@@ -50,8 +50,26 @@ export interface DirectInvite {
   hostUsername: string;
   key: string;
   paths: DirectPath[];
+  // Endereço de um servidor de encontro. Quando existe, entrar não depende de
+  // alcançar o computador do host: os dois lados abrem conexão *de saída* até
+  // ele, que é o que atravessa CGNAT sem porta aberta em lugar nenhum.
+  server?: string;
   issuedAt: number;
   ttlMs: number;
+}
+
+// Só HTTP e HTTPS, e sem credencial embutida na URL: um convite é colado de
+// qualquer lugar, e um endereço estranho aqui vira uma conexão autenticada.
+export function normalizeRendezvousUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    if (url.username || url.password) return undefined;
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export const DIRECT_INVITE_PREFIX = 'TUMA1';
@@ -281,6 +299,7 @@ export function encodeInvite(invite: DirectInvite): string {
     t: Math.round(invite.issuedAt),
     x: Math.round(invite.ttlMs),
     p: invite.paths.map((path) => [PATH_KIND_CODE[path.kind], path.host, path.port, PATH_VIA_CODE[path.via]]),
+    ...(invite.server ? { s: invite.server } : {}),
   };
   const payload = encodeBase64Url(utf8Encode(JSON.stringify(compact)));
   return `${DIRECT_INVITE_PREFIX}.${payload}.${checksumOf(payload)}`;
@@ -318,7 +337,10 @@ export function decodeInvite(code: string): DirectInvite | null {
     if (kind === 'ipv6' ? !classifyIpv6(host) : !classifyIpv4(host)) continue;
     paths.push({ kind, host, port, via });
   }
-  if (!paths.length) return null;
+  const server = normalizeRendezvousUrl(compact.s);
+  // Um convite precisa oferecer pelo menos uma forma de chegar: endereços do
+  // host, um servidor de encontro, ou os dois.
+  if (!paths.length && !server) return null;
   return {
     version: 1,
     callId,
@@ -326,6 +348,7 @@ export function decodeInvite(code: string): DirectInvite | null {
     hostUsername: typeof compact.h === 'string' ? compact.h : '',
     key,
     paths,
+    ...(server ? { server } : {}),
     issuedAt: Number.isFinite(compact.t) ? Number(compact.t) : 0,
     ttlMs: Number.isFinite(compact.x) ? Number(compact.x) : DIRECT_INVITE_TTL_MS,
   };

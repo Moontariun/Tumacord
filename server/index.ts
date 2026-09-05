@@ -13,6 +13,7 @@ import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, Us
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
+import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -32,6 +33,10 @@ const adminUsername = normalizeUsername(process.env.ADMIN_USERNAME?.trim() || 'M
 // rede local precisa apresentar o convite. Endereço da própria rede continua
 // entrando sem chave, exatamente como a descoberta por broadcast sempre fez.
 const directKey = process.env.TUMACORD_DIRECT_KEY?.trim() ?? '';
+// O relay TURN é a rede de segurança para o caso em que nem o enlace direto
+// nem o ICE atravessam: os dois lados atrás de CGNAT simétrico, sem IPv6.
+// Quando não está configurado, o servidor simplesmente não anuncia nada.
+const turn = turnConfiguration(process.env);
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
 if (Boolean(tlsCertificateFile) !== Boolean(tlsKeyFile)) throw new Error('TLS_CERT_FILE e TLS_KEY_FILE precisam ser configurados juntos.');
@@ -185,7 +190,19 @@ app.get('/api/health', (_request, response) => {
     mode: p2pMode ? 'p2p' : 'server',
     web: serveWeb,
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
+    turn: Boolean(turn),
   });
+});
+
+// As credenciais são curtas e assinadas na hora; o servidor não guarda senha
+// de TURN nenhuma. Exigir sessão evita que a porta vire um relay aberto para
+// quem passar na frente.
+app.get('/api/turn', (request, response) => {
+  const user = httpUser(request);
+  if (!user) return void response.status(401).json({ error: 'Sessão inválida.' });
+  if (!turn) return void response.json({ iceServers: [], expiresAt: 0 });
+  const credentials = ephemeralTurnCredentials(turn, user.username);
+  response.json({ iceServers: turnIceServers(turn, credentials), expiresAt: credentials.expiresAt });
 });
 
 // O host prova que é ele mesmo devolvendo um HMAC do nonce com a chave do

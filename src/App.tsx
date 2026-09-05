@@ -13,6 +13,7 @@ import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLo
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, resolveInvite, type DirectReport } from './lib/directLink';
 import { copyText } from './lib/clipboard';
+import { forgetTurnServers, refreshTurnServers } from './lib/iceServers';
 import { currentNetworkPreferences, loadNetworkPreferences, subscribeNetworkPreferences, updateNetworkPreferences, type NetworkPreferences } from './lib/networkPreferences';
 import { describeReachability } from '../shared/directLink';
 import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext, sharedAudioOutput } from './lib/audioBus';
@@ -55,7 +56,7 @@ function App() {
     };
   }, []);
   if (!session) return <Login onLogin={setSession} />;
-  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={() => { clearSession(); setSession(null); }} /></Boundary>;
+  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={() => { clearSession(); forgetTurnServers(); setSession(null); }} /></Boundary>;
 }
 
 function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
@@ -90,24 +91,28 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     // convidou — não o servidor local. Os caminhos do convite são tentados em
     // paralelo e o primeiro que responder vira o alvo do login.
     let target = connectionMode === 'p2p' && isDesktop ? 'http://127.0.0.1:3927' : serverUrl;
+    let effectiveMode = connectionMode;
     let inviteKey = '';
     let resumeCall: string | undefined;
-    if (connectionMode === 'p2p' && isDesktop && inviteCode.trim()) {
+    if (inviteCode.trim()) {
       const resolved = await resolveInvite(inviteCode).catch(() => null);
       if (!resolved) {
-        setError(readInvite(inviteCode) ? 'O convite é válido, mas não consegui alcançar o host por nenhum caminho. Peça um código novo.' : 'Código de convite inválido ou vencido.');
+        setError(readInvite(inviteCode) ? 'O convite é válido, mas não consegui alcançar a call. Peça um código novo a quem convidou.' : 'Código de convite inválido ou vencido.');
         setLoading(false);
         return;
       }
       target = resolved.url;
       inviteKey = resolved.invite.key;
       resumeCall = resolved.invite.callId;
+      // Um convite de servidor de encontro troca o modo por conta própria: é
+      // ele que diz onde a call se encontra, não a escolha feita na tela.
+      effectiveMode = resolved.mode;
     }
     try {
       const authenticated = mode === 'register'
-        ? await register(target, username, password, resumeCall, connectionMode, rememberMe, inviteKey || serverKey)
-        : await login(target, username, password, resumeCall, connectionMode === 'server' || Boolean(inviteKey), connectionMode, rememberMe, inviteKey || serverKey);
-      if (inviteKey) await adoptDirectKey(inviteKey);
+        ? await register(target, username, password, resumeCall, effectiveMode, rememberMe, inviteKey || serverKey)
+        : await login(target, username, password, resumeCall, effectiveMode === 'server' || Boolean(inviteKey), effectiveMode, rememberMe, inviteKey || serverKey);
+      if (inviteKey && effectiveMode === 'p2p') await adoptDirectKey(inviteKey);
       onLogin(authenticated);
       playSound('connect');
     }
@@ -124,7 +129,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
         <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'Enlace direto, rede local e convite' : 'Disponível no aplicativo'}</small></span></button>
         <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
       </div>
-      {connectionMode === 'p2p' && isDesktop && <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call para entrar de qualquer rede.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA1.…" /></label>}
+      <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call: ele leva você ao lugar certo, seja P2P ou servidor.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA1.…" /></label>
       {connectionMode === 'server' && <div className="server-login-fields">
         <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
         <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
@@ -268,6 +273,20 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     return subscribeNetworkPreferences(setNetworkPreferences);
   }, []);
 
+  // As credenciais de TURN são temporárias de propósito. Buscá-las na entrada
+  // e renovar de hora em hora evita que um enlace precise do relay justamente
+  // depois de a credencial vencer.
+  useEffect(() => {
+    let active = true;
+    const refresh = () => { if (active) void refreshTurnServers(session.serverUrl, session.token); };
+    refresh();
+    const timer = window.setInterval(refresh, 60 * 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [session.serverUrl, session.token]);
+
   // Reabrir o app não pode invalidar o convite que já circulou: o servidor
   // embutido volta a aceitar a chave da call assim que a sessão é restaurada.
   useEffect(() => {
@@ -294,8 +313,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     const resolved = await resolveInvite(code).catch(() => null);
     if (!resolved) return false;
     try {
-      onSessionChange(await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, 'p2p', session.rememberMe ?? true, resolved.invite.key));
-      await adoptDirectKey(resolved.invite.key);
+      const migrated = await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, resolved.mode, session.rememberMe ?? true, resolved.invite.key);
+      if (resolved.mode === 'p2p') await adoptDirectKey(resolved.invite.key);
+      onSessionChange(migrated);
       return true;
     } catch {
       return false;
@@ -548,8 +568,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     <aside className="channel-sidebar">
       <header className="server-header"><span className="brand-mark">Tuma<span>cord</span></span></header>
       <div className="channel-scroll">
-        {session.connectionMode !== 'server' && window.tumacordDesktop && <section className="direct-link-actions">
-          <div className="group-title"><span>Enlace direto</span></div>
+        {(window.tumacordDesktop || session.connectionMode === 'server') && <section className="direct-link-actions">
+          <div className="group-title"><span>{session.connectionMode === 'server' ? 'Convites' : 'Enlace direto'}</span></div>
           <button className="direct-link-button" onClick={() => setInviteOpen(true)}><Icon name="users" /><span><strong>Convidar pela internet</strong><small>Gera um código com os caminhos até este computador</small></span></button>
           <button className="direct-link-button" onClick={() => setJoinInviteOpen(true)}><Icon name="server" /><span><strong>Entrar por convite</strong><small>Cole o código de quem já está na call</small></span></button>
         </section>}
@@ -613,7 +633,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
-    {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
+    {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
@@ -1345,7 +1365,7 @@ function NetworkSettings({ preferences, onChange, onClose }: { preferences: Netw
   </section>;
 }
 
-function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; onClose: () => void; onNotice: (message: string) => void }) {
+function InviteModal({ callId, callName, hostUsername, server, serverKey, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; server?: string; serverKey?: string; onClose: () => void; onNotice: (message: string) => void }) {
   // O código é gerado uma vez, dentro do efeito. Gerá-lo no corpo do render
   // fazia a call inteira ditar o ritmo: cada atualização de ping re-renderizava
   // este modal e produzia um código diferente na tela.
@@ -1354,24 +1374,33 @@ function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { ca
   const codeField = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     let active = true;
-    void readDirectReport().then((report) => {
+    // Com servidor de encontro não há o que sondar: o convite é a call mais o
+    // segredo, e quem entra chega lá por conexão de saída.
+    const material = server ? Promise.resolve(null) : readDirectReport();
+    void material.then((report) => {
       if (!active) return;
-      setCode(report ? buildInvite(report, { callId, callName, hostUsername }) : null);
+      setCode(buildInvite(report, { callId, callName, hostUsername, server, key: serverKey }));
       setLoading(false);
     });
     return () => { active = false; };
-  }, [callId, callName, hostUsername]);
+  }, [callId, callName, hostUsername, server, serverKey]);
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
     <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
     <span className="modal-eyebrow">Enlace direto</span>
     <h2>Convidar pela internet</h2>
-    <p>O código carrega os endereços por onde este computador aceita entrada e a chave que protege a porta. Ele vale por 12 horas; mande por onde preferir.</p>
+    <p>{server
+      ? 'O código aponta o servidor da call e leva o segredo que dá direito de entrar. Nenhum endereço da sua máquina vai junto, e quem receber chega por conexão de saída — atravessa CGNAT sem abrir porta nenhuma.'
+      : 'O código carrega os endereços por onde este computador aceita entrada e a chave que protege a porta. Ele vale por 12 horas; mande por onde preferir.'}</p>
     {loading && <p className="invite-status">Procurando os caminhos até aqui…</p>}
-    {!loading && !code && <p className="invite-status">Nenhum caminho de entrada foi encontrado. Peça para outra pessoa do grupo gerar o convite, ou ligue o ZeroTier em Configurações → Rede e conexão.</p>}
+    {!loading && !code && <p className="invite-status">{server
+      ? 'Faltou a chave de acesso deste servidor para montar o convite. Entre de novo informando a chave e tente outra vez.'
+      : 'Nenhum caminho de entrada foi encontrado. Use um servidor de encontro, peça para outra pessoa do grupo gerar o convite, ou ligue o ZeroTier em Configurações → Rede e conexão.'}</p>}
     {code && <>
       <textarea ref={codeField} className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
       <button className="primary-button" onClick={() => { void copyText(code, codeField.current).then((copied) => onNotice(copied ? 'Convite copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar convite</button>
-      <small className="invite-hint">Este é o mesmo código enquanto os endereços deste computador não mudarem: reabrir esta janela mostra ele de novo, e o que você já enviou continua valendo. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.</small>
+      <small className="invite-hint">{server
+        ? 'Este é o mesmo código enquanto o servidor e a chave não mudarem. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada, e não precisa de porta aberta, UPnP nem IPv6.'
+        : 'Este é o mesmo código enquanto os endereços deste computador não mudarem: reabrir esta janela mostra ele de novo, e o que você já enviou continua valendo. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.'}</small>
     </>}
   </div></div>;
 }

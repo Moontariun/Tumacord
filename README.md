@@ -10,6 +10,7 @@ A partir da 0.7.9 o **enlace direto** substitui o ZeroTier como caminho padrão:
 - no modo P2P, um único canal de texto e uma única call, sem botões ou canais redundantes;
 - call de baixa latência em malha WebRTC;
 - **enlace direto sem ZeroTier**: travessia de NAT por ICE/STUN, entrada por IPv6 e abertura de porta no roteador por PCP, NAT-PMP ou UPnP;
+- **servidor de encontro opcional**, alcançado só por conexão de saída: funciona atrás de CGNAT sem abrir porta em lugar nenhum, e com relay TURN para o caso em que nem o ICE atravessa;
 - convite em código para entrar de qualquer rede, com chave que protege a porta exposta à internet;
 - descoberta automática de calls na rede local, sem copiar IP;
 - ZeroTier opcional, ligado ou desligado em **Configurações › Rede e conexão**;
@@ -51,19 +52,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/clipboard-and-invite-v0.7.11/scripts/install-v0.7.11.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/rendezvous-and-turn-v0.8.0/scripts/install-v0.8.0.sh | bash
 ```
 
-Este comando instala a v0.7.11 a partir da branch separada `release/clipboard-and-invite-v0.7.11`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.0 a partir da branch separada `release/rendezvous-and-turn-v0.8.0`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.7.11, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-clipboard-and-invite-v0.7.11`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.0, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-rendezvous-and-turn-v0.8.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/clipboard-and-invite-v0.7.11/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/rendezvous-and-turn-v0.8.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -135,11 +136,95 @@ Na mesma tela ficam a travessia por STUN e a abertura de porta no roteador, que 
 
 ### Firewall
 
-Libere TCP `3927` (sinalização) e UDP `3928` (descoberta). Para receber convites pela internet, o TCP `3927` precisa chegar até este computador — é justamente isso que a abertura automática de porta tenta resolver. Em uma configuração doméstica padrão costuma funcionar sem regras extras.
+Libere TCP `3927` (sinalização) e UDP `3928` (descoberta). Para receber convites pela internet **no modo P2P puro**, o TCP `3927` precisa chegar até este computador — é justamente isso que a abertura automática de porta tenta resolver. Em uma configuração doméstica padrão costuma funcionar sem regras extras.
+
+### Quando nada direto funciona
+
+Existe um caso que nenhuma travessia resolve sozinha: os dois lados atrás de CGNAT, com NAT simétrico e sem IPv6. Não há endereço para furar. Também existe o caso comum de o roteador dizer que abriu a porta por UPnP e ela não responder de fora.
+
+Para isso a 0.8.0 traz o **servidor de encontro**, descrito na seção seguinte. Com ele, ninguém precisa ser alcançável: os dois lados abrem conexão *de saída*, que é o que atravessa CGNAT sem abrir porta em lugar nenhum.
+
+## Servidor de encontro e TURN
+
+Esta é a forma que funciona **independentemente de CGNAT, UPnP, porta aberta ou IPv6**. Ela custa uma máquina com IP público — uma VPS pequena basta —, e em troca elimina toda a negociação de alcance.
+
+A ideia é separar duas coisas que costumam ser confundidas:
+
+- **sinalização** é o combinado inicial: quem está na call, e a troca de SDP e candidatos ICE. É pouco tráfego e passa pelo servidor;
+- **mídia** é voz, câmera e tela. Sempre que houver um caminho direto, ela vai direto de um computador ao outro e **não toca no servidor**.
+
+```text
+                   servidor de encontro
+                    (HTTPS/WSS :4600)
+                    /               \
+              sinalização        sinalização
+                  /                   \
+            você  ──────── WebRTC ──────── seu amigo
+                        mídia direta
+
+           e só quando nenhum caminho direto se forma:
+            você  ───────── TURN ───────── seu amigo
+```
+
+Os dois lados **abrem conexão de saída** para o servidor, exatamente como abrir um site. É por isso que funciona atrás de CGNAT: o que não funciona é a internet iniciar uma conexão para dentro da sua casa, e aqui isso nunca acontece.
+
+O convite gerado nesse modo não carrega endereço de máquina nenhuma — só a call e o segredo que dá direito de entrar.
+
+### Subindo
+
+Numa máquina com IP público e um nome apontado para ela:
+
+```bash
+cp .env.example .env
+# edite TUMACORD_SERVER_ACCESS_KEY e, se for usar relay, as variáveis TURN
+docker compose up -d --build
+```
+
+Isso já entrega o encontro e a sinalização. Para incluir o relay TURN:
+
+```bash
+docker compose --profile turn up -d
+```
+
+O relay fica fora do perfil padrão de propósito: ele só faz sentido em uma máquina com IP público e é a única peça que chega a carregar mídia — e, portanto, banda.
+
+### Variáveis do relay
+
+| Variável | Para que serve |
+| --- | --- |
+| `TUMACORD_TURN_URLS` | o que o aplicativo anuncia, ex. `turn:turn.seudominio.com:3478` |
+| `TUMACORD_TURN_SECRET` | segredo compartilhado entre o servidor e o coturn |
+| `TUMACORD_TURN_REALM` | domínio do relay, ex. `turn.seudominio.com` |
+| `TUMACORD_TURN_PUBLIC_IP` | IP público da máquina; sem ele o coturn anuncia o IP interno |
+| `TUMACORD_TURN_TTL_SECONDS` | validade das credenciais (padrão: 8 horas) |
+
+Nenhuma senha de TURN é armazenada. O servidor assina um prazo com o segredo compartilhado e entrega uma credencial temporária; o coturn recalcula o mesmo HMAC e compara. Uma credencial que vaze deixa de valer quando o prazo acaba.
+
+Libere no firewall da VPS: `3478/udp`, `3478/tcp` e a faixa `49160-49200/udp`.
+
+### `turns:` na porta 443
+
+Em redes que bloqueiam UDP — trabalho, faculdade, alguns celulares — só TURN sobre TLS atravessa. Ele fica desligado por padrão porque exige certificado válido, e um coturn que não encontra o arquivo sobe quebrado. Para ligar, coloque o certificado em `./certs`, remova `--no-tls` e `--no-dtls` do serviço `coturn` no `docker-compose.yml`, acrescente:
+
+```yaml
+      - --tls-listening-port=443
+      - --cert=/certs/turn.crt
+      - --pkey=/certs/turn.key
+```
+
+e inclua `turns:turn.seudominio.com:443?transport=tcp` em `TUMACORD_TURN_URLS`.
+
+### Quanto de banda o relay usa
+
+Só as calls que **não** conseguem caminho direto passam por ele. Quando passam, o custo é real: uma transmissão de tela em 1080p60 no perfil de 8 Mbps consome cerca de 3,6 GB por hora, por espectador relayado. Vale dimensionar a VPS pensando nisso, ou reduzir o perfil de qualidade quando o relay estiver em uso.
+
+### O que o servidor enxerga
+
+Ele vê quem entrou, quando, e a sinalização. **Não vê a conversa**: a mídia é cifrada de ponta a ponta por DTLS-SRTP, com as chaves negociadas entre os participantes. Quando o relay é usado, ele encaminha datagramas opacos — sabe que dois endereços trocam bytes, não o que os bytes dizem. Configure `TUMACORD_TLS_CERT_FILE` e `TUMACORD_TLS_KEY_FILE` para que a sinalização também viaje por HTTPS/WSS.
 
 ## Servidor dedicado com Docker
 
-O contêiner dedicado mantém as contas e mensagens, faz a sinalização WebRTC e também hospeda a interface web. O servidor embutido do modo P2P não publica a versão web. Antes da primeira inicialização, crie a chave do servidor:
+O contêiner dedicado mantém as contas e mensagens, faz a sinalização WebRTC e também hospeda a interface web — é o mesmo serviço descrito acima. O servidor embutido do modo P2P não publica a versão web. Antes da primeira inicialização, crie a chave do servidor:
 
 ```bash
 cp .env.example .env

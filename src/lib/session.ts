@@ -12,9 +12,10 @@ export interface SavedSession {
   resumeChannelId?: string;
   connectionMode?: 'p2p' | 'server';
   rememberMe?: boolean;
-  // Chave do enlace direto usada para entrar neste host. Ela precisa
-  // sobreviver à sessão porque toda reconexão e toda troca de host repetem o
-  // login, e sem ela o host recusaria a entrada vinda de fora da rede local.
+  // Chave usada para entrar neste servidor: no modo P2P é a do convite do
+  // host; no modo servidor é a chave de acesso dele. Precisa sobreviver à
+  // sessão porque toda reconexão e toda troca de host repetem o login, e é
+  // dela que sai o convite que este computador oferece aos outros.
   directKey?: string;
 }
 
@@ -60,7 +61,7 @@ async function authenticate(path: 'login' | 'register', serverUrl: string, usern
   // A senha só precisa acompanhar a sessão no modo dinâmico: ela permite
   // autenticar automaticamente no novo host durante a troca P2P. No servidor
   // dedicado o token persistente é suficiente, então não guardamos a senha.
-  const saved = { serverUrl: normalizedUrl, token: body.token, user: body.user, serverName: body.serverName, password: connectionMode === 'p2p' ? password : undefined, resumeChannelId, connectionMode, rememberMe, directKey: connectionMode === 'p2p' ? serverKey.trim() || undefined : undefined };
+  const saved = { serverUrl: normalizedUrl, token: body.token, user: body.user, serverName: body.serverName, password: connectionMode === 'p2p' ? password : undefined, resumeChannelId, connectionMode, rememberMe, directKey: serverKey.trim() || undefined };
   saveSession(saved);
   return saved;
 }

@@ -1,5 +1,33 @@
 # Histórico de versões
 
+## 0.8.0 — servidor de encontro e relay TURN: a call deixa de depender de alguém ser alcançável
+
+**O problema que sobrava**
+
+A 0.7.9 tirou o ZeroTier do caminho, mas manteve uma exigência: alguém precisava aceitar conexão vinda da internet, seja por IPv6, seja por uma porta aberta no roteador. Um teste real mostrou os três jeitos falhando de uma vez — um lado sem IPv6 nenhum, o outro com um UPnP que dizia ter aberto a porta e não abriu. Não havia código que resolvesse: sem endereço alcançável, não há o que furar.
+
+**A inversão**
+
+- **servidor de encontro.** Os dois lados abrem conexão *de saída* até ele, exatamente como abrir um site — e é isso que atravessa CGNAT, porque a internet nunca precisa iniciar uma conexão para dentro da casa de ninguém. Ele é o mesmo contêiner que já existia como "servidor dedicado"; o que mudou é que agora o convite sabe apontar para ele;
+- **o convite deixou de carregar endereço de máquina.** Nesse modo ele leva só a call e o segredo que dá direito de entrar. Quem recebe não precisa de porta aberta, UPnP, IPv6 nem ZeroTier;
+- um convite indica **um jeito só** de entrar. Misturar encontro e enlace direto no mesmo grupo partiria a call em duas, cada metade sinalizando em um lugar diferente;
+- o campo de convite passou a valer também na tela de entrada em modo servidor: colar o código leva ao lugar certo sozinho, sem escolher modo nem digitar endereço.
+
+**Relay TURN**
+
+- **coturn entrou no `docker-compose`**, atrás do perfil `turn`. Ele é a rede de segurança para o caso em que nem o ICE atravessa: os dois lados em CGNAT simétrico. Fica fora do padrão porque só faz sentido em máquina com IP público e é a única peça que chega a carregar mídia — e, portanto, banda;
+- as credenciais são temporárias, no esquema `use-auth-secret`: o servidor assina um prazo com o segredo compartilhado e o coturn recalcula o mesmo HMAC. Nenhuma senha é armazenada dos dois lados, e uma credencial que vaze deixa de valer no prazo. A renovação acontece com cinco minutos de folga, para não vencer no meio de uma reconexão;
+- a mídia continua cifrada de ponta a ponta por DTLS-SRTP. O relay encaminha datagramas opacos: ele sabe que dois endereços trocam bytes, não o que os bytes dizem;
+- **um relay que aceita qualquer destino vira uma porta para a rede interna de quem o hospeda.** As faixas privadas, de loopback, de CGNAT e de multicast ficam proibidas como destino;
+- `/api/turn` exige sessão. Um relay aberto seria usado por quem passasse na frente.
+
+**O que não mudou**
+
+- caminho direto continua tendo preferência, e não por lógica nossa: o ICE compara candidatos por prioridade e um par direto sempre vence um par por relay. O relay entra quando nenhum direto se forma, e sai de cena se um direto aparecer depois;
+- rede local continua se descobrindo sozinha, sem servidor nenhum no meio;
+- ZeroTier continua sendo opção, não exigência;
+- quem não quiser manter servidor algum continua com o enlace direto da 0.7.9, que resolve boa parte dos casos.
+
 ## 0.7.11 — o botão de copiar o convite volta a copiar
 
 - **o processo principal negava a permissão de escrita na área de transferência.** Ele autorizava só `media` e `display-capture`, e `navigator.clipboard.writeText` precisa de `clipboard-sanitized-write`: a promessa era rejeitada e o botão não fazia nada. A leitura da área de transferência continua negada — colar um convite é uma ação da pessoa, e o aplicativo não precisa ler o que está copiado;

@@ -16,10 +16,68 @@ services:
       TLS_CERT_FILE: ${TUMACORD_TLS_CERT_FILE:-}
       TLS_KEY_FILE: ${TUMACORD_TLS_KEY_FILE:-}
       SESSION_TTL_DAYS: 30
+      # O servidor só anuncia TURN quando as duas metades existem. Sem elas a
+      # call continua funcionando por todo caminho direto; o que se perde é a
+      # reserva para quando nenhum caminho direto se forma.
+      TURN_URLS: ${TUMACORD_TURN_URLS:-}
+      TURN_SECRET: ${TUMACORD_TURN_SECRET:-}
+      TURN_TTL_SECONDS: ${TUMACORD_TURN_TTL_SECONDS:-28800}
     ports:
       - "4600:4600"
     volumes:
       - tumacord-data:/data
+      - ./certs:/certs:ro
+    stop_grace_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # O relay entra com `docker compose --profile turn up -d`. Ele fica fora do
+  # padrão porque só faz sentido em uma máquina com IP público, e porque é a
+  # única peça que chega a carregar mídia — e, portanto, banda.
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: tumacord-turn
+    profiles: ["turn"]
+    restart: unless-stopped
+    # TURN aloca uma faixa de portas UDP para cada sessão. Publicar essa faixa
+    # pela rede bridge do Docker é lento e frágil; rede do host é o modo com
+    # que o coturn é operado na prática.
+    network_mode: host
+    command:
+      - --realm=${TUMACORD_TURN_REALM:?Defina TUMACORD_TURN_REALM no arquivo .env}
+      - --use-auth-secret
+      - --static-auth-secret=${TUMACORD_TURN_SECRET:?Defina TUMACORD_TURN_SECRET no arquivo .env}
+      - --external-ip=${TUMACORD_TURN_PUBLIC_IP:?Defina TUMACORD_TURN_PUBLIC_IP com o IP público da máquina}
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --fingerprint
+      - --no-cli
+      - --no-software-attribute
+      # Sem TLS por padrão: `turns:` exige certificado válido, e um coturn que
+      # não encontra o arquivo sobe quebrado. O README explica como ligar.
+      - --no-tls
+      - --no-dtls
+      # Um relay que aceita qualquer destino vira uma porta para a rede interna
+      # da própria máquina. Estas faixas ficam proibidas como destino.
+      - --no-multicast-peers
+      - --no-loopback-peers
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=100.64.0.0-100.127.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.0.0.0-192.0.0.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+      - --denied-peer-ip=198.18.0.0-198.19.255.255
+      - --denied-peer-ip=224.0.0.0-255.255.255.255
+      - --denied-peer-ip=::1
+      - --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      - --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+    volumes:
       - ./certs:/certs:ro
     stop_grace_period: 10s
     logging:

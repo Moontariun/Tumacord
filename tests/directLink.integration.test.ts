@@ -164,3 +164,99 @@ test('a porta em `::` atende IPv4 e IPv6 na mesma escuta', { timeout: 25_000 }, 
   assert.equal(overIpv6.ok, true);
   assert.equal((await overIpv6.json() as { mode: string }).mode, 'p2p');
 });
+
+
+test('o servidor entrega credenciais de TURN temporárias, e só a quem tem sessão', { timeout: 25_000 }, async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tumacord-turn-'));
+  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const url = `http://127.0.0.1:${port}`;
+  const secret = 'segredo-do-coturn-para-o-teste';
+  const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      PORT: String(port),
+      DATA_DIR: path.join(root, 'data'),
+      TUMACORD_P2P_MODE: '0',
+      TUMACORD_SERVE_WEB: '0',
+      TUMACORD_DIRECT_KEY: '',
+      SERVER_ACCESS_KEY: '',
+      TLS_CERT_FILE: '',
+      TLS_KEY_FILE: '',
+      TURN_URLS: 'turn:relay.exemplo:3478,turns:relay.exemplo:5349',
+      TURN_SECRET: secret,
+      TURN_TTL_SECONDS: '3600',
+    },
+    stdio: 'ignore',
+  });
+  context.after(async () => {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitForServer(url, child);
+
+  const health = await (await fetch(`${url}/api/health`)).json() as { turn: boolean };
+  assert.equal(health.turn, true, 'a saúde precisa dizer que existe relay, para o diagnóstico não mentir');
+
+  const semSessao = await fetch(`${url}/api/turn`);
+  assert.equal(semSessao.status, 401, 'um relay aberto seria usado por qualquer um que passasse na frente');
+
+  const login = await fetch(`${url}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'Renan', password: 'senha-local', allowCreate: true }),
+  });
+  const session = await login.json() as { token: string };
+  const resposta = await fetch(`${url}/api/turn`, { headers: { authorization: `Bearer ${session.token}` } });
+  assert.equal(resposta.status, 200);
+  const corpo = await resposta.json() as { iceServers: Array<{ urls: string[]; username: string; credential: string }>; expiresAt: number };
+  assert.equal(corpo.iceServers.length, 1);
+  assert.deepEqual(corpo.iceServers[0].urls, ['turn:relay.exemplo:3478', 'turns:relay.exemplo:5349']);
+
+  // A credencial precisa ser exatamente o que o coturn vai recalcular do outro
+  // lado, senão o relay recusa a alocação e a call cai sem explicação.
+  const [validade] = corpo.iceServers[0].username.split(':');
+  assert.equal(corpo.iceServers[0].credential, createHmac('sha1', secret).update(corpo.iceServers[0].username, 'utf8').digest('base64'));
+  assert.ok(Number(validade) * 1000 > Date.now(), 'a credencial não pode nascer vencida');
+  assert.ok(Number(validade) * 1000 <= Date.now() + 3_600_000 + 5_000);
+  assert.equal(corpo.expiresAt, Number(validade) * 1000);
+});
+
+test('sem TURN configurado o servidor responde uma lista vazia, sem inventar relay', { timeout: 25_000 }, async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tumacord-noturn-'));
+  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const url = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      PORT: String(port),
+      DATA_DIR: path.join(root, 'data'),
+      TUMACORD_P2P_MODE: '1',
+      TUMACORD_SERVE_WEB: '0',
+      TUMACORD_DIRECT_KEY: '',
+      SERVER_ACCESS_KEY: '',
+      TLS_CERT_FILE: '',
+      TLS_KEY_FILE: '',
+      TURN_URLS: '',
+      TURN_SECRET: '',
+    },
+    stdio: 'ignore',
+  });
+  context.after(async () => {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitForServer(url, child);
+  assert.equal((await (await fetch(`${url}/api/health`)).json() as { turn: boolean }).turn, false);
+  const login = await fetch(`${url}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'Renan', password: 'senha-local', allowCreate: true }),
+  });
+  const session = await login.json() as { token: string };
+  const corpo = await (await fetch(`${url}/api/turn`, { headers: { authorization: `Bearer ${session.token}` } })).json() as { iceServers: unknown[] };
+  assert.deepEqual(corpo.iceServers, []);
+});
