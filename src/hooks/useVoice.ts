@@ -14,7 +14,7 @@ import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
 import { currentNetworkPreferences } from '../lib/networkPreferences';
 import { iceServers } from '../lib/iceServers';
-import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromLevel, microphoneIdentityOf, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity } from '../lib/microphoneHealth';
+import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 
 export type { StreamQuality } from '../lib/screenQuality';
@@ -401,6 +401,26 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // Uma falha do microfone é registrada com o instante em que começou. O que
   // fazer com ela — esperar, recapturar ou avisar — é decidido por
   // `planMicrophoneRecovery`, no monitor mais abaixo.
+  // Medidor e contexto vêm sempre do mesmo pipeline. O caminho neural mede no
+  // AudioContext do próprio processamento; o simples, no contexto
+  // compartilhado do monitor de fala. Misturar os dois foi o defeito que
+  // desligava a recuperação automática sem ninguém perceber.
+  const readMicrophone = useCallback((): MicrophoneReading => {
+    const processing = microphoneProcessing.current;
+    const track = processing?.outputStream.getAudioTracks()[0] ?? null;
+    const rawTrack = processing?.rawStream.getAudioTracks()[0] ?? null;
+    const source = processing?.neural
+      ? { meter: processing.inputMeter, context: processing.context }
+      : { meter: speakingMonitor.current?.analyser, context: speakingMonitor.current?.context };
+    const observed = rawTrack ?? track;
+    return {
+      level: source.meter ? analyserLevel(source.meter) : null,
+      contextState: (source.context?.state as MicrophoneReading['contextState']) ?? 'unknown',
+      track: observed ? { readyState: observed.readyState, enabled: track?.enabled ?? observed.enabled, muted: observed.muted } : null,
+      userMuted: mutedRef.current,
+    };
+  }, []);
+
   const noteMicrophoneFault = useCallback((kind: MicrophoneFault) => {
     const state = microphoneFault.current;
     if (kind === 'none') {
@@ -1634,14 +1654,20 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       // `muted` e a troca do dispositivo padrão são detectados por evento e já
       // chegam registrados; aqui resta medir a energia que entra.
       if (state.kind === 'none' || state.kind === 'silent' || state.kind === 'dead') {
-        const meter = processing.neural ? processing.inputMeter : speakingMonitor.current?.analyser;
-        const measurable = Boolean(meter) && speakingMonitor.current?.context.state === 'running' && !rawTrack?.muted;
-        if (!measurable) {
+        const reading = readMicrophone();
+        // Uma faixa que já nasce silenciada pelo sistema nunca dispara
+        // `onmute`: o evento marca a transição, e aqui ela já aconteceu antes
+        // de existir ouvinte. Sem esta checagem o caso ficava invisível.
+        if (reading.track?.muted) {
+          noteMicrophoneFault('muted');
+          return;
+        }
+        if (!microphoneIsMeasurable(reading)) {
           signal.lastSignalAt = now;
           noteMicrophoneFault('none');
           return;
         }
-        const measured = faultFromLevel(analyserLevel(meter));
+        const measured = faultFromReading(reading);
         if (measured === 'none') {
           signal.lastSignalAt = now;
           signal.warned = false;
@@ -1678,7 +1704,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         .finally(() => { recapturing = false; });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [channelId, noteMicrophoneFault, onError]);
+  }, [channelId, noteMicrophoneFault, onError, readMicrophone]);
 
   // Trocar o dispositivo padrão do sistema não termina nem silencia a faixa
   // aberta: ela simplesmente continua presa ao aparelho anterior. Foi o que

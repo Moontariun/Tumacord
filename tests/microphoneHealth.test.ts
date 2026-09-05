@@ -103,3 +103,49 @@ test('cada falha se explica em português para quem está na call', () => {
   assert.match(describeMicrophoneFault('silent'), /não capta som/);
   assert.equal(describeMicrophoneFault('none'), '');
 });
+
+// --- leitura por pipeline (medidor e contexto sempre do mesmo lugar) ---
+
+import { faultFromReading, microphoneIsMeasurable, type MicrophoneReading } from '../src/lib/microphoneHealth';
+
+const faixaViva = { readyState: 'live', enabled: true, muted: false };
+
+function leitura(patch: Partial<MicrophoneReading> = {}): MicrophoneReading {
+  return { level: 0.05, contextState: 'running', track: faixaViva, userMuted: false, ...patch };
+}
+
+// O defeito corrigido: o caminho neural media no medidor do próprio
+// processamento, mas a saúde consultava o AudioContext compartilhado. Com o
+// compartilhado suspenso, a recuperação se desligava sozinha.
+test('o contexto avaliado é o que acompanha o medidor, não outro qualquer', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'running' })), true);
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'suspended' })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ contextState: 'unknown' })), false);
+});
+
+test('sem medidor a leitura não vira silêncio — ela simplesmente não diz nada', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ level: null })), false);
+  assert.equal(faultFromReading(leitura({ level: null })), 'none', 'ausência de medida não pode disparar recaptura');
+});
+
+test('a faixa precisa estar viva, habilitada e não silenciada para a medida valer', () => {
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, readyState: 'ended' } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, enabled: false } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: { ...faixaViva, muted: true } })), false);
+  assert.equal(microphoneIsMeasurable(leitura({ track: null })), false);
+});
+
+test('faixa silenciada pelo sistema é falha de mic, mesmo sem o evento onmute', () => {
+  assert.equal(faultFromReading(leitura({ track: { ...faixaViva, muted: true } })), 'muted');
+});
+
+test('quem se mutou de propósito nunca é tratado como microfone quebrado', () => {
+  assert.equal(faultFromReading(leitura({ userMuted: true, level: 0 })), 'none');
+  assert.equal(microphoneIsMeasurable(leitura({ userMuted: true })), false);
+});
+
+test('com tudo no lugar, a energia decide entre captura morta, sala quieta e ok', () => {
+  assert.equal(faultFromReading(leitura({ level: 0 })), 'dead');
+  assert.equal(faultFromReading(leitura({ level: 0.001 })), 'silent');
+  assert.equal(faultFromReading(leitura({ level: 0.05 })), 'none');
+});

@@ -117,3 +117,36 @@ export function faultFromLevel(level: number): MicrophoneFault {
   if (level > 0.006) return 'none';
   return level === 0 ? 'dead' : 'silent';
 }
+
+// Medidor, contexto e faixa precisam vir do MESMO pipeline.
+//
+// A versão anterior lia a energia do medidor do processamento neural mas
+// verificava se o AudioContext *compartilhado* estava rodando. Contexto
+// errado: com o compartilhado suspenso, a recuperação automática se desligava
+// sozinha justamente no caminho padrão, e o microfone mudo ficava mudo. Passar
+// os três juntos torna esse engano impossível de escrever.
+export interface MicrophoneReading {
+  // Energia medida no medidor deste pipeline, ou `null` quando não há
+  // medidor — casos diferentes, que antes se confundiam em "zero".
+  level: number | null;
+  // Estado do AudioContext que alimenta esse medidor, não de outro qualquer.
+  contextState: 'running' | 'suspended' | 'closed' | 'unknown';
+  track: { readyState: string; enabled: boolean; muted: boolean } | null;
+  userMuted: boolean;
+}
+
+export function microphoneIsMeasurable(reading: MicrophoneReading): boolean {
+  if (reading.userMuted || reading.level === null) return false;
+  if (reading.contextState !== 'running') return false;
+  const track = reading.track;
+  return Boolean(track && track.readyState === 'live' && track.enabled && !track.muted);
+}
+
+// Uma leitura que não dá para medir não é prova de saúde nem de falha: ela
+// apenas não diz nada, e tratá-la como silêncio geraria recaptura à toa.
+export function faultFromReading(reading: MicrophoneReading): MicrophoneFault {
+  if (reading.userMuted) return 'none';
+  if (reading.track && reading.track.muted) return 'muted';
+  if (!microphoneIsMeasurable(reading)) return 'none';
+  return faultFromLevel(reading.level as number);
+}
