@@ -1,6 +1,14 @@
 # Histórico de versões
 
-## 0.7.9 — P2P sem ZeroTier, instalação no Fedora e microfone que se recupera sozinho
+## 0.7.10 — o código de convite para de mudar sozinho
+
+- **o convite era remontado a cada quadro da interface.** O código saía do corpo do render e carimbava `issuedAt` com o relógio a cada chamada; como a tela da call re-renderiza a cada atualização de ping e de participantes, o texto inteiro mudava várias vezes por segundo. O prazo sempre foi de doze horas e um código antigo nunca deixou de funcionar, mas era impossível acreditar nisso olhando para a tela — e o valor mudando embaixo da seleção atrapalhava até copiar;
+- agora o convite é gerado uma vez e guardado. Enquanto a call, a chave e os endereços de entrada forem os mesmos, é o mesmo texto: reabrir a janela mostra o código de novo, e o que já foi enviado continua valendo. Um endereço novo — a porta que o roteador abriu, por exemplo — gera um convite novo, como deve ser;
+- a renovação acontece só quando falta menos de uma hora para vencer, para ninguém receber um código que expira no bolso.
+
+## 0.7.9 — P2P sem ZeroTier, instalação no Fedora e microfone que se recupera sozinho (afetada)
+
+> **Aviso:** nesta versão o código de convite era regerado a cada atualização da tela e parecia mudar sozinho. Corrigido na v0.7.10.
 
 **Enlace direto: a call sem ZeroTier**
 

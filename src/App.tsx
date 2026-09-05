@@ -1345,18 +1345,20 @@ function NetworkSettings({ preferences, onChange, onClose }: { preferences: Netw
 }
 
 function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { callId: string; callName: string; hostUsername: string; onClose: () => void; onNotice: (message: string) => void }) {
-  const [report, setReport] = useState<DirectReport | null>(null);
+  // O código é gerado uma vez, dentro do efeito. Gerá-lo no corpo do render
+  // fazia a call inteira ditar o ritmo: cada atualização de ping re-renderizava
+  // este modal e produzia um código diferente na tela.
+  const [code, setCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
-    void readDirectReport().then((result) => {
+    void readDirectReport().then((report) => {
       if (!active) return;
-      setReport(result);
+      setCode(report ? buildInvite(report, { callId, callName, hostUsername }) : null);
       setLoading(false);
     });
     return () => { active = false; };
-  }, []);
-  const code = report ? buildInvite(report, { callId, callName, hostUsername }) : null;
+  }, [callId, callName, hostUsername]);
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
     <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
     <span className="modal-eyebrow">Enlace direto</span>
@@ -1367,7 +1369,7 @@ function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { ca
     {code && <>
       <textarea className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
       <button className="primary-button" onClick={() => { void navigator.clipboard.writeText(code).then(() => onNotice('Convite copiado.'), () => onNotice('Não consegui copiar; selecione o texto e copie manualmente.')); }}>Copiar convite</button>
-      <small className="invite-hint">Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.</small>
+      <small className="invite-hint">Este é o mesmo código enquanto os endereços deste computador não mudarem: reabrir esta janela mostra ele de novo, e o que você já enviou continua valendo. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.</small>
     </>}
   </div></div>;
 }
