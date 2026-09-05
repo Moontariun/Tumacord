@@ -15,7 +15,9 @@ import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter } from './rateLimit.js';
-import { canManageChannels, isAdministrator, normalizeRole, roleForNewUser, type Role } from './roles.js';
+import { canManageChannels, canManageUsers, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
+import { applyOrder, buildChannelTree, canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
+import { createAuditEntry } from './audit.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -371,6 +373,245 @@ function adminOverview(): AdminOverview {
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
   };
 }
+
+// Toda ação administrativa passa por aqui. A interface pode esconder um botão,
+// mas quem decide é o servidor: esconder não é autorizar.
+interface AdminContext { user: PublicUser; role: Role }
+
+function requireAdmin(request: express.Request, response: express.Response): AdminContext | null {
+  const user = httpUser(request);
+  const role = p2pMode ? 'member' : normalizeRole(store.users.find((candidate) => candidate.id === user?.id)?.role);
+  if (!user || !isAdministrator(role)) {
+    response.status(403).json({ error: 'Acesso exclusivo da administração do servidor.' });
+    return null;
+  }
+  return { user, role };
+}
+
+async function audit(actor: PublicUser, action: string, target?: string, result: 'ok' | 'denied' | 'error' = 'ok', detail?: unknown): Promise<void> {
+  await store.recordAudit(createAuditEntry({
+    id: randomUUID(), actorId: actor.id, actorUsername: actor.username, action, target, result, detail,
+  })).catch(() => undefined);
+}
+
+// Um único ponto de difusão: quem está com o app aberto vê a mudança sem
+// recarregar nada.
+function broadcastChannels(): void {
+  io.emit('server:channels', { channels: availableChannels(), categories: store.categories });
+  broadcastSnapshot();
+}
+
+function refuse(response: express.Response, status: number, error: string): void {
+  response.status(status).json({ error });
+}
+
+app.get('/api/admin/audit', (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  response.json({ entries: store.auditLog.slice(0, 200) });
+});
+
+app.get('/api/admin/users', (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const online = new Set([...connectedUsers.values()].map((user) => user.id));
+  const sessoes = new Map<string, number>();
+  for (const sessao of store.sessions) sessoes.set(sessao.userId, (sessoes.get(sessao.userId) ?? 0) + 1);
+  response.json({
+    users: store.users.map((user) => ({
+      id: user.id,
+      username: user.username,
+      role: normalizeRole(user.role),
+      createdAt: user.createdAt,
+      lastSeenAt: user.lastSeenAt,
+      online: online.has(user.id),
+      sessions: sessoes.get(user.id) ?? 0,
+    })),
+    ownerCount: store.ownerCount,
+  });
+});
+
+app.post('/api/admin/users/:id/role', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const alvo = store.users.find((candidate) => candidate.id === request.params.id);
+  const proximo = normalizeRole((request.body as { role?: unknown } | undefined)?.role);
+  if (!alvo) return refuse(response, 404, 'Esse usuário não existe.');
+  const veredito = planRoleChange({
+    actorId: context.user.id, actorRole: context.role,
+    targetId: alvo.id, targetRole: normalizeRole(alvo.role),
+    nextRole: proximo, ownerCount: store.ownerCount,
+  });
+  if (!veredito.allowed) {
+    await audit(context.user, 'user.role', alvo.username, 'denied', veredito.error);
+    return refuse(response, 403, veredito.error ?? 'Ação não permitida.');
+  }
+  await store.setUserRole(alvo.id, proximo);
+  await audit(context.user, 'user.role', alvo.username, 'ok', `papel agora é ${proximo}`);
+  refreshProfilePresence(new Set([alvo.normalizedUsername]));
+  response.json({ ok: true, id: alvo.id, role: proximo });
+});
+
+app.delete('/api/admin/users/:id', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const alvo = store.users.find((candidate) => candidate.id === request.params.id);
+  if (!alvo) return refuse(response, 404, 'Esse usuário não existe.');
+  const veredito = planRemoval({
+    actorId: context.user.id, actorRole: context.role,
+    targetId: alvo.id, targetRole: normalizeRole(alvo.role), ownerCount: store.ownerCount,
+  });
+  if (!veredito.allowed) {
+    await audit(context.user, 'user.remove', alvo.username, 'denied', veredito.error);
+    return refuse(response, 403, veredito.error ?? 'Ação não permitida.');
+  }
+  await store.removeUser(alvo.id);
+  for (const [socketId, connected] of connectedUsers) {
+    if (connected.id !== alvo.id) continue;
+    io.sockets.sockets.get(socketId)?.disconnect(true);
+  }
+  await audit(context.user, 'user.remove', alvo.username);
+  broadcastSnapshot();
+  response.json({ ok: true });
+});
+
+app.post('/api/admin/channels', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  if (p2pMode) return refuse(response, 400, 'O modo P2P possui somente uma conversa e uma call.');
+  const corpo = request.body as { name?: unknown; type?: unknown; categoryId?: unknown; topic?: unknown; userLimit?: unknown };
+  const nome = validateChannelName(corpo?.name);
+  if (!nome.ok) return refuse(response, 400, nome.error ?? 'Nome inválido.');
+  const type = corpo?.type === 'voice' ? 'voice' : 'text';
+  const topico = validateTopic(corpo?.topic);
+  if (!topico.ok) return refuse(response, 400, topico.error ?? 'Tópico inválido.');
+  const limite = validateUserLimit(corpo?.userLimit, type);
+  if (!limite.ok) return refuse(response, 400, limite.error ?? 'Limite inválido.');
+  const categoryId = typeof corpo?.categoryId === 'string' && store.categories.some((c) => c.id === corpo.categoryId) ? corpo.categoryId : undefined;
+  const canal = await store.createChannel({
+    id: `${slugify(nome.value!) || 'canal'}-${randomUUID().slice(0, 4)}`,
+    name: nome.value!, type,
+    ...(categoryId ? { categoryId } : {}),
+    ...(topico.value ? { topic: topico.value } : {}),
+    ...(limite.value ? { userLimit: limite.value } : {}),
+  });
+  await audit(context.user, 'channel.create', canal.name, 'ok', `${type}`);
+  broadcastChannels();
+  response.status(201).json({ ok: true, channel: canal });
+});
+
+app.patch('/api/admin/channels/:id', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const canal = store.channels.find((candidate) => candidate.id === request.params.id);
+  if (!canal) return refuse(response, 404, 'Esse canal não existe mais.');
+  const corpo = request.body as { name?: unknown; topic?: unknown; userLimit?: unknown; categoryId?: unknown; type?: unknown };
+  const patch: Partial<Channel> = {};
+  if (corpo?.name !== undefined) {
+    const nome = validateChannelName(corpo.name);
+    if (!nome.ok) return refuse(response, 400, nome.error ?? 'Nome inválido.');
+    patch.name = nome.value;
+  }
+  if (corpo?.topic !== undefined) {
+    const topico = validateTopic(corpo.topic);
+    if (!topico.ok) return refuse(response, 400, topico.error ?? 'Tópico inválido.');
+    patch.topic = topico.value || undefined;
+  }
+  const tipoFinal = corpo?.type === 'voice' || corpo?.type === 'text' ? corpo.type : canal.type;
+  if (tipoFinal !== canal.type) {
+    const temMensagens = store.messages.some((message) => message.channelId === canal.id);
+    const temGente = (rooms.snapshot()[canal.id] ?? []).length > 0;
+    const veredito = canChangeChannelType(canal, temMensagens, temGente);
+    if (!veredito.ok) {
+      await audit(context.user, 'channel.update', canal.name, 'denied', veredito.error);
+      return refuse(response, 409, veredito.error ?? 'Não dá para converter este canal.');
+    }
+    patch.type = tipoFinal;
+  }
+  if (corpo?.userLimit !== undefined) {
+    const limite = validateUserLimit(corpo.userLimit, tipoFinal);
+    if (!limite.ok) return refuse(response, 400, limite.error ?? 'Limite inválido.');
+    patch.userLimit = limite.value;
+  }
+  if (corpo?.categoryId !== undefined) {
+    patch.categoryId = typeof corpo.categoryId === 'string' && store.categories.some((c) => c.id === corpo.categoryId) ? corpo.categoryId : undefined;
+  }
+  const atualizado = await store.updateChannel(canal.id, patch);
+  await audit(context.user, 'channel.update', atualizado?.name ?? canal.name, 'ok', Object.keys(patch).join(', '));
+  broadcastChannels();
+  response.json({ ok: true, channel: atualizado });
+});
+
+app.delete('/api/admin/channels/:id', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const canal = store.channels.find((candidate) => candidate.id === request.params.id);
+  const veredito = canDeleteChannel(store.channels, request.params.id);
+  if (!veredito.ok) {
+    await audit(context.user, 'channel.delete', canal?.name ?? request.params.id, 'denied', veredito.error);
+    return refuse(response, 409, veredito.error ?? 'Não dá para apagar este canal.');
+  }
+  await store.deleteChannel(request.params.id);
+  await audit(context.user, 'channel.delete', canal?.name ?? request.params.id);
+  broadcastChannels();
+  response.json({ ok: true });
+});
+
+app.post('/api/admin/channels/order', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const ids = (request.body as { ids?: unknown } | undefined)?.ids;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) return refuse(response, 400, 'Ordem inválida.');
+  await store.setChannelOrder(ids as string[]);
+  await audit(context.user, 'channel.reorder', undefined, 'ok', `${ids.length} canais`);
+  broadcastChannels();
+  response.json({ ok: true, channels: availableChannels() });
+});
+
+app.post('/api/admin/categories', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const nome = validateCategoryName((request.body as { name?: unknown } | undefined)?.name);
+  if (!nome.ok) return refuse(response, 400, nome.error ?? 'Nome inválido.');
+  const categoria = await store.createCategory({ id: `${slugify(nome.value!) || 'categoria'}-${randomUUID().slice(0, 4)}`, name: nome.value! });
+  await audit(context.user, 'category.create', categoria.name);
+  broadcastChannels();
+  response.status(201).json({ ok: true, category: categoria });
+});
+
+app.patch('/api/admin/categories/:id', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const nome = validateCategoryName((request.body as { name?: unknown } | undefined)?.name);
+  if (!nome.ok) return refuse(response, 400, nome.error ?? 'Nome inválido.');
+  const categoria = await store.updateCategory(request.params.id, { name: nome.value });
+  if (!categoria) return refuse(response, 404, 'Essa categoria não existe mais.');
+  await audit(context.user, 'category.update', categoria.name);
+  broadcastChannels();
+  response.json({ ok: true, category: categoria });
+});
+
+app.delete('/api/admin/categories/:id', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const categoria = store.categories.find((candidate) => candidate.id === request.params.id);
+  if (!categoria) return refuse(response, 404, 'Essa categoria não existe mais.');
+  await store.deleteCategory(categoria.id);
+  await audit(context.user, 'category.delete', categoria.name, 'ok', 'os canais dela ficaram sem categoria');
+  broadcastChannels();
+  response.json({ ok: true });
+});
+
+app.post('/api/admin/categories/order', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const ids = (request.body as { ids?: unknown } | undefined)?.ids;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) return refuse(response, 400, 'Ordem inválida.');
+  await store.setCategoryOrder(ids as string[]);
+  await audit(context.user, 'category.reorder', undefined, 'ok', `${ids.length} categorias`);
+  broadcastChannels();
+  response.json({ ok: true, categories: store.categories });
+});
 
 app.get('/api/admin/overview', (request, response) => {
   const user = httpUser(request);

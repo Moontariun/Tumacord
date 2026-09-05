@@ -4,6 +4,18 @@ export interface Channel {
   id: string;
   name: string;
   type: ChannelType;
+  // Todos opcionais: instalações vindas da 0.8.0 não os têm, e carregar sem
+  // eles precisa continuar funcionando.
+  categoryId?: string;
+  position?: number;
+  topic?: string;
+  userLimit?: number;
+}
+
+export interface ChannelCategory {
+  id: string;
+  name: string;
+  position?: number;
 }
 
 export interface ProfileMedia {

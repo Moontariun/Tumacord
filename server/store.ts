@@ -4,6 +4,8 @@ import path from 'node:path';
 import type { Channel, ChatAttachment, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
 import { profileIsNewer } from '../shared/profileVersion.js';
 import { countOwners, migrateRoles, normalizeRole, type Role } from './roles.js';
+import { applyOrder, detachCategory, nextPosition, normalizePositions, type CategoryRecord, type ChannelRecord } from './channels.js';
+import { appendAudit, type AuditEntry } from './audit.js';
 
 export interface StoredUser {
   id: string;
@@ -30,10 +32,12 @@ export interface StoredSession {
 interface StoredData {
   users: StoredUser[];
   channels: Channel[];
+  categories: CategoryRecord[];
   messages: ChatMessage[];
   attachments: StoredAttachment[];
   profiles: ReplicatedProfile[];
   sessions: StoredSession[];
+  auditLog: AuditEntry[];
 }
 
 type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
@@ -46,10 +50,12 @@ const initialData = (): StoredData => ({
     { id: 'call-geral', name: 'Call Geral', type: 'voice' },
     { id: 'jogos', name: 'Jogos', type: 'voice' },
   ],
+  categories: [],
   messages: [],
   attachments: [],
   profiles: [],
   sessions: [],
+  auditLog: [],
 });
 
 function profileKey(username: string): string {
@@ -107,15 +113,23 @@ export class JsonStore {
         if (!message.attachment) continue;
         attachments.set(message.attachment.id, this.storedAttachment(message.attachment));
       }
+      // Canais vindos da 0.8.0 não têm posição. Atribuí-la aqui é o que
+      // permite reordenar depois sem que a lista fique dependendo da ordem de
+      // inserção no arquivo.
+      const canaisBrutos = parsed.channels?.length ? parsed.channels : initialData().channels;
+      const precisaPosicionar = canaisBrutos.some((channel) => (channel as Channel).position === undefined);
+      const channels = precisaPosicionar ? normalizePositions(canaisBrutos as ChannelRecord[]) as Channel[] : canaisBrutos;
       this.data = {
         users,
-        channels: parsed.channels?.length ? parsed.channels : initialData().channels,
+        channels,
+        categories: parsed.categories ?? [],
         messages: parsed.messages ?? [],
         attachments: [...attachments.values()],
         profiles: [...profiles.values()],
         sessions,
+        auditLog: parsed.auditLog ?? [],
       };
-      if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || !parsed.profiles || !parsed.attachments) await this.save();
+      if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       await this.save();
@@ -225,6 +239,83 @@ export class JsonStore {
     this.data.sessions = this.data.sessions.filter((session) => session.userId !== userId);
     await this.save();
     return true;
+  }
+
+  get categories(): readonly CategoryRecord[] { return this.data.categories; }
+  get auditLog(): readonly AuditEntry[] { return this.data.auditLog; }
+
+  async createChannel(channel: Omit<Channel, 'position'>): Promise<Channel> {
+    const criado = { ...channel, position: nextPosition(this.data.channels) } as Channel;
+    this.data.channels.push(criado);
+    await this.save();
+    return criado;
+  }
+
+  async updateChannel(id: string, patch: Partial<Channel>): Promise<Channel | undefined> {
+    const channel = this.data.channels.find((candidate) => candidate.id === id);
+    if (!channel) return undefined;
+    Object.assign(channel, patch);
+    // Campos opcionais apagados de verdade, e não guardados como `undefined`:
+    // um `undefined` sobrevive ao JSON como chave ausente, mas confunde quem
+    // lê o objeto em memória.
+    for (const chave of ['topic', 'userLimit', 'categoryId'] as const) {
+      if (patch[chave] === undefined && chave in patch) delete channel[chave];
+    }
+    await this.save();
+    return channel;
+  }
+
+  async deleteChannel(id: string): Promise<boolean> {
+    const index = this.data.channels.findIndex((candidate) => candidate.id === id);
+    if (index < 0) return false;
+    this.data.channels.splice(index, 1);
+    // As mensagens do canal apagado saem junto: mantê-las órfãs ocuparia
+    // espaço e reapareceria se alguém recriasse um canal com o mesmo id.
+    this.data.messages = this.data.messages.filter((message) => message.channelId !== id);
+    await this.save();
+    return true;
+  }
+
+  async setChannelOrder(orderedIds: readonly string[]): Promise<readonly Channel[]> {
+    this.data.channels = applyOrder(this.data.channels as ChannelRecord[], orderedIds) as Channel[];
+    await this.save();
+    return this.data.channels;
+  }
+
+  async createCategory(category: Omit<CategoryRecord, 'position'>): Promise<CategoryRecord> {
+    const criada = { ...category, position: nextPosition(this.data.categories) };
+    this.data.categories.push(criada);
+    await this.save();
+    return criada;
+  }
+
+  async updateCategory(id: string, patch: Partial<CategoryRecord>): Promise<CategoryRecord | undefined> {
+    const category = this.data.categories.find((candidate) => candidate.id === id);
+    if (!category) return undefined;
+    Object.assign(category, patch);
+    await this.save();
+    return category;
+  }
+
+  async deleteCategory(id: string): Promise<boolean> {
+    const index = this.data.categories.findIndex((candidate) => candidate.id === id);
+    if (index < 0) return false;
+    this.data.categories.splice(index, 1);
+    // Apagar categoria não apaga canal: eles voltam para "sem categoria".
+    this.data.channels = detachCategory(this.data.channels as ChannelRecord[], id) as Channel[];
+    await this.save();
+    return true;
+  }
+
+  async setCategoryOrder(orderedIds: readonly string[]): Promise<readonly CategoryRecord[]> {
+    this.data.categories = applyOrder(this.data.categories, orderedIds);
+    await this.save();
+    return this.data.categories;
+  }
+
+  async recordAudit(entry: AuditEntry): Promise<void> {
+    this.data.auditLog = appendAudit(this.data.auditLog, entry);
+    await this.save();
   }
 
   profileForUsername(username: string): UserProfile | undefined {
