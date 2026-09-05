@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/tumacord"
+if [[ -L "$install_root/current" ]]; then
+  version_dir="$(readlink -f -- "$install_root/current")"
+  if [[ -x "$version_dir/tumacord" ]]; then
+    exec "$version_dir/tumacord" "$@"
+  fi
+fi
+
+# Compatibilidade com instalações 0.2.0 e anteriores durante a migração.
+if [[ -x "$install_root/app/tumacord" ]]; then
+  exec "$install_root/app/tumacord" "$@"
+fi
+
+echo "A instalação do Tumacord está incompleta. Execute novamente o instalador da branch." >&2
+exit 1

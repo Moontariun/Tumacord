@@ -16,12 +16,19 @@ export interface UserProfile {
   accentColor: string;
   avatar?: ProfileMedia;
   banner?: ProfileMedia;
+  updatedAt?: string;
+}
+
+export interface ReplicatedProfile {
+  username: string;
+  profile: UserProfile;
 }
 
 export interface PublicUser {
   id: string;
   username: string;
   profile?: UserProfile;
+  isAdmin?: boolean;
 }
 
 export interface ChatAttachment {
@@ -44,6 +51,7 @@ export interface ChatMessage {
 export interface ChatSyncBundle {
   channels: Channel[];
   messages: ChatMessage[];
+  profiles: ReplicatedProfile[];
   availableAttachmentIds: string[];
 }
 
@@ -52,11 +60,15 @@ export interface VoiceState extends PublicUser {
   endpoint: string;
   isHost: boolean;
   pingMs: number;
+  // Nota de 0 a 100 de quão alcançável este participante é de fora da rede
+  // local. Ela decide quem assume a call quando o host sai.
+  reachability?: number;
   muted: boolean;
   speaking: boolean;
   deafened: boolean;
   camera: boolean;
   screen: boolean;
+  screenAudio: boolean;
 }
 
 export interface ServerSnapshot {
@@ -64,6 +76,21 @@ export interface ServerSnapshot {
   channels: Channel[];
   onlineUsers: PublicUser[];
   voiceRooms: Record<string, VoiceState[]>;
+}
+
+export interface AdminOverview {
+  serverName: string;
+  version: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  onlineUsers: PublicUser[];
+  channels: Channel[];
+  voiceRooms: Record<string, VoiceState[]>;
+  security: {
+    accessKeyRequired: boolean;
+    tls: boolean;
+    media: 'DTLS-SRTP';
+  };
 }
 
 export interface StreamMeta {
@@ -86,6 +113,9 @@ export interface DiscoveredCall {
   callName: string;
   participants: number;
   url: string;
+  // Chave do enlace direto anunciada pelo host na própria rede: entrar por uma
+  // call vista aqui continua sendo um clique, sem colar convite.
+  key?: string;
   pingMs: number;
   lastSeen: number;
 }

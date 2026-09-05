@@ -1,8 +1,10 @@
 import type { PublicUser, VoiceState } from '../shared/types.js';
+import { betterHost } from '../shared/directLink.js';
 
 export interface ParticipantInput extends PublicUser {
   socketId: string;
   endpoint: string;
+  reachability?: number;
 }
 
 interface InternalParticipant extends VoiceState {
@@ -18,6 +20,7 @@ export class VoiceRooms {
     const room = this.rooms.get(channelId) ?? new Map<string, InternalParticipant>();
     room.set(participant.socketId, {
       ...participant,
+      reachability: Math.max(0, Math.min(100, Math.round(participant.reachability ?? 0))),
       joinedAt: this.sequence++,
       isHost: room.size === 0,
       pingMs: 9999,
@@ -26,6 +29,7 @@ export class VoiceRooms {
       deafened: false,
       camera: false,
       screen: false,
+      screenAudio: false,
     });
     this.rooms.set(channelId, room);
     return this.members(channelId);
@@ -37,7 +41,11 @@ export class VoiceRooms {
     const leavingWasHost = room.get(socketId)?.isHost ?? false;
     room.delete(socketId);
     if (leavingWasHost && room.size) {
-      const nextHost = [...room.values()].sort((a, b) => (a.pingMs - b.pingMs) || (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id))[0];
+      // A sinalização mora no host. Escolher pelo menor ping era suficiente
+      // quando todo mundo estava na mesma rede virtual; sem ZeroTier, um host
+      // rápido e inalcançável deixa a call sem porta de entrada, então o
+      // alcance decide primeiro e o ping continua desempatando.
+      const nextHost = [...room.values()].sort((a, b) => betterHost(a, b) || (a.joinedAt - b.joinedAt))[0];
       nextHost.isHost = true;
     }
     if (!room.size) this.rooms.delete(channelId);
@@ -55,15 +63,25 @@ export class VoiceRooms {
     return changed;
   }
 
-  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen'>>): VoiceState[] {
+  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
-    if (participant) Object.assign(participant, patch);
+    if (participant) {
+      Object.assign(participant, patch);
+      if (!participant.screen) participant.screenAudio = false;
+      if (participant.muted) participant.speaking = false;
+    }
     return this.members(channelId);
   }
 
   updatePing(channelId: string, socketId: string, pingMs: number): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
     if (participant) participant.pingMs = Math.max(0, Math.min(9999, Math.round(pingMs)));
+    return this.members(channelId);
+  }
+
+  updateReachability(channelId: string, socketId: string, reachability: number): VoiceState[] {
+    const participant = this.rooms.get(channelId)?.get(socketId);
+    if (participant) participant.reachability = Math.max(0, Math.min(100, Math.round(reachability)));
     return this.members(channelId);
   }
 

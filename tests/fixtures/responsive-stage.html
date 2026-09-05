@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/src/styles.css">
+  <title>Tumacord · Palco responsivo QA</title>
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="server-rail"><button class="server-icon active">T</button></nav>
+    <aside class="channel-sidebar">
+      <header class="server-header"><span>Tumacord Visual QA</span></header>
+      <div class="channel-scroll"><section class="channel-group"><div class="group-title"><span>Conversa</span></div><button class="channel-button"># geral</button></section><section class="channel-group"><div class="group-title"><span>Call da turma</span></div><button class="channel-button selected connected">Call Geral<i></i></button><div class="voice-member-entry"><button class="voice-member-mini is-streaming"><span class="avatar small">T</span><span class="voice-member-copy"><strong>Transmissor QA</strong><small><span class="live-dot"></span> AO VIVO</small></span></button><div class="voice-volume-popover"><header><div><strong>Transmissor QA</strong><small>28 ms</small></div><button>×</button></header><label><span>Volume individual</span><output>160%</output><input type="range" min="0" max="2" value="1.6"></label><button class="voice-volume-profile">Ver perfil</button></div></div></section></div>
+      <div class="voice-status"><div><strong>Voz conectada</strong><span>Call Geral</span></div></div>
+      <div class="user-panel"><button class="profile-summary"><span class="avatar small">V</span><span class="user-copy"><strong>Visual QA</strong><small>Online</small></span></button></div>
+    </aside>
+    <section class="main-panel">
+      <header class="topbar"><strong>Call Geral</strong><div class="topbar-spacer"></div><span class="connection-pill online"><i></i>Servidor conectado</span></header>
+      <div class="content-row">
+        <main class="call-view">
+          <div class="stage-grid count-1 focused-live"><div class="video-tile screen is-theater"><video autoplay playsinline poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2560 1440'%3E%3Crect width='2560' height='1440' fill='%231b2440'/%3E%3Ccircle cx='1280' cy='720' r='260' fill='%23ef4444'/%3E%3Ctext x='1280' y='750' text-anchor='middle' font-family='sans-serif' font-size='105' fill='white'%3ESTREAM 2560×1440%3C/text%3E%3C/svg%3E"></video><span><i class="live-dot"></i>Transmissor QA · AO VIVO</span><div class="video-actions"><button>×</button><button>↗</button><button>□</button></div></div></div>
+          <div class="call-footer">
+            <div class="call-status-tools"><div class="p2p-route stable"><span><i></i><strong>Malha P2P estável</strong><small>28 ms médio</small></span><button><span>Reconectar</span></button></div></div>
+            <div class="call-primary-controls"><button class="call-control"><b>●</b><span>Microfone</span></button><button class="call-control"><b>●</b><span>Áudio</span></button><button class="call-control"><b>●</b><span>Câmera</span></button><button class="call-control accent active"><b>●</b><span>Transmitir tela</span></button><button class="call-control danger active"><b>●</b><span>Sair</span></button></div>
+            <div class="call-viewer-tools"><label class="stream-audio-controls"><button>♪</button><span>Live</span><input type="range" min="0" max="2" value="1"><output>100%</output></label></div>
+          </div>
+        </main>
+        <aside class="member-list"><header><div><small>Presença</small><h3>Pessoas online</h3></div><span>2</span></header><div class="member-list-scroll"><section class="member-section"><div class="member-section-title"><span>Na chamada</span><b>2</b></div><article class="member-row in-call is-streaming"><div class="member-row-main"><button class="member-profile"><span class="avatar small">T</span><span class="member-copy"><span class="member-name"><strong>Transmissor QA</strong></span><small><i class="voice-presence"></i><span>Na chamada · 28 ms</span><em class="member-inline-live">AO VIVO</em></small></span></button><span class="member-badges"><span class="member-host">H</span></span></div></article></section></div></aside>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
