@@ -1216,3 +1216,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .admin-audit-list li.denied { border-color: rgba(255,77,79,.28); background: rgba(255,77,79,.06); }
 .admin-audit-when { flex: none; color: #7c7e90; font-size: 10px; font-variant-numeric: tabular-nums; }
 .admin-audit-list em { flex: none; color: #ff9c9d; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.admin-panel .setting-label input,
+.admin-panel .setting-label textarea { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #101119; color: #e9eaf2; }
+.admin-panel .primary-button { width: auto; padding: 11px 20px; }

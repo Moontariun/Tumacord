@@ -36,11 +36,13 @@ services:
   # O relay entra com `docker compose --profile turn up -d`. Ele fica fora do
   # padrão porque só faz sentido em uma máquina com IP público, e porque é a
   # única peça que chega a carregar mídia — e, portanto, banda.
+  # O relay entra com `docker compose --profile turn up -d`. Ele fica fora do
+  # padrão porque só faz sentido em uma máquina com IP público, e porque é a
+  # única peça que chega a carregar mídia — e, portanto, banda.
   coturn:
     # `4.6-alpine` não existe no Docker Hub: a numeração do coturn saltou de
-    # 4.5 para 4.17, e a tag antiga fazia o `up` falhar com "manifest unknown".
-    # A série é fixada, e não a versão exata, para receber correção sem exigir
-    # edição aqui.
+    # 4.5 para 4.17. A série é fixada, e não a versão exata, para receber
+    # correção sem exigir edição aqui.
     image: coturn/coturn:4.17-alpine
     container_name: tumacord-turn
     profiles: ["turn"]
@@ -49,38 +51,48 @@ services:
     # pela rede bridge do Docker é lento e frágil; rede do host é o modo com
     # que o coturn é operado na prática.
     network_mode: host
+    environment:
+      # Todas com valor padrão vazio, e não obrigatórias. O Compose interpola
+      # TODOS os serviços antes de olhar perfil: uma variável obrigatória aqui
+      # impedia de subir até quem nunca quis relay nenhum.
+      TURN_REALM: ${TUMACORD_TURN_REALM:-}
+      TURN_SECRET: ${TUMACORD_TURN_SECRET:-}
+      TURN_PUBLIC_IP: ${TUMACORD_TURN_PUBLIC_IP:-}
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --realm=${TUMACORD_TURN_REALM:?Defina TUMACORD_TURN_REALM no arquivo .env}
-      - --use-auth-secret
-      - --static-auth-secret=${TUMACORD_TURN_SECRET:?Defina TUMACORD_TURN_SECRET no arquivo .env}
-      - --external-ip=${TUMACORD_TURN_PUBLIC_IP:?Defina TUMACORD_TURN_PUBLIC_IP com o IP público da máquina}
-      - --listening-port=3478
-      - --min-port=49160
-      - --max-port=49200
-      - --fingerprint
-      - --no-cli
-      - --no-software-attribute
-      # Sem TLS por padrão: `turns:` exige certificado válido, e um coturn que
-      # não encontra o arquivo sobe quebrado. O README explica como ligar.
-      - --no-tls
-      - --no-dtls
-      # Um relay que aceita qualquer destino vira uma porta para a rede interna
-      # da própria máquina. Estas faixas ficam proibidas como destino.
-      - --no-multicast-peers
-      - --no-loopback-peers
-      - --denied-peer-ip=0.0.0.0-0.255.255.255
-      - --denied-peer-ip=10.0.0.0-10.255.255.255
-      - --denied-peer-ip=100.64.0.0-100.127.255.255
-      - --denied-peer-ip=127.0.0.0-127.255.255.255
-      - --denied-peer-ip=169.254.0.0-169.254.255.255
-      - --denied-peer-ip=172.16.0.0-172.31.255.255
-      - --denied-peer-ip=192.0.0.0-192.0.0.255
-      - --denied-peer-ip=192.168.0.0-192.168.255.255
-      - --denied-peer-ip=198.18.0.0-198.19.255.255
-      - --denied-peer-ip=224.0.0.0-255.255.255.255
-      - --denied-peer-ip=::1
-      - --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
-      - --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      - |
+        faltando=""
+        [ -z "$$TURN_REALM" ] && faltando="$$faltando TUMACORD_TURN_REALM"
+        [ -z "$$TURN_SECRET" ] && faltando="$$faltando TUMACORD_TURN_SECRET"
+        [ -z "$$TURN_PUBLIC_IP" ] && faltando="$$faltando TUMACORD_TURN_PUBLIC_IP"
+        if [ -n "$$faltando" ]; then
+          echo "O relay TURN precisa destas variáveis no .env:$$faltando" >&2
+          echo "Sem elas ele subiria mal configurado, o que é pior do que não subir." >&2
+          exit 1
+        fi
+        exec turnserver -n \
+          --realm="$$TURN_REALM" \
+          --use-auth-secret \
+          --static-auth-secret="$$TURN_SECRET" \
+          --external-ip="$$TURN_PUBLIC_IP" \
+          --listening-port=3478 \
+          --min-port=49160 --max-port=49200 \
+          --fingerprint --no-cli --no-software-attribute \
+          --no-tls --no-dtls \
+          --no-multicast-peers --no-loopback-peers \
+          --denied-peer-ip=0.0.0.0-0.255.255.255 \
+          --denied-peer-ip=10.0.0.0-10.255.255.255 \
+          --denied-peer-ip=100.64.0.0-100.127.255.255 \
+          --denied-peer-ip=127.0.0.0-127.255.255.255 \
+          --denied-peer-ip=169.254.0.0-169.254.255.255 \
+          --denied-peer-ip=172.16.0.0-172.31.255.255 \
+          --denied-peer-ip=192.0.0.0-192.0.0.255 \
+          --denied-peer-ip=192.168.0.0-192.168.255.255 \
+          --denied-peer-ip=198.18.0.0-198.19.255.255 \
+          --denied-peer-ip=224.0.0.0-255.255.255.255 \
+          --denied-peer-ip=::1 \
+          --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff \
+          --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
     volumes:
       - ./certs:/certs:ro
     stop_grace_period: 10s

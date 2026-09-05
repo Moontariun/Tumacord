@@ -18,7 +18,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/server-update-and-turn-fix-v0.8.2}"
+alvo="${1:-release/turn-in-panel-v0.8.3}"
 
 # A pasta do servidor. Quando o script é executado do próprio repositório, ela
 # sai do caminho do arquivo; quando ele chega por `curl … | bash` — que é como
