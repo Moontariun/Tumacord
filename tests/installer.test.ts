@@ -18,6 +18,7 @@ const SHELL_SCRIPTS = [
   'install-cachyos.sh',
   'install-from-github.sh',
   'install-v0.8.1.sh',
+  'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
 ];
@@ -109,4 +110,30 @@ test('o bootstrap do GitHub prefere o instalador novo e mantém o nome antigo co
   assert.match(bootstrap, /installer="\$source_directory\/scripts\/install-linux\.sh"/);
   assert.match(bootstrap, /install-cachyos\.sh/);
   assert.match(bootstrap, /dnf install --assumeyes git/);
+});
+
+// A numeração do coturn saltou de 4.5 para 4.17, e uma tag inventada só
+// aparece na hora do `docker compose up`, na máquina de quem for hospedar.
+test('a imagem do relay usa uma tag que existe de verdade', () => {
+  const compose = readFileSync(path.join(projectRoot, 'docker-compose.yml'), 'utf8');
+  const imagem = /image:\s*(coturn\/coturn:\S+)/.exec(compose)?.[1];
+  assert.ok(imagem, 'o serviço de relay precisa declarar uma imagem');
+  assert.match(imagem!, /^coturn\/coturn:(?:4\.\d+|4|latest|alpine)(?:\.\d+)?-?alpine\d*(?:\.\d+)?$/, `tag suspeita: ${imagem}`);
+  assert.equal(imagem, 'coturn/coturn:4.17-alpine');
+});
+
+
+// Uma atualização que apaga dados é pior do que uma que não acontece.
+test('o script de atualização nunca remove volumes nem descarta alteração local', () => {
+  const bruto = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  // Só o que é executável. O próprio script explica em comentário que jamais
+  // usa `down -v`, e ler a explicação como se fosse comando reprovaria a
+  // documentação em vez do comportamento.
+  const script = bruto.split('\n').filter((linha) => !/^\s*#/.test(linha)).join('\n');
+  assert.equal(/down\s+(-v|--volumes)/.test(script), false, '`down -v` apagaria contas e mensagens');
+  assert.equal(/git\s+(reset\s+--hard|checkout\s+--force|clean\s+-[a-z]*f)/.test(script), false, 'não pode descartar alteração local do operador');
+  assert.match(script, /git status --porcelain/, 'precisa detectar alteração local antes de mexer');
+  assert.match(script, /tar czf/, 'precisa fazer backup antes de atualizar');
+  assert.match(script, /api\/health/, 'precisa conferir se o servidor respondeu depois');
+  assert.match(bruto, /down -v/, 'e o script precisa explicar por que não usa isso');
 });

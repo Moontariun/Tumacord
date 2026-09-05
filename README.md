@@ -309,6 +309,17 @@ Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre 
 A 0.8.1 muda o formato guardado — canais ganham posição, contas ganham papel, e o registro de auditoria passa a existir. **A migração é automática e não apaga nada.**
 
 ```bash
+./scripts/update-server.sh
+```
+
+Ele faz backup do volume, busca a versão publicada, reconstrói preservando o
+relay se ele já estava no ar, e confere se o servidor voltou a responder — nessa
+ordem, porque procurar o backup depois do problema é tarde. Se houver alteração
+local sua no `docker-compose.yml`, ele para e avisa em vez de descartá-la.
+
+À mão, se preferir:
+
+```bash
 git pull
 docker compose up -d --build
 ```
