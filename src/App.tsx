@@ -278,7 +278,15 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   // As credenciais de TURN são temporárias de propósito. Buscá-las na entrada
   // e renovar de hora em hora evita que um enlace precise do relay justamente
   // depois de a credencial vencer.
+  //
+  // Com o relay desligado não se busca nada: uma credencial pedida é uma
+  // credencial que existe. E a que já estava em mãos é esquecida na hora, para
+  // desligar valer agora e não só na próxima renovação.
   useEffect(() => {
+    if (!networkPreferences.turnEnabled) {
+      forgetTurnServers();
+      return;
+    }
     let active = true;
     const refresh = () => { if (active) void refreshTurnServers(session.serverUrl, session.token); };
     refresh();
@@ -287,7 +295,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       active = false;
       window.clearInterval(timer);
     };
-  }, [session.serverUrl, session.token]);
+  }, [session.serverUrl, session.token, networkPreferences.turnEnabled]);
 
   // Reabrir o app não pode invalidar o convite que já circulou: o servidor
   // embutido volta a aceitar a chave da call assim que a sessão é restaurada.
@@ -1308,7 +1316,9 @@ function NetworkSettings({ preferences, onChange, onClose }: { preferences: Netw
     <label className="sound-toggle"><input type="checkbox" checked={preferences.portMapping} onChange={(event) => onChange({ portMapping: event.target.checked })} /><span><strong>Abrir porta no roteador</strong><small>Pede uma porta por PCP, NAT-PMP ou UPnP enquanto o Tumacord estiver aberto, e devolve ao fechar.</small></span></label>
     <label className="sound-toggle"><input type="checkbox" checked={preferences.zeroTierEnabled} onChange={(event) => onChange({ zeroTierEnabled: event.target.checked })} /><span><strong>Usar a rede ZeroTier</strong><small>Desligado, o adaptador do ZeroTier fica fora da descoberta e da call. Ligue se o grupo já usa uma rede ZeroTier ou se o enlace direto não alcançar ninguém.</small></span></label>
     {preferences.zeroTierEnabled && <div className="quality-note"><strong>ZeroTier ligado</strong><span>{report?.zeroTier.length ? `Endereços vistos: ${report.zeroTier.join(', ')}.` : 'Nenhum adaptador ZeroTier encontrado neste computador. Instale e entre na rede para usá-lo.'}</span></div>}
-    <div className="quality-note"><strong>Quando nada alcança</strong><span>Se este computador ficar sem caminho de entrada, quem tiver IPv6 ou porta aberta assume a call automaticamente. Com todos sem saída, ligar o ZeroTier acima resolve.</span></div>
+    <label className="sound-toggle"><input type="checkbox" checked={preferences.turnEnabled} onChange={(event) => onChange({ turnEnabled: event.target.checked })} /><span><strong>Usar o relay do servidor (TURN)</strong><small>Último recurso, desligado por padrão. Ligue se a call não fechar de jeito nenhum — os dois lados em CGNAT simétrico, sem IPv6. Ligado, ele só entra quando nenhum caminho direto se forma, e sai de cena se um aparecer depois; o ICE sempre prefere o direto. Enquanto estiver em uso, sua mídia passa pela máquina do servidor, cifrada de ponta a ponta e gastando banda dela.</small></span></label>
+    {preferences.turnEnabled && <div className="quality-note"><strong>Relay ligado</strong><span>O servidor só entrega credencial de relay se tiver um configurado. Sem relay do outro lado, isto não muda nada e a call continua tentando todo caminho direto.</span></div>}
+    <div className="quality-note"><strong>Quando nada alcança</strong><span>Se este computador ficar sem caminho de entrada, quem tiver IPv6 ou porta aberta assume a call automaticamente. Com todos sem saída, ligar o ZeroTier ou o relay acima resolve.</span></div>
   </section>;
 }
 
@@ -1332,7 +1342,7 @@ function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onC
     version: APP_VERSION,
     connectionMode,
     stunConfigured: preferences.stunEnabled && preferences.stunServers.length > 0,
-    turnConfigured: cachedTurnServers().length > 0,
+    turnConfigured: preferences.turnEnabled && cachedTurnServers().length > 0,
     paths: estado.paths,
   };
   const texto = formatDiagnosticReport(estado, contexto);

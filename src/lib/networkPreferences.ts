@@ -9,6 +9,7 @@ export interface NetworkPreferences {
   zeroTierEnabled: boolean;
   portMapping: boolean;
   stunEnabled: boolean;
+  turnEnabled: boolean;
   stunServers: string[];
 }
 
@@ -24,6 +25,7 @@ export const DEFAULT_NETWORK_PREFERENCES: NetworkPreferences = {
   zeroTierEnabled: false,
   portMapping: true,
   stunEnabled: true,
+  turnEnabled: false,
   stunServers: DEFAULT_STUN_SERVERS,
 };
 
@@ -36,6 +38,7 @@ export function sanitizeNetworkPreferences(input: unknown): NetworkPreferences {
     zeroTierEnabled: typeof source.zeroTierEnabled === 'boolean' ? source.zeroTierEnabled : DEFAULT_NETWORK_PREFERENCES.zeroTierEnabled,
     portMapping: typeof source.portMapping === 'boolean' ? source.portMapping : DEFAULT_NETWORK_PREFERENCES.portMapping,
     stunEnabled: typeof source.stunEnabled === 'boolean' ? source.stunEnabled : DEFAULT_NETWORK_PREFERENCES.stunEnabled,
+    turnEnabled: typeof source.turnEnabled === 'boolean' ? source.turnEnabled : DEFAULT_NETWORK_PREFERENCES.turnEnabled,
     stunServers: servers.length ? servers : DEFAULT_STUN_SERVERS,
   };
 }

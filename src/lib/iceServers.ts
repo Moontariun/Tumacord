@@ -4,7 +4,12 @@
 // e serve só para descobrir o endereço público — ele não transporta nada. O
 // TURN vem do servidor, com credencial temporária, e é o único que pode
 // acabar carregando a mídia; por isso ele só existe quando há um servidor
-// configurado para isso.
+// configurado para isso E quando esta pessoa ligou o relay.
+//
+// O relay é opt-in por pessoa e nasce desligado. Ter o servidor anunciando um
+// relay não é razão para usá-lo: a mídia passaria por uma máquina de terceiro,
+// cifrada mas passando, e gastando banda dela. Quem decide é quem não fecha
+// caminho direto, e decide para si — a escolha não vem do servidor.
 //
 // A ordem entre eles não é decidida aqui: o ICE compara candidatos por
 // prioridade e um par direto sempre vence um par por relay. O relay entra
@@ -76,6 +81,9 @@ export async function refreshTurnServers(serverUrl: string, token: string, optio
 
 export function iceServers(preferences: NetworkPreferences = currentNetworkPreferences(), now = Date.now()): RTCIceServer[] {
   const stun = iceServersFor(preferences);
-  const relay = cachedTurn && cachedTurn.expiresAt > now ? cachedTurn.servers : [];
+  // A checagem fica aqui, e não só em quem busca a credencial, porque este é o
+  // ponto por onde toda `RTCPeerConnection` passa. Uma credencial que sobrou de
+  // antes de desligar não pode virar candidato depois.
+  const relay = preferences.turnEnabled && cachedTurn && cachedTurn.expiresAt > now ? cachedTurn.servers : [];
   return [...stun, ...relay];
 }

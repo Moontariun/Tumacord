@@ -17,10 +17,15 @@ const DEFAULT_STUN_SERVERS = [
 
 // O ZeroTier deixa de ser exigência e vira escolha: quem já tem a rede montada
 // liga aqui e continua como antes; quem não tem nunca precisa instalar nada.
+// O relay fica desligado por padrão porque é a única peça que vê a mídia
+// passar por uma máquina de terceiro — cifrada, mas passando. Quem precisa
+// dele é a minoria que não fecha caminho direto; para essa minoria, ligar é
+// uma caixa em Rede e conexão.
 const DEFAULTS = {
   zeroTierEnabled: false,
   portMapping: true,
   stunEnabled: true,
+  turnEnabled: false,
   stunServers: DEFAULT_STUN_SERVERS,
   // Chave própria do convite. Ela precisa sobreviver a reinício: um código
   // entregue ontem tem de continuar abrindo a call hoje.
@@ -37,6 +42,7 @@ function sanitize(input) {
     zeroTierEnabled: typeof source.zeroTierEnabled === 'boolean' ? source.zeroTierEnabled : DEFAULTS.zeroTierEnabled,
     portMapping: typeof source.portMapping === 'boolean' ? source.portMapping : DEFAULTS.portMapping,
     stunEnabled: typeof source.stunEnabled === 'boolean' ? source.stunEnabled : DEFAULTS.stunEnabled,
+    turnEnabled: typeof source.turnEnabled === 'boolean' ? source.turnEnabled : DEFAULTS.turnEnabled,
     stunServers: servers.length ? servers : DEFAULTS.stunServers,
     directKey: key.length >= 22 && key.length <= 256 ? key : '',
   };

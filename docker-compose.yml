@@ -50,24 +50,33 @@ services:
     # que o coturn é operado na prática.
     network_mode: host
     command:
-      - --realm=${TUMACORD_TURN_REALM:?Defina TUMACORD_TURN_REALM no arquivo .env}
+      # Sem `:?` de propósito. O Compose interpola o arquivo inteiro, esteja o
+      # perfil `turn` selecionado ou não; exigir as variáveis aqui derrubava o
+      # `docker compose up` de quem nunca quis relay nenhum. Quem sobe o perfil
+      # sem preencher o .env recebe o erro do próprio coturn, que é específico.
+      - --realm=${TUMACORD_TURN_REALM:-}
       - --use-auth-secret
-      - --static-auth-secret=${TUMACORD_TURN_SECRET:?Defina TUMACORD_TURN_SECRET no arquivo .env}
-      - --external-ip=${TUMACORD_TURN_PUBLIC_IP:?Defina TUMACORD_TURN_PUBLIC_IP com o IP público da máquina}
+      - --static-auth-secret=${TUMACORD_TURN_SECRET:-}
+      - --external-ip=${TUMACORD_TURN_PUBLIC_IP:-}
       - --listening-port=3478
       - --min-port=49160
       - --max-port=49200
       - --fingerprint
-      - --no-cli
       - --no-software-attribute
-      # Sem TLS por padrão: `turns:` exige certificado válido, e um coturn que
-      # não encontra o arquivo sobe quebrado. O README explica como ligar.
+      # `--no-cli` saiu: na 4.17 o CLI já nasce desligado e a opção antiga vira
+      # ERRO no log. `--no-dtls` saiu pelo mesmo motivo — DTLS só sobe com
+      # `--dtls`. `--no-tls` continua valendo e continua aqui: `turns:` exige
+      # certificado válido, e um coturn que não acha o arquivo sobe quebrado.
+      # O README explica como ligar.
       - --no-tls
-      - --no-dtls
       # Um relay que aceita qualquer destino vira uma porta para a rede interna
       # da própria máquina. Estas faixas ficam proibidas como destino.
+      #
+      # `--no-loopback-peers` foi REMOVIDO do coturn: a 4.17 nega loopback por
+      # padrão e só aceita o inverso, `--allow-loopback-peers`. Mantê-lo fazia
+      # o turnserver imprimir o help e sair com 255, em laço de reinício. A
+      # proteção não se perde — 127.0.0.0/8 e ::1 estão negados logo abaixo.
       - --no-multicast-peers
-      - --no-loopback-peers
       - --denied-peer-ip=0.0.0.0-0.255.255.255
       - --denied-peer-ip=10.0.0.0-10.255.255.255
       - --denied-peer-ip=100.64.0.0-100.127.255.255

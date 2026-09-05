@@ -137,6 +137,8 @@ Vale ligar quando o grupo já usa uma rede ZeroTier ou quando ninguém consegue 
 
 Na mesma tela ficam a travessia por STUN e a abertura de porta no roteador, que também podem ser desligadas, além do diagnóstico deste computador: IPv6 disponível, CGNAT, se o NAT é atravessável e qual porta foi aberta.
 
+E ali também fica **Usar o relay do servidor (TURN)**, **desligada por padrão**. O relay é o único caminho em que a mídia passa por uma máquina de terceiro — cifrada de ponta a ponta, mas passando, e gastando banda dessa máquina. Quem precisa dele é a minoria que não fecha caminho direto de jeito nenhum: os dois lados em CGNAT simétrico e sem IPv6. Por isso a escolha é de cada pessoa, e não do servidor: ter um relay anunciado não obriga ninguém a usá-lo. Ligada, a chave não muda a ordem das coisas — o ICE continua preferindo qualquer par direto, e o relay só entra quando nenhum se forma.
+
 ### Firewall
 
 Libere TCP `3927` (sinalização) e UDP `3928` (descoberta). Para receber convites pela internet **no modo P2P puro**, o TCP `3927` precisa chegar até este computador — é justamente isso que a abertura automática de porta tenta resolver. Em uma configuração doméstica padrão costuma funcionar sem regras extras.
@@ -204,6 +206,8 @@ O relay fica fora do perfil padrão de propósito: ele só faz sentido em uma m�
 Nenhuma senha de TURN é armazenada. O servidor assina um prazo com o segredo compartilhado e entrega uma credencial temporária; o coturn recalcula o mesmo HMAC e compara. Uma credencial que vaze deixa de valer quando o prazo acaba.
 
 Libere no firewall da VPS: `3478/udp`, `3478/tcp` e a faixa `49160-49200/udp`.
+
+> **Ao mexer no `command:` do coturn.** Uma opção que o turnserver não reconhece não é ignorada: ele imprime o help e sai com 255, e o `restart: unless-stopped` transforma isso em laço de reinício silencioso — `docker ps` mostra `Restarting`, e o servidor continua anunciando um relay que não existe. Foi o que aconteceu com `--no-loopback-peers`, removido do coturn (hoje loopback é negado por padrão, e a opção que existe é a inversa, `--allow-loopback-peers`). Depois de qualquer mudança ali, confira `docker logs tumacord-turn | head -3`: a primeira linha diz qual opção ele não entendeu.
 
 ### `turns:` na porta 443
 

@@ -3,7 +3,10 @@ import test from 'node:test';
 import { cachedTurnServers, forgetTurnServers, iceServers, refreshTurnServers, turnServersAreFresh } from '../src/lib/iceServers';
 import { DEFAULT_NETWORK_PREFERENCES, type NetworkPreferences } from '../src/lib/networkPreferences';
 
-const preferences: NetworkPreferences = { ...DEFAULT_NETWORK_PREFERENCES, stunServers: ['stun:stun.exemplo:3478'] };
+// `turnEnabled: true` aqui é deliberado: o padrão do produto é o relay
+// desligado, então todo teste que quer ver o relay precisa pedi-lo. O teste
+// logo abaixo trava exatamente esse padrão.
+const preferences: NetworkPreferences = { ...DEFAULT_NETWORK_PREFERENCES, stunServers: ['stun:stun.exemplo:3478'], turnEnabled: true };
 
 function respondWith(body: unknown, ok = true): typeof fetch {
   return (async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
@@ -17,6 +20,28 @@ const RELAY = {
 test('sem TURN buscado, a lista tem apenas o STUN local', () => {
   forgetTurnServers();
   assert.deepEqual(iceServers(preferences), [{ urls: ['stun:stun.exemplo:3478'] }]);
+});
+
+test('o relay vem desligado por padrão', () => {
+  assert.equal(DEFAULT_NETWORK_PREFERENCES.turnEnabled, false, 'a mídia não passa por máquina de terceiro sem alguém pedir');
+});
+
+test('com o relay desligado, a credencial em mãos não vira candidato', async () => {
+  forgetTurnServers();
+  const servers = await refreshTurnServers('https://call.exemplo', 'token', { fetchImpl: respondWith(RELAY), now: 1_700_000_000_000 });
+  assert.equal(servers.length, 1, 'buscar continua possível; oferecer ao navegador é que não');
+  assert.deepEqual(
+    iceServers({ ...preferences, turnEnabled: false }, 1_700_000_000_000),
+    [{ urls: ['stun:stun.exemplo:3478'] }],
+    'desligar vale agora, não só na próxima renovação',
+  );
+  assert.equal(iceServers(preferences, 1_700_000_000_000).length, 2, 'e religar devolve o relay sem buscar de novo');
+});
+
+test('desligado, e sem STUN, a lista fica vazia em vez de cair no relay', async () => {
+  forgetTurnServers();
+  await refreshTurnServers('https://call.exemplo', 'token', { fetchImpl: respondWith(RELAY), now: 1_700_000_000_000 });
+  assert.deepEqual(iceServers({ ...preferences, stunEnabled: false, turnEnabled: false }, 1_700_000_000_000), []);
 });
 
 test('o TURN do servidor entra depois do STUN, com as credenciais', async () => {

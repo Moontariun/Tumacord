@@ -1,5 +1,26 @@
 # Histórico de versões
 
+## 0.8.2 — o relay estava fora do ar desde que nasceu, e agora é escolha de cada um
+
+**O relay nunca subiu. Nem uma vez.**
+
+- `tumacord-turn` estava em laço de reinício no servidor de produção — **298 reinícios**, saindo com 255 a cada tentativa. A primeira linha do log dizia: `turnserver: unrecognized option: no-loopback-peers`. O coturn **removeu** essa opção; hoje ele nega loopback por padrão e só aceita a inversa, `--allow-loopback-peers`. Uma opção desconhecida não é ignorada — o turnserver imprime o help e sai;
+- o sintoma era invisível do lado de fora. `restart: unless-stopped` reiniciava em silêncio, e o `/api/health` continuava respondendo `"turn":true`: **o servidor distribuía credenciais para um relay que não existia**. Quem caía no caso em que só o relay salva não via erro nenhum — a call simplesmente não fechava;
+- junto saíram `--no-cli` e `--no-dtls`, que o coturn 4.17 já trata como depreciadas. São a mesma classe de defeito, só que ainda no estágio anterior: a opção depreciada de hoje é a removida de amanhã. `--no-tls` e `--no-multicast-peers` continuam válidas e continuam lá; a proibição de loopback não se perdeu, porque `127.0.0.0/8` e `::1` já estavam negados explicitamente;
+- **três testes passaram a guardar isso**, e os três reprovam o `docker-compose.yml` da 0.8.1: a tag da imagem, a lista de opções proibidas e a interpolação obrigatória.
+
+**Subir o servidor sem relay voltou a funcionar**
+
+- as variáveis de TURN usavam `${VAR:?...}` dentro do serviço `coturn`. O Compose interpola o arquivo **inteiro** antes de olhar para os perfis, então `docker compose up -d` — sem `--profile turn` — falhava para quem nunca quis relay nenhum. Agora quem sobe o perfil sem preencher o `.env` recebe o erro do próprio coturn, que é específico e aparece na hora certa.
+
+**O relay virou uma escolha de cada pessoa, e nasce desligada**
+
+- nova chave **Usar o relay do servidor (TURN)** em **Configurações › Rede e conexão**, **desligada por padrão**. Antes, um servidor com relay configurado fazia todo mundo usá-lo como último recurso, sem ninguém ter pedido;
+- a razão de ser opt-in é o que o relay faz: é o único caminho em que a mídia passa por uma máquina de terceiro — cifrada de ponta a ponta, mas passando, e gastando banda dela. Ligar é decisão de quem não fecha caminho direto, e vale só para essa pessoa;
+- **desligada, nenhuma credencial é pedida**: credencial que não se busca é credencial que não existe. E desligar esquece a que já estava em mãos, para valer no ato em vez de na próxima renovação;
+- a checagem fica em `iceServers()`, o ponto por onde toda `RTCPeerConnection` passa, e não só em quem busca — uma credencial que sobrou não vira candidato depois;
+- ligar não muda a ordem de nada: o ICE continua comparando candidatos por prioridade, e um par direto sempre vence um par por relay.
+
 ## 0.8.1 — estabilidade de mídia auditada e um painel de administração de verdade
 
 **O bug do microfone: o que a medição derrubou**

@@ -28,6 +28,17 @@ test('o padrão deixa o ZeroTier desligado e a travessia de NAT ligada', () => {
   assert.equal(preferences.DEFAULTS.portMapping, true);
 });
 
+test('o relay nasce desligado, e ligar sobrevive ao reinício', () => {
+  assert.equal(preferences.DEFAULTS.turnEnabled, false);
+  assert.equal(preferences.sanitize({ turnEnabled: 'sim' }).turnEnabled, false, 'só booleano liga o relay');
+  assert.equal(preferences.sanitize({ turnEnabled: true }).turnEnabled, true);
+  withTemporaryDirectory((directory) => {
+    const file = path.join(directory, 'network-preferences.json');
+    preferences.writeNetworkPreferences(file, { ...preferences.readNetworkPreferences(file), turnEnabled: true });
+    assert.equal(preferences.readNetworkPreferences(file).turnEnabled, true);
+  });
+});
+
 test('valores estranhos caem no padrão em vez de derrubar o aplicativo', () => {
   const sanitized = preferences.sanitize({ zeroTierEnabled: 'sim', portMapping: null, stunServers: 'texto', directKey: 'curta' });
   assert.equal(sanitized.zeroTierEnabled, false);

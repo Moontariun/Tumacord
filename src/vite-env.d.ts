@@ -25,6 +25,7 @@ interface TumacordNetworkPreferences {
   zeroTierEnabled: boolean;
   portMapping: boolean;
   stunEnabled: boolean;
+  turnEnabled: boolean;
   stunServers: string[];
 }
 
