@@ -226,3 +226,26 @@ test('os nós da live pedem prioridade zero para não serem escolhidos como padr
   assert.ok(loads.every((command) => command.includes('priority.session=0')));
   await router.stop();
 });
+
+// O barramento virtual é uma construção do PipeWire. Fora do Linux ele não
+// existe — e no Windows nem faz falta, porque o Chromium entrega o loopback do
+// sistema junto com o vídeo. Sem esta guarda, `prepare()` procurava `pactl` em
+// uma máquina onde ele nunca esteve, e `stop()` chamava `pw-link` no fim.
+test('fora do Linux o roteador recusa em vez de procurar pactl', async () => {
+  const original = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    let chamou = false;
+    const router = new ScreenAudioRouter({
+      pactl: async () => { chamou = true; return ''; },
+      runFile: async () => { chamou = true; return { stdout: '' }; },
+    });
+    const preparado = await router.prepare();
+    assert.equal(preparado.ok, false);
+    assert.match(preparado.error, /PipeWire|Linux/);
+    assert.deepEqual(await router.stop(), { ok: true }, 'parar sem barramento não é erro');
+    assert.equal(chamou, false, 'nenhum processo do PipeWire pode ser executado no Windows');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  }
+});

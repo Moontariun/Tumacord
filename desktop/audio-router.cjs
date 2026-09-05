@@ -118,6 +118,7 @@ class ScreenAudioRouter {
   }
 
   async available() {
+    if (process.platform !== 'linux') return false;
     try {
       await Promise.all([
         this.runFile('pactl', ['info'], { encoding: 'utf8', timeout: 3_000 }),
@@ -174,6 +175,11 @@ class ScreenAudioRouter {
   }
 
   async prepareInternal() {
+    // O barramento virtual é uma construção do PipeWire. Fora do Linux ele não
+    // existe, e nem precisa: no Windows o Chromium entrega o loopback do
+    // sistema junto com o vídeo. Sair aqui evita procurar `pactl` em uma
+    // máquina onde ele nunca esteve.
+    if (process.platform !== 'linux') return { ok: false, error: 'O barramento de áudio da live é específico do PipeWire, no Linux.' };
     if (!(await this.available())) return { ok: false, error: 'pactl/PipeWire não está disponível.' };
     // A fonte virtual da live entra no grafo como qualquer outra e, em vários
     // sistemas, o gerenciador de sessão a promove a padrão. O microfone
@@ -302,6 +308,9 @@ class ScreenAudioRouter {
   }
 
   async stopInternal() {
+    // Fora do Linux nunca houve barramento para desmontar, e `pw-link` não
+    // existe. Sair cedo evita erros de processo ausente no encerramento.
+    if (process.platform !== 'linux') return { ok: true };
     this.active = false;
     this.generation += 1;
     if (this.timer) clearInterval(this.timer);

@@ -1,5 +1,28 @@
 # Histórico de versões
 
+## 0.8.4 — convite de 35 caracteres e build portátil de Windows
+
+**O convite encolheu 85%**
+
+- ele chegava a **240 caracteres**, e quase metade era a chave de acesso do servidor — longa, e viajando dentro de algo feito para colar em conversa;
+- agora o servidor emite: `POST /api/invite` devolve um token de doze caracteres e guarda só o hash, com prazo de doze horas. O código vira **`TUMA2~call.exemplo.com~7K3P9QXM2W4V`** — **35 caracteres**, ou 38 para servidor caseiro em IP e porta;
+- **a chave do servidor parou de circular.** O token vale como chave de acesso com escopo daquele convite e some do arquivo quando vence;
+- o alfabeto exclui `I`, `L`, `O`, `U`, `0` e `1`, que são o que se erra ditando um código ao telefone. Espaço, hífen e minúsculas são aceitos na leitura;
+- emitir exige sessão, porque convidar é ato de quem já entrou. O formato `TUMA1` continua sendo lido, e um servidor anterior à 0.8.4 faz o cliente cair de volta nele.
+
+**Windows: build portátil**
+
+- novo alvo `portable` no electron-builder e `npm run package:windows`. O `electron-builder` cruza de Linux para win32, então o CI publica o `.exe` junto com o AppImage;
+- **o áudio da live tem caminho próprio no Windows.** `desktop/audio-router.cjs` monta um barramento no PipeWire, o que só existe no Linux. No Windows o Chromium entrega o loopback do sistema no mesmo `getUserMedia` do vídeo, com `chromeMediaSource: 'desktop'` no ramo de áudio — sem barramento a montar nem a desmontar;
+- o roteador de áudio ganhou guarda de plataforma: fora do Linux ele recusa em vez de procurar `pactl`, e parar deixou de chamar `pw-link`. Antes não havia **nenhum** `process.platform` nesse caminho;
+- a plataforma passou a ser exposta pelo preload, que é como o renderer escolhe entre os dois caminhos.
+
+> **O que não foi verificado:** o `.exe` foi gerado e é um PE32 válido de 87 MB, mas **não foi executado**. Áudio da live no Windows e chamada entre Windows e Linux exigem uma máquina Windows para provar.
+
+**Sobre o enlace direto, que não voltou**
+
+Medido nesta rede antes de decidir: o roteador tem WAN em `100.64.0.98` — **CGNAT**. O UPnP funciona e mapeia a porta, mas só no roteador de casa; atrás dele continua o NAT da operadora. O código estava certo em recusar esse caminho. O IPv6 tem endereço e rota, mas **100% de perda** — configurado e não roteado, o que é do provedor. O NAT é `endpoint-independent`, então a mídia atravessa; o que não atravessa é a conexão **de entrada** que um convite por endereço exigiria.
+
 ## 0.8.3 — mutar o Discord não derruba mais o microfone, e o convite exige um servidor
 
 **O microfone: o que a medição encontrou**

@@ -1,4 +1,4 @@
-name: Publicar versão Linux
+name: Publicar versão
 
 on:
   push:
@@ -73,6 +73,13 @@ jobs:
       - name: Gerar pacote portátil opcional
         run: npm run package:linux
 
+      # O portable de Windows sai daqui mesmo: o electron-builder cruza para
+      # win32 no Linux sem precisar de uma máquina Windows no CI. O que ele
+      # não faz é testar — o áudio da live no Windows usa o loopback do
+      # Chromium, e isso só se prova rodando.
+      - name: Gerar portable de Windows
+        run: npm run package:windows
+
       - name: Guardar AppImage de toda build
         uses: actions/upload-artifact@v7
         with:
@@ -116,4 +123,5 @@ jobs:
           fi
           gh release upload "$tag" --clobber \
             release/Tumacord-*.AppImage \
-            release/tumacord-*.tar.gz
+            release/tumacord-*.tar.gz \
+            release/Tumacord-*-portable.exe

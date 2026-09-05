@@ -2147,8 +2147,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     let routedScreenAudio = false;
     let capturedAudio: MediaStream | null = null;
     let capturedDisplay: MediaStream | null = null;
+    // No Windows o áudio do sistema vem do próprio Chromium, no mesmo
+    // `getUserMedia` que traz o vídeo: `chromeMediaSource: 'desktop'` no ramo
+    // de áudio devolve o loopback. Não há barramento a montar, e por isso não
+    // há o que preparar nem o que desmontar depois.
+    //
+    // No Linux não existe esse loopback: o áudio precisa passar por um
+    // barramento montado no PipeWire, que é o que `prepareScreenAudio` faz.
+    const loopbackDoSistema = window.tumacordDesktop?.platform === 'win32';
     try {
-      if (window.tumacordDesktop && includeAudio) {
+      if (window.tumacordDesktop && includeAudio && !loopbackDoSistema) {
         const prepared = await window.tumacordDesktop.prepareScreenAudio();
         if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) {
           await window.tumacordDesktop.stopScreenAudio().catch(() => undefined);
@@ -2169,8 +2177,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
       // A fonte já foi escolhida pelo usuário. chromeMediaSourceId captura
       // diretamente essa escolha e não abre outro portal do PipeWire.
+      const pedirLoopback = includeAudio && loopbackDoSistema;
       capturedDisplay = await navigator.mediaDevices.getUserMedia({
-        audio: false,
+        audio: pedirLoopback
+          ? ({ mandatory: { chromeMediaSource: 'desktop' } } as unknown as MediaTrackConstraints)
+          : false,
         video: {
           mandatory: {
             chromeMediaSourceId: sourceId,
@@ -2178,9 +2189,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           },
         } as unknown as MediaTrackConstraints,
       });
+      // No Windows a faixa de áudio já veio junto do vídeo; no Linux ela vem
+      // do barramento, capturada em separado. Os dois casos terminam no mesmo
+      // stream, que é o que o resto do código espera.
       const stream = new MediaStream([
         ...capturedDisplay.getVideoTracks(),
-        ...(capturedAudio?.getAudioTracks() ?? []),
+        ...(capturedAudio?.getAudioTracks() ?? capturedDisplay.getAudioTracks()),
       ]);
       if (!includeAudio) screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
       const attached = await attachStream('screen', stream, selectedQuality, captureGeneration);

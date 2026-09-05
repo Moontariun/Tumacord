@@ -18,7 +18,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/invite-and-mic-v0.8.3}"
+alvo="${1:-feat/invite-size-and-windows-v0.8.4}"
 projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$projeto"
 

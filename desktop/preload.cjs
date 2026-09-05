@@ -1,6 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tumacordDesktop', {
+  // A captura de áudio da live não tem um caminho só. No Linux é preciso
+  // montar um barramento no PipeWire; no Windows o próprio Chromium entrega o
+  // loopback do sistema junto com o vídeo. Quem decide é o renderer, e para
+  // isso ele precisa saber onde está rodando.
+  platform: process.platform,
   isDesktop: true,
   getSources: () => ipcRenderer.invoke('tumacord:desktop-sources'),
   prepareScreenAudio: () => ipcRenderer.invoke('tumacord:prepare-screen-audio'),

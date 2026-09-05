@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -20,7 +20,8 @@
     "test": "node --test --import tsx tests/**/*.test.ts",
     "package:dir": "npm run build && electron-builder --linux dir --publish never",
     "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --publish never",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "package:windows": "npm run build && electron-builder --win portable --publish never"
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",
@@ -76,6 +77,18 @@
       "syncDesktopName": true,
       "icon": "assets/tumacord-logo.png",
       "executableName": "tumacord"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/tumacord-logo.png",
+      "artifactName": "Tumacord-${version}-portable.exe"
     }
   },
   "allowScripts": {

@@ -53,6 +53,7 @@ interface DocumentPictureInPicture extends EventTarget {
 interface Window {
   documentPictureInPicture?: DocumentPictureInPicture;
   tumacordDesktop?: {
+    platform: string;
     isDesktop: true;
     getSources: () => Promise<DesktopSource[]>;
     prepareScreenAudio: () => Promise<{ ok: boolean; deviceId?: string; deviceName?: string; error?: string }>;
