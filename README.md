@@ -55,19 +55,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-v0.8.1.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/server-update-and-turn-fix-v0.8.2/scripts/install-v0.8.2.sh | bash
 ```
 
-Este comando instala a v0.8.1 a partir da branch separada `release/stability-and-admin-v0.8.1`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.2 a partir da branch separada `release/server-update-and-turn-fix-v0.8.2`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.1, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-stability-and-admin-v0.8.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.2, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-server-update-and-turn-fix-v0.8.2`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/stability-and-admin-v0.8.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/server-update-and-turn-fix-v0.8.2/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -307,6 +307,24 @@ Os hashes de senha usam `scrypt`. O histórico é replicado por mesclagem entre 
 ## Atualizar um servidor existente
 
 A 0.8.1 muda o formato guardado — canais ganham posição, contas ganham papel, e o registro de auditoria passa a existir. **A migração é automática e não apaga nada.**
+
+```bash
+./scripts/update-server.sh
+```
+
+Na primeira vez, quando o script ainda não está na sua pasta, rode-o direto da
+internet — de dentro da pasta do servidor:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/main/scripts/update-server.sh | bash
+```
+
+Ele faz backup do volume, busca a versão publicada, reconstrói preservando o
+relay se ele já estava no ar, e confere se o servidor voltou a responder — nessa
+ordem, porque procurar o backup depois do problema é tarde. Se houver alteração
+local sua no `docker-compose.yml`, ele para e avisa em vez de descartá-la.
+
+À mão, se preferir:
 
 ```bash
 git pull

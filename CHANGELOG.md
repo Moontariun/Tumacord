@@ -1,5 +1,12 @@
 # Histórico de versões
 
+## 0.8.2 — a imagem do relay existe, e atualizar o servidor virou um comando
+
+- **`coturn/coturn:4.6-alpine` não existe.** A numeração do coturn saltou de 4.5 para 4.17, e a tag inventada na 0.8.0 só apareceria na máquina de quem fosse hospedar, como `manifest unknown` no primeiro `docker compose --profile turn up`. Passa a usar `4.17-alpine`, e um teste trava o formato para a próxima tag errada falhar no CI e não na produção de alguém;
+- **`scripts/update-server.sh`** faz, nesta ordem: backup do volume, atualização, conferência. A ordem não é estética — procurar o backup depois do problema é tarde. Ele para se houver alteração local no `docker-compose.yml`, porque quem trocou a imagem do relay ou ajustou uma porta precisa saber antes; mantém o relay subindo apenas se ele já estava; e, quando o servidor não responde em sessenta segundos, imprime o caminho de volta e o de restauração em vez de deixar alguém procurar;
+- ele nunca usa `docker compose down -v`. Há teste conferindo isso, e a verificação precisou distinguir o comando da explicação sobre o comando — o script documenta justamente que não o usa;
+- funciona também por `curl … | bash`, que é como alguém o executa da primeira vez, antes de tê-lo em disco.
+
 ## 0.8.1 — estabilidade de mídia auditada e um painel de administração de verdade
 
 **O bug do microfone: o que a medição derrubou**

@@ -37,7 +37,11 @@ services:
   # padrão porque só faz sentido em uma máquina com IP público, e porque é a
   # única peça que chega a carregar mídia — e, portanto, banda.
   coturn:
-    image: coturn/coturn:4.6-alpine
+    # `4.6-alpine` não existe no Docker Hub: a numeração do coturn saltou de
+    # 4.5 para 4.17, e a tag antiga fazia o `up` falhar com "manifest unknown".
+    # A série é fixada, e não a versão exata, para receber correção sem exigir
+    # edição aqui.
+    image: coturn/coturn:4.17-alpine
     container_name: tumacord-turn
     profiles: ["turn"]
     restart: unless-stopped
