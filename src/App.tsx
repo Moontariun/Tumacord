@@ -12,6 +12,7 @@ import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSo
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, resolveInvite, type DirectReport } from './lib/directLink';
+import { copyText } from './lib/clipboard';
 import { currentNetworkPreferences, loadNetworkPreferences, subscribeNetworkPreferences, updateNetworkPreferences, type NetworkPreferences } from './lib/networkPreferences';
 import { describeReachability } from '../shared/directLink';
 import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext, sharedAudioOutput } from './lib/audioBus';
@@ -1350,6 +1351,7 @@ function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { ca
   // este modal e produzia um código diferente na tela.
   const [code, setCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const codeField = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     let active = true;
     void readDirectReport().then((report) => {
@@ -1367,8 +1369,8 @@ function InviteModal({ callId, callName, hostUsername, onClose, onNotice }: { ca
     {loading && <p className="invite-status">Procurando os caminhos até aqui…</p>}
     {!loading && !code && <p className="invite-status">Nenhum caminho de entrada foi encontrado. Peça para outra pessoa do grupo gerar o convite, ou ligue o ZeroTier em Configurações → Rede e conexão.</p>}
     {code && <>
-      <textarea className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
-      <button className="primary-button" onClick={() => { void navigator.clipboard.writeText(code).then(() => onNotice('Convite copiado.'), () => onNotice('Não consegui copiar; selecione o texto e copie manualmente.')); }}>Copiar convite</button>
+      <textarea ref={codeField} className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
+      <button className="primary-button" onClick={() => { void copyText(code, codeField.current).then((copied) => onNotice(copied ? 'Convite copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar convite</button>
       <small className="invite-hint">Este é o mesmo código enquanto os endereços deste computador não mudarem: reabrir esta janela mostra ele de novo, e o que você já enviou continua valendo. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.</small>
     </>}
   </div></div>;
