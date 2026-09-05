@@ -372,6 +372,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       mergeVisible(bundle.messages);
     };
     const pushLocalHistory = async () => {
+      // A replicação existe para o P2P: se o host sai, o histórico sobrevive
+      // nos outros computadores. Ela rodava em TODA conexão, e por isso entrar
+      // em um servidor dedicado publicava lá as conversas antigas do P2P — que
+      // o servidor então guardava e distribuía a todo mundo conectado.
+      // Ninguém espera que trocar de modo publique conversa antiga.
+      if (session.connectionMode === 'server') return;
       const local = await loadLocalSyncBundle();
       await publishProfileMedia(local, session.serverUrl, session.token);
       next.emit('chat:sync:push', local, (result: ChatSyncBundle & { ok?: boolean }) => { if (result?.ok !== false && result?.messages) mergeBundle(result); });

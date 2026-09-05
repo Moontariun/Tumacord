@@ -14,6 +14,7 @@ import { safeAttachmentName } from '../shared/attachmentName.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { createToken, hashPassword, hashToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
+import { AuthRateLimiter } from './rateLimit.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 
@@ -37,6 +38,7 @@ const directKey = process.env.TUMACORD_DIRECT_KEY?.trim() ?? '';
 // nem o ICE atravessam: os dois lados atrás de CGNAT simétrico, sem IPv6.
 // Quando não está configurado, o servidor simplesmente não anuncia nada.
 const turn = turnConfiguration(process.env);
+const loginLimiter = new AuthRateLimiter();
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
 if (Boolean(tlsCertificateFile) !== Boolean(tlsKeyFile)) throw new Error('TLS_CERT_FILE e TLS_KEY_FILE precisam ser configurados juntos.');
@@ -278,11 +280,21 @@ app.post('/api/auth/login', async (request, response) => {
     response.status(400).json({ error: 'Use um nome de 2–24 caracteres e uma senha de pelo menos 4.' });
     return;
   }
+  const origin = requestAddress(request);
+  const identity = normalizeUsername(parsed.data.username);
+  const gate = loginLimiter.check(identity, origin);
+  if (!gate.allowed) {
+    const seconds = Math.ceil(gate.retryAfterMs / 1000);
+    response.setHeader('retry-after', String(seconds));
+    response.status(429).json({ error: `Muitas tentativas seguidas. Tente de novo em ${seconds} s.` });
+    return;
+  }
   if (!hasServerAccess(parsed.data.serverKey)) {
+    loginLimiter.fail(identity, origin);
     response.status(403).json({ error: 'Chave do servidor incorreta.' });
     return;
   }
-  const normalizedUsername = normalizeUsername(parsed.data.username);
+  const normalizedUsername = identity;
   let user = store.users.find((candidate) => candidate.normalizedUsername === normalizedUsername);
   let created = false;
   if (!user && !parsed.data.allowCreate) {
@@ -301,9 +313,11 @@ app.post('/api/auth/login', async (request, response) => {
     await store.addUser(user);
   }
   if (!(await verifyPassword(parsed.data.password, user.passwordHash))) {
+    loginLimiter.fail(identity, origin);
     response.status(401).json({ error: 'Senha incorreta.' });
     return;
   }
+  loginLimiter.succeed(identity, origin);
   response.json({ token: await issueSession(user), user: publicUser(user), serverName, created });
 });
 
@@ -479,9 +493,18 @@ app.put('/api/profile', async (request, response) => {
   response.json(nextUser);
 });
 
+// Esta rota nasceu para a troca de arquivos entre pares no modo P2P, onde
+// quem pede está na mesma rede e não tem sessão no servidor embutido do outro.
+// No servidor dedicado ela ficava aberta na internet: quem soubesse o UUID de
+// um anexo baixava sem conta nenhuma, enquanto `/api/attachments/:id` — o
+// mesmo arquivo — exigia sessão. Agora vale a mesma confiança da descoberta
+// por broadcast: rede local entra, internet precisa de sessão.
 app.get('/api/peer/attachments/:id', async (request, response) => {
   const parsed = z.string().uuid().safeParse(request.params.id);
   if (!parsed.success) return void response.status(400).end();
+  if (!isTrustedLocalAddress(requestAddress(request)) && !httpUser(request)) {
+    return void response.status(401).json({ error: 'Sessão inválida.' });
+  }
   await sendAttachment(parsed.data, response);
 });
 
@@ -577,7 +600,11 @@ io.on('connection', (socket) => {
   socket.on('chat:sync:push', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
     const parsed = syncBundleSchema.safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
-    const addedChannels = p2pMode ? [] : await store.mergeChannels(parsed.data.channels);
+    // A sincronização era um segundo caminho para criar canal: qualquer
+    // usuário empurrava um pacote com canais novos e eles entravam. Fora do
+    // P2P, só a administração define a lista de canais.
+    const mayDefineChannels = !p2pMode && Boolean((socket.data.user as PublicUser)?.isAdmin);
+    const addedChannels = mayDefineChannels ? await store.mergeChannels(parsed.data.channels) : [];
     const addedMessages = await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
     const changedProfiles = await store.mergeProfiles(parsed.data.profiles);
     if (changedProfiles.length) refreshProfilePresence(new Set(changedProfiles.map((entry) => normalizeUsername(entry.username))));
@@ -610,6 +637,9 @@ io.on('connection', (socket) => {
 
   socket.on('channel:create', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
     if (p2pMode) return acknowledge?.({ ok: false, error: 'O modo P2P possui somente uma conversa e uma call.' });
+    // Não havia verificação nenhuma: qualquer usuário autenticado criava canal
+    // de texto e de voz no servidor dedicado.
+    if (!(socket.data.user as PublicUser)?.isAdmin) return acknowledge?.({ ok: false, error: 'Apenas a administração do servidor cria canais.' });
     const parsed = z.object({ name: z.string().trim().min(1).max(32), type: z.enum(['text', 'voice']) }).safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
     const slug = parsed.data.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || randomUUID().slice(0, 8);
