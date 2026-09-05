@@ -11,6 +11,7 @@ import {
   defaultAudioInputSignature,
   describeMicrophoneFault,
   faultFromLevel,
+  initialMicrophoneFault,
   microphoneIdentityOf,
   planMicrophoneRecovery,
   type MicrophoneFault,
@@ -148,4 +149,25 @@ test('com tudo no lugar, a energia decide entre captura morta, sala quieta e ok'
   assert.equal(faultFromReading(leitura({ level: 0 })), 'dead');
   assert.equal(faultFromReading(leitura({ level: 0.001 })), 'silent');
   assert.equal(faultFromReading(leitura({ level: 0.05 })), 'none');
+});
+
+// Sair da call precisa devolver a saúde do microfone ao começo. Sem isso o
+// orçamento gasto na chamada anterior deixava a recuperação desligada na
+// seguinte — justamente quando alguém saiu e voltou por causa de áudio.
+test('o estado inicial da falha começa zerado e não é compartilhado', () => {
+  const primeiro = initialMicrophoneFault();
+  assert.deepEqual(primeiro, { kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false });
+  primeiro.recaptures = 3;
+  primeiro.warned = true;
+  const segundo = initialMicrophoneFault();
+  assert.equal(segundo.recaptures, 0, 'cada chamada devolve um objeto próprio');
+  assert.equal(segundo.warned, false);
+});
+
+test('com o orçamento devolvido, a recuperação volta a agir', () => {
+  const agora = 1_000_000;
+  const gasto = { now: agora, fault: 'dead' as const, faultSince: agora - DEAD_HOLD_MS, lastRecaptureAt: 0, recaptures: MAX_AUTOMATIC_RECAPTURES, warned: true };
+  assert.equal(planMicrophoneRecovery(gasto).action, 'wait', 'esgotado, ele desiste');
+  const devolvido = { ...gasto, ...initialMicrophoneFault(), now: agora, fault: 'dead' as const, faultSince: agora - DEAD_HOLD_MS };
+  assert.equal(planMicrophoneRecovery(devolvido).action, 'recapture');
 });

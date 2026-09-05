@@ -150,3 +150,20 @@ export function faultFromReading(reading: MicrophoneReading): MicrophoneFault {
   if (!microphoneIsMeasurable(reading)) return 'none';
   return faultFromLevel(reading.level as number);
 }
+
+
+export interface MicrophoneFaultState {
+  kind: MicrophoneFault;
+  since: number;
+  recaptures: number;
+  lastRecaptureAt: number;
+  warned: boolean;
+}
+
+// Sair da call precisa devolver este estado ao começo. Sem isso o orçamento de
+// recapturas gasto na chamada anterior continua gasto, e a recuperação
+// automática entra desligada na chamada seguinte — justamente quando alguém
+// acabou de sair e voltar por causa de um problema de áudio.
+export function initialMicrophoneFault(): MicrophoneFaultState {
+  return { kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false };
+}

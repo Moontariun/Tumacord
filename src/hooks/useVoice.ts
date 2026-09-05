@@ -7,7 +7,7 @@ import type { PublicUser, StreamMeta, VoiceState } from '../../shared/types';
 import type { DevicePreferences } from './useDevices';
 import { playSound } from '../lib/sound';
 import { resumeSharedAudio, sharedAudioContext } from '../lib/audioBus';
-import { isPolitePeer, planPeerRecovery, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
+import { isPolitePeer, planPeerRecovery, shouldClearIgnoredOffer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, shouldApplyBitrateChange, shouldApplyScaleChange, type RtcStatLike } from '../lib/networkQuality';
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
 import { applyVideoBitrateHints } from '../lib/sdp';
@@ -17,7 +17,7 @@ import { iceServers } from '../lib/iceServers';
 import { selectedCandidatePath, type SelectedPath } from '../lib/iceDiagnostics';
 import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/mediaDiagnostics';
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
-import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
+import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 
 export type { StreamQuality } from '../lib/screenQuality';
@@ -82,6 +82,8 @@ function closePeerState(state: PeerConnectionState): void {
   state.pc.onnegotiationneeded = null;
   state.pc.ontrack = null;
   state.pc.onconnectionstatechange = null;
+  state.pc.onsignalingstatechange = null;
+  state.senderMedia.clear();
   for (const receiver of state.pc.getReceivers()) receiver.track?.stop();
   state.remoteStreams.clear();
   state.pc.close();
@@ -386,7 +388,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // A reconciliação é uma rede de segurança, não o caminho normal: rodar a
   // cada leitura de estatística seria caro sem necessidade.
   const reconcileTick = useRef(0);
-  const microphoneFault = useRef<{ kind: MicrophoneFault; since: number; recaptures: number; lastRecaptureAt: number; warned: boolean }>({ kind: 'none', since: 0, recaptures: 0, lastRecaptureAt: 0, warned: false });
+  const microphoneFault = useRef<MicrophoneFaultState>(initialMicrophoneFault());
   const ensureMicrophoneRef = useRef<(options?: { force?: boolean }) => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
@@ -713,6 +715,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     updatePeerHealth(peerId, 'connecting');
     syncLocalMediaToPeer(peerId, state);
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
+    // Terminada a negociação, o descarte de ICE daquela colisão deixa de valer.
+    // Sem isto o sinalizador ficava travado e o enlace podia chegar a
+    // "connected" sem mídia nenhuma.
+    pc.onsignalingstatechange = () => {
+      if (shouldClearIgnoredOffer(pc.signalingState)) state.ignoreOffer = false;
+    };
     pc.onnegotiationneeded = () => void negotiateRef.current(peerId);
     pc.ontrack = (event) => {
       for (const stream of event.streams) state.remoteStreams.set(stream.id, stream);
@@ -1309,6 +1317,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     void window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     channelRef.current = null;
     handoffStarted.current = false;
+    // Sair precisa devolver a saúde do microfone ao começo: o orçamento de
+    // recapturas gasto na call anterior deixaria a recuperação desligada na
+    // próxima, e a marca de último sinal, velha, dispararia uma recaptura
+    // espúria assim que alguém voltasse.
+    microphoneFault.current = initialMicrophoneFault();
+    microphoneSignal.current = { lastSignalAt: 0, warned: false };
+    reconcileTick.current = 0;
     setChannelId(null);
     setMembers([]);
     setRemoteMedia([]);
