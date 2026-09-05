@@ -1,5 +1,11 @@
 # Histórico de versões
 
+## 0.8.4 — um clone novo não perde mais a chave do servidor
+
+- **um clone novo nasce sem `.env`, e o Compose para antes de tudo.** O arquivo guarda a chave de acesso do servidor e não é versionado, de propósito — mas isso significa que quem recria a pasta bate em `Defina TUMACORD_SERVER_ACCESS_KEY` e fica sem a chave que o grupo inteiro já usa;
+- **o contêiner que está no ar carrega esses valores desde que foi criado.** A atualização passa a reconstruir o `.env` a partir dele: chave de acesso, nome do administrador, caminhos de TLS e configuração do relay voltam exatamente como estavam. Nada é inventado, nada é impresso no terminal, e o arquivo nasce legível só pelo dono;
+- quando não há contêiner de onde recuperar, o script diz onde procurar a chave e avisa o que está em jogo: trocá-la obriga todo o grupo a informar a nova ao entrar.
+
 ## 0.8.3 — subir sem relay volta a funcionar, e o relay se configura pelo painel
 
 **O que impedia de subir**

@@ -18,7 +18,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/turn-in-panel-v0.8.3}"
+alvo="${1:-release/env-recovery-v0.8.4}"
 
 # A pasta do servidor. Quando o script é executado do próprio repositório, ela
 # sai do caminho do arquivo; quando ele chega por `curl … | bash` — que é como
@@ -38,6 +38,35 @@ if [[ -z "$projeto" || ! -f "$projeto/docker-compose.yml" ]]; then
 fi
 cd "$projeto"
 
+# O `.env` guarda a chave de acesso do servidor e não é versionado — de
+# propósito. Isso significa que um clone novo nasce sem ele, e o Compose para
+# antes de qualquer coisa reclamando de uma variável obrigatória.
+#
+# Mas o contêiner que está no ar carrega esses valores desde que foi criado.
+# Reconstruir o arquivo a partir dele recupera a configuração exata, sem
+# ninguém precisar lembrar de uma chave que o grupo inteiro já usa.
+recuperar_env_do_conteiner() {
+  local conteiner="tumacord-server"
+  docker inspect "$conteiner" >/dev/null 2>&1 || return 1
+  local env_atual
+  env_atual="$(docker inspect "$conteiner" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)" || return 1
+  grep -q '^SERVER_ACCESS_KEY=.' <<<"$env_atual" || return 1
+
+  {
+    echo "# Recuperado automaticamente do contêiner em execução em $(date -Is)."
+    echo "# Os valores são os que o servidor já usava; nada foi inventado."
+    grep '^SERVER_ACCESS_KEY=' <<<"$env_atual" | sed 's/^SERVER_ACCESS_KEY=/TUMACORD_SERVER_ACCESS_KEY=/'
+    grep '^ADMIN_USERNAME=' <<<"$env_atual" | sed 's/^ADMIN_USERNAME=/TUMACORD_ADMIN_USERNAME=/' || true
+    grep '^TLS_CERT_FILE=' <<<"$env_atual" | sed 's/^TLS_CERT_FILE=/TUMACORD_TLS_CERT_FILE=/' || true
+    grep '^TLS_KEY_FILE=' <<<"$env_atual" | sed 's/^TLS_KEY_FILE=/TUMACORD_TLS_KEY_FILE=/' || true
+    grep '^TURN_URLS=' <<<"$env_atual" | sed 's/^TURN_URLS=/TUMACORD_TURN_URLS=/' || true
+    grep '^TURN_SECRET=' <<<"$env_atual" | sed 's/^TURN_SECRET=/TUMACORD_TURN_SECRET=/' || true
+    grep '^TURN_TTL_SECONDS=' <<<"$env_atual" | sed 's/^TURN_TTL_SECONDS=/TUMACORD_TURN_TTL_SECONDS=/' || true
+  } > .env
+  chmod 600 .env
+  return 0
+}
+
 compose() {
   if docker compose version >/dev/null 2>&1; then docker compose "$@";
   elif command -v docker-compose >/dev/null 2>&1; then docker-compose "$@";
@@ -48,6 +77,28 @@ echo "── Tumacord · atualização do servidor"
 echo "   pasta: $projeto"
 echo "   alvo:  $alvo"
 echo
+
+# 0. Sem `.env`, o Compose para antes de tudo. Um clone novo sempre nasce
+#    assim, porque o arquivo carrega segredo e não é versionado.
+if [[ ! -f .env ]]; then
+  echo "── Sem arquivo .env nesta pasta"
+  if recuperar_env_do_conteiner; then
+    echo "   recuperado do contêiner que já está no ar, com os valores que ele usava"
+    echo "   arquivo: $projeto/.env (somente leitura do dono)"
+  else
+    echo >&2
+    echo "Não há .env aqui e não consegui recuperá-lo de um contêiner em execução." >&2
+    echo >&2
+    echo "Se o servidor antigo ainda está no ar, veja a chave que ele usa:" >&2
+    echo "  docker inspect tumacord-server --format '{{range .Config.Env}}{{println .}}{{end}}' | grep SERVER_ACCESS_KEY" >&2
+    echo >&2
+    echo "Se não, crie o arquivo a partir do exemplo — mas atenção: trocar a chave" >&2
+    echo "obriga todo mundo do grupo a informar a nova ao entrar." >&2
+    echo "  cp .env.example .env   # e edite a chave" >&2
+    exit 1
+  fi
+  echo
+fi
 
 # 1. Alterações locais são suas e não podem ser descartadas em silêncio. Quem
 #    trocou a imagem do relay ou ajustou uma porta precisa saber antes.

@@ -17,7 +17,7 @@ const SHELL_SCRIPTS = [
   'install-linux.sh',
   'install-cachyos.sh',
   'install-from-github.sh',
-  'install-v0.8.3.sh',
+  'install-v0.8.4.sh',
   'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
@@ -100,8 +100,8 @@ test('sem nenhum gerenciador conhecido o instalador explica o que instalar à m�
 });
 
 test('o instalador da versão aponta para a branch da 0.8.0', () => {
-  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.3.sh'), 'utf8');
-  assert.match(bootstrap, /branch="release\/turn-in-panel-v0\.8\.3"/);
+  const bootstrap = readFileSync(path.join(scripts, 'install-v0.8.4.sh'), 'utf8');
+  assert.match(bootstrap, /branch="release\/env-recovery-v0\.8\.4"/);
   assert.match(bootstrap, /install-from-github\.sh/);
 });
 
@@ -136,4 +136,21 @@ test('o script de atualização nunca remove volumes nem descarta alteração lo
   assert.match(script, /tar czf/, 'precisa fazer backup antes de atualizar');
   assert.match(script, /api\/health/, 'precisa conferir se o servidor respondeu depois');
   assert.match(bruto, /down -v/, 'e o script precisa explicar por que não usa isso');
+});
+
+// Um clone novo nasce sem `.env`, porque ele guarda segredo e não é
+// versionado. O Compose então para antes de qualquer coisa — e a chave que
+// falta é a mesma que o grupo inteiro já usa.
+test('a atualização recupera o .env do contêiner em execução em vez de pedir a chave de volta', () => {
+  const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.match(script, /if \[\[ ! -f \.env \]\]/, 'precisa detectar a ausência antes de chamar o compose');
+  assert.match(script, /docker inspect "\$conteiner" --format/, 'precisa ler o ambiente do contêiner que está no ar');
+  assert.match(script, /SERVER_ACCESS_KEY=\/TUMACORD_SERVER_ACCESS_KEY=/, 'precisa traduzir o nome da variável');
+  assert.match(script, /chmod 600 \.env/, 'o arquivo carrega segredo e não pode nascer legível por todos');
+  assert.equal(/echo .*\$SERVER_ACCESS_KEY|cat \.env/.test(script), false, 'a chave não pode ser impressa no terminal');
+});
+
+test('a recuperação do .env exige que a chave exista, em vez de gerar um arquivo pela metade', () => {
+  const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.match(script, /grep -q '\^SERVER_ACCESS_KEY=\.' <<<"\$env_atual" \|\| return 1/);
 });
