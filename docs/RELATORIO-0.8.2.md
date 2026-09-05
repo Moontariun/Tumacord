@@ -161,21 +161,65 @@ Para voltar atrás, `git checkout` da versão anterior e `up -d` de novo. O
 cliente antigo continua funcionando contra o servidor novo: `turnEnabled`
 ausente cai no padrão pela higienização, que é o mesmo `false`.
 
-## 7. O que não foi verificado
+## 7. Implantação e verificação em produção
 
-- **uma call real passando pelo relay.** Exige dois pares sem caminho direto
-  entre si; não dá para produzir a partir daqui. A prova que existe é que o
-  coturn sobe com os argumentos corrigidos e escuta;
-- **a caixa nas configurações em uso**, com clique de verdade. Ela é
-  exercitada pelos testes de preferência, não pela interface;
-- **o servidor de produção continua com o compose antigo** no momento em que
-  este relatório foi escrito. A correção está na branch, não implantada;
-- **`docker compose` v2 não existe naquela máquina** — só `docker-compose`
-  1.29.2. O `scripts/update-server.sh` recusa o Compose v1, então o comando da
-  seção 6 precisa ser `docker-compose` ali, ou o plugin v2 precisa ser
-  instalado. Isto não foi resolvido nesta versão.
+Implantado em `200.9.155.102` na mesma sessão. `docker compose v2` foi instalado
+antes (`apt-get install docker-compose-v2`, 2.40.3), e adotou o projeto e o
+volume que o v1 já usava — `tumacord` e `tumacord_tumacord-data` —, então nada
+de dado foi recriado.
 
-## 8. Risco conhecido
+Depois de `git pull` e `docker compose --profile turn up -d --build`:
+
+| Verificação | Resultado |
+| --- | --- |
+| `tumacord-turn` | `Up`, `RestartCount=0` (era 298) |
+| Log do coturn | sem `unrecognized option`, sem ERRO de depreciada |
+| Escuta | `200.9.155.102:3478`, UDP e TCP |
+| Alcance pela internet | STUN Binding respondido de fora da máquina |
+| `/api/health` | `version: 0.8.2` |
+| **Alocação e relay reais** | `turnutils_uclient -y -n 10`: **0% de perda**, RTT médio 0,25 ms |
+
+O último item é o que importa: uma alocação TURN autenticada pelo esquema
+`use-auth-secret`, com tráfego atravessando o relay de ponta a ponta.
+
+### Um susto que não era defeito
+
+O primeiro teste de tráfego perdeu **100% dos pacotes**. A suspeita foi o bloco
+de descoberta no log:
+
+```
+WARNING NO EXPLICIT RELAY ADDRESS(ES) ARE CONFIGURED
+Relay address to use: 200.9.155.102
+Relay address to use: 172.18.0.1
+Relay address to use: 10.119.148.91
+...
+Total: 6 relay addresses discovered
+```
+
+Seis endereços, incluindo pontes do Docker e o IP privado. A hipótese era que
+uma alocação pudesse cair em um deles e virar um relay que ninguém alcança.
+
+**A hipótese está falsificada.** Doze alocações seguidas foram amostradas e
+**todas** vieram em `200.9.155.102`: o coturn amarra o endereço de relay ao
+endereço em que o cliente chegou. A perda vinha do cliente de teste, que sem
+`-L` escolhia um endereço privado como origem — e endereço privado está na lista
+de destinos proibidos, que é a proteção funcionando como projetado. Com `-L`
+apontando para o IP público, a mesma configuração de produção dá 0% de perda.
+
+Fica registrado porque o bloco de descoberta assusta quem for ler o log depois.
+Não há ação a tomar.
+
+## 8. O que continua sem verificação
+
+- **duas pessoas reais em uma call passando pelo relay.** Exige dois pares sem
+  caminho direto entre si; não dá para produzir a partir daqui. O que existe é
+  a prova acima, que é do relay, não da call;
+- **a caixa nas configurações com clique de verdade.** Ela é exercitada pelos
+  testes de preferência, não pela interface;
+- **o cliente desktop empacotado.** A build web foi refeita no contêiner e o
+  servidor responde 0.8.2; o AppImage sai pelo workflow.
+
+## 9. Risco conhecido
 
 O `--no-software-attribute` está marcado `DEPRECATED` no help da 4.17, mas é
 aceito. Ficou porque removê-lo faz o servidor anunciar a própria versão. É o
