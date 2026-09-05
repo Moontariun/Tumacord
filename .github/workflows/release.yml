@@ -89,17 +89,22 @@ jobs:
             capture && /^## / { exit }
             capture { print }
           ' CHANGELOG.md > "$notes_file"
+          # O título também sai do CHANGELOG. "Tumacord v0.7.9" seria correto e
+          # ainda assim destoaria: toda Release anterior se chama
+          # "Tumacord 0.7.8 — manchete", e essas foram renomeadas à mão depois.
+          headline="$(awk -v version="${tag#v}" 'index($0, "## " version " ") == 1 { sub(/^## /, ""); print; exit }' CHANGELOG.md)"
+          title="Tumacord ${headline:-$tag}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             extra=()
             [[ "$tag" == *-* ]] && extra+=(--prerelease)
             if [[ -s "$notes_file" ]]; then
-              gh release create "$tag" --title "Tumacord $tag" --notes-file "$notes_file" "${extra[@]}"
+              gh release create "$tag" --title "$title" --notes-file "$notes_file" "${extra[@]}"
             else
               echo "::warning::CHANGELOG sem seção para $tag; usando notas geradas."
-              gh release create "$tag" --title "Tumacord $tag" --generate-notes "${extra[@]}"
+              gh release create "$tag" --title "$title" --generate-notes "${extra[@]}"
             fi
           elif [[ -s "$notes_file" ]]; then
-            gh release edit "$tag" --title "Tumacord $tag" --notes-file "$notes_file"
+            gh release edit "$tag" --title "$title" --notes-file "$notes_file"
           fi
           gh release upload "$tag" --clobber \
             release/Tumacord-*.AppImage \
