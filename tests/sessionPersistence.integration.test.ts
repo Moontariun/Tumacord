@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { io, type Socket } from 'socket.io-client';
+import { freePort } from './freePort';
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -48,7 +49,7 @@ function openSocket(url: string, token: string): Promise<Socket> {
 
 test('login persistente sobrevive ao reinício do servidor dedicado', { timeout: 20_000 }, async (context) => {
   const dataDirectory = await mkdtemp(path.join(tmpdir(), 'tumacord-session-'));
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   let child: ChildProcess | undefined;
   const startServer = async () => {

@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { io, type Socket } from 'socket.io-client';
 import type { ServerSnapshot, VoiceState } from '../shared/types.js';
+import { freePort } from './freePort';
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -61,7 +62,7 @@ test('servidor dedicado hospeda o cliente web, protege o acesso e sinaliza tela 
   const webDirectory = path.join(root, 'web');
   await mkdir(webDirectory, { recursive: true });
   await writeFile(path.join(webDirectory, 'index.html'), '<!doctype html><title>Tumacord Web QA</title>');
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
@@ -164,7 +165,7 @@ test('servidor embutido P2P não publica web nem canais extras', { timeout: 20_0
   const webDirectory = path.join(root, 'web');
   await mkdir(webDirectory, { recursive: true });
   await writeFile(path.join(webDirectory, 'index.html'), '<title>não deve aparecer</title>');
-  const port = 31_000 + Math.floor(Math.random() * 9_000);
+  const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
     cwd: process.cwd(),
