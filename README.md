@@ -2,7 +2,7 @@
 
 O Tumacord é um chat pessoal de voz, vídeo e texto para um grupo pequeno. Ele roda no seu próprio computador e envia a mídia diretamente entre os participantes com WebRTC — sem serviço no meio.
 
-A partir da 0.7.9 o **enlace direto** substitui o ZeroTier como caminho padrão: na mesma rede as calls continuam aparecendo sozinhas, e fora dela basta um código de convite. O ZeroTier continua disponível como opção que se liga nas configurações.
+Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar alguém de fora, é preciso um servidor: o convite aponta para ele, e os dois lados chegam por conexão de saída. O ZeroTier continua disponível como opção que se liga nas configurações.
 
 ## O que já funciona
 
@@ -11,7 +11,7 @@ A partir da 0.7.9 o **enlace direto** substitui o ZeroTier como caminho padrão:
 - call de baixa latência em malha WebRTC;
 - **enlace direto sem ZeroTier**: travessia de NAT por ICE/STUN, entrada por IPv6 e abertura de porta no roteador por PCP, NAT-PMP ou UPnP;
 - **servidor de encontro opcional**, alcançado só por conexão de saída: funciona atrás de CGNAT sem abrir porta em lugar nenhum, e com relay TURN para o caso em que nem o ICE atravessa;
-- convite em código para entrar de qualquer rede, com chave que protege a porta exposta à internet;
+- convite em código que aponta o servidor da call e leva a chave de entrada;
 - descoberta automática de calls na rede local, sem copiar IP;
 - ZeroTier opcional, ligado ou desligado em **Configurações › Rede e conexão**;
 - servidor completo embutido em toda instalação;
@@ -55,19 +55,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/turn-opt-in-v0.8.2/scripts/install-v0.8.2.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/invite-and-mic-v0.8.3/scripts/install-v0.8.3.sh | bash
 ```
 
-Este comando instala a v0.8.2 a partir da branch separada `release/turn-opt-in-v0.8.2`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.3 a partir da branch separada `release/invite-and-mic-v0.8.3`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.2, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-turn-opt-in-v0.8.2`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.3, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-invite-and-mic-v0.8.3`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/turn-opt-in-v0.8.2/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/invite-and-mic-v0.8.3/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -141,7 +141,7 @@ E ali também fica **Usar o relay do servidor (TURN)**, **desligada por padrão*
 
 ### Firewall
 
-Libere TCP `3927` (sinalização) e UDP `3928` (descoberta). Para receber convites pela internet **no modo P2P puro**, o TCP `3927` precisa chegar até este computador — é justamente isso que a abertura automática de porta tenta resolver. Em uma configuração doméstica padrão costuma funcionar sem regras extras.
+Libere TCP `3927` (sinalização) e UDP `3928` (descoberta) na rede local. Convidar pela internet não depende mais de nada chegar até este computador: o convite aponta um servidor, e os dois lados vão até ele.
 
 ### Quando nada direto funciona
 
@@ -173,7 +173,7 @@ A ideia é separar duas coisas que costumam ser confundidas:
 
 Os dois lados **abrem conexão de saída** para o servidor, exatamente como abrir um site. É por isso que funciona atrás de CGNAT: o que não funciona é a internet iniciar uma conexão para dentro da sua casa, e aqui isso nunca acontece.
 
-O convite gerado nesse modo não carrega endereço de máquina nenhuma — só a call e o segredo que dá direito de entrar.
+O convite não carrega endereço de máquina nenhuma — só a call, o servidor e o segredo que dá direito de entrar. Desde a 0.8.3 é a única forma de convite que existe.
 
 ### Subindo
 

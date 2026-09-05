@@ -1,5 +1,28 @@
 # Histórico de versões
 
+## 0.8.3 — mutar o Discord não derruba mais o microfone, e o convite exige um servidor
+
+**O microfone: o que a medição encontrou**
+
+- ao mutar, o Discord **não silencia o stream de captura — ele o destrói**. Medido no PipeWire: o `WEBRTC VoiceEngine` some inteiro da lista de quem captura, e volta ao desmutar;
+- o WirePlumber tropeça no mesmo instante: `failed to activate item: Object activation aborted: PipeWire proxy destroyed`, e três `assertion 'self != NULL' failed` logo depois. Quem estiver capturando do **mesmo dispositivo** leva o solavanco, e a faixa daqui pisca `muted` antes de voltar sozinha;
+- **a reação do Tumacord era pior que o defeito.** Sair de `muted` dependia só do evento `unmute` — justamente o que se perde no meio da sacudida. O estado ficava preso, e 1,2 s depois vinha a recaptura: a faixa caía e era recriada em **todos** os enlaces, renegociando com todo mundo, até três vezes. Era isso que a pessoa sentia como "mutei o Discord e o microfone quebrou";
+- agora o monitor confere `muted` **por leitura** a cada segundo, e não só por evento: faixa que voltou limpa o estado sem recapturar; faixa que continua muda segue para a recuperação como antes. A folga sobe de 1,2 s para 3 s, tempo de o grafo reassentar;
+- **e o Tumacord parou de girar o volume alheio.** A captura principal pedia `autoGainControl: true`. No Linux isso não é ganho interno: o Chromium mexe no volume da **fonte** no PipeWire, que é do dispositivo e vale para todos. Com o Discord na mesma entrada, dois AGCs disputavam o mesmo botão — e a fonte desta máquina terminou em **28% (−32,95 dB)** com todos os streams em 100%, valor que o `module-device-restore` guarda entre reinícios. A captura crua já pedia `false`; esta era a última metade do aplicativo ainda na disputa.
+
+**O convite agora exige um servidor**
+
+- o código `TUMA1` tinha duas formas. Com `server`, apontava um servidor de encontro; sem, carregava a lista de endereços desta máquina e quem recebesse corria atrás deles. **A segunda saiu**: ela exigia que alguém do grupo fosse alcançável da internet — IPv4 público, porta aberta no roteador ou IPv6 — e quase nunca era;
+- removidos: `paths` do convite e as tabelas que os codificavam, `orderPaths`, `pathToUrl` e a corrida escalonada de caminhos. `buildInvite` não recebe mais o relatório de alcance e passa a exigir servidor e chave;
+- **um convite da 0.8.2 que só trazia endereços é recusado na leitura.** Aceitar produziria uma sessão sem destino;
+- na rede local nada muda: as calls continuam aparecendo sozinhas, sem convite nenhum.
+
+**O que continua existindo, porque continua servindo**
+
+- `probeDirectHost` e `/api/direct/hello`, que o convite por servidor usa para provar a chave;
+- `adoptDirectKey`, que o P2P na rede local ainda usa;
+- o relatório de alcance, que alimenta o painel de rede e a eleição de host.
+
 ## 0.8.2 — o relay estava fora do ar desde que nasceu, e agora é escolha de cada um
 
 **O caminho de instalação apontava para a versão anterior**

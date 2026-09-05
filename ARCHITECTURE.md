@@ -5,7 +5,7 @@ Cada app ── servidor embutido :3927 (IPv4+IPv6) + descoberta UDP :3928
     │
     ├── um app anuncia a call e atua como host lógico
     ├── na mesma rede: broadcast/multicast encontra o host sozinho
-    ├── fora dela: convite com os caminhos do host (IPv6, IPv4 mapeado) + chave
+    ├── fora dela: convite aponta um servidor; sem servidor, não há convite
     ├── somente 1 conversa de texto + 1 call no modo P2P
     ╰══ WebRTC direto entre todos os participantes (DTLS-SRTP), com ICE/STUN
 
@@ -34,7 +34,7 @@ O desktop envia probes e anúncios a cada segundo por UDP `3928`, tanto nos ende
 
 Existe um caso que nenhuma travessia resolve: os dois lados atrás de CGNAT com NAT simétrico e sem IPv6. Não há endereço para furar. Para ele, o servidor de encontro inverte o sentido da conexão — os dois clientes ligam *para fora*, que é o que atravessa CGNAT — e o coturn entra como último recurso do ICE.
 
-O convite nesse modo não carrega endereço de máquina nenhuma: só a call e o segredo. Um convite indica um jeito só de entrar; misturar encontro e enlace direto no mesmo grupo partiria a call em duas, cada metade sinalizando em um lugar diferente.
+O convite não carrega endereço de máquina nenhuma: só a call, o servidor e o segredo. Desde a 0.8.3 essa é a única forma que existe. Havia uma segunda, que anunciava os endereços de entrada do host e fazia quem recebia correr atrás deles; ela exigia que alguém do grupo fosse alcançável da internet — IPv4 público, porta aberta ou IPv6 — e quase nunca era. Um convite indica um jeito só de entrar.
 
 As credenciais de TURN seguem o esquema `use-auth-secret` do coturn (draft-uberti-behave-turn-rest-00): usuário é `<validade>:<nome>` e senha é o HMAC-SHA1 disso com um segredo compartilhado, em base64. Nenhum dos dois lados armazena senha; o coturn recalcula e compara. A renovação acontece com cinco minutos de folga, para uma credencial não vencer no meio de uma reconexão.
 
@@ -48,7 +48,7 @@ Um relay que aceita qualquer destino vira uma porta para a rede interna da máqu
 
 Duas consultas STUN pela mesma porta local decidem o comportamento do NAT: endereço público igual nas duas significa mapeamento independente do destino, e é isso que permite ao ICE furar CGNAT. A ordem das tentativas de mapeamento é PCP, NAT-PMP e UPnP — o PCP primeiro porque é o único que uma operadora pode atender no próprio equipamento de CGNAT. A regra é renovada na metade do prazo e devolvida ao encerrar o aplicativo.
 
-O convite (`shared/directLink.ts`) é um JSON compacto em base64url com prefixo `TUMA1`, dígito de verificação e prazo de 12 horas. Ele carrega os caminhos do host e a chave da call. Quem recebe tenta os caminhos em paralelo, escalonados — rede local, IPv6, IPv4 mapeado —, e o primeiro que responder vence.
+O convite (`shared/directLink.ts`) é um JSON compacto em base64url com prefixo `TUMA1`, dígito de verificação e prazo de 12 horas. Ele carrega a call, o servidor de encontro e a chave. Quem recebe confere que o servidor responde pela call certa e entra por lá.
 
 A porta exposta é protegida por um conjunto de chaves aceitas. Endereços de loopback, RFC 1918, link-local e ULA entram sem chave, como a descoberta por broadcast sempre permitiu; o espaço de CGNAT fica de fora dessa confiança de propósito, porque carrega assinantes desconhecidos do mesmo provedor. `/api/direct/hello` devolve um HMAC do nonce por chave aceita, o que deixa o convidado conferir que alcançou a call certa sem revelar chave nenhuma.
 

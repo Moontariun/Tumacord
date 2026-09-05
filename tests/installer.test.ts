@@ -19,6 +19,7 @@ const SHELL_SCRIPTS = [
   'install-from-github.sh',
   'install-v0.8.1.sh',
   'install-v0.8.2.sh',
+  'install-v0.8.3.sh',
   'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
