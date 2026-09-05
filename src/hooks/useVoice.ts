@@ -522,9 +522,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket?.emit('rtc:stream-meta', { target, meta: { streamId: stream.id, kind } });
   }, [socket]);
 
-  const addLocalStreams = useCallback((target: string, state: PeerConnectionState) => {
-    for (const [kind, stream] of localStreams.current) {
-      for (const track of stream.getTracks()) {
+  // Um enlace novo precisa reconstruir o estado ATUAL da mídia local sem ter
+  // presenciado os eventos que o criaram. Quem entra depois da live, quem sai
+  // e volta no meio dela, e o enlace refeito depois de uma reconexão passam
+  // todos por aqui — a fonte é o que existe agora, não o histórico.
+  const syncLocalMediaToPeer = useCallback((target: string, state: PeerConnectionState) => {
+    for (const [kind, stream] of [...localStreams.current]) {
+      // Uma faixa encerrada que ainda não foi recolhida enviaria ao enlace
+      // novo um sender morto, que nunca produz mídia e ainda assim aparece
+      // como "transmitindo" para quem olha o estado.
+      const live = stream.getTracks().filter((track) => track.readyState === 'live');
+      if (!live.length) {
+        if (localStreams.current.get(kind) === stream) localStreams.current.delete(kind);
+        continue;
+      }
+      for (const track of live) {
         const sender = state.pc.addTrack(track, stream);
         if (kind === 'microphone') void tuneVoiceSender(sender);
         if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
@@ -595,7 +607,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     };
     peers.current.set(peerId, state);
     updatePeerHealth(peerId, 'connecting');
-    addLocalStreams(peerId, state);
+    syncLocalMediaToPeer(peerId, state);
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
     pc.onnegotiationneeded = () => void negotiateRef.current(peerId);
     pc.ontrack = (event) => {
@@ -698,7 +710,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       }
     };
     return state;
-  }, [addLocalStreams, refreshRemote, socket, updatePeerHealth]);
+  }, [syncLocalMediaToPeer, refreshRemote, socket, updatePeerHealth]);
 
   const negotiate = useCallback(async (peerId: string, iceRestart = false) => {
     const state = peers.current.get(peerId);
