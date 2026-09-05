@@ -12,7 +12,8 @@ import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioM
 import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
-import { currentNetworkPreferences, iceServersFor } from '../lib/networkPreferences';
+import { currentNetworkPreferences } from '../lib/networkPreferences';
+import { iceServers } from '../lib/iceServers';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromLevel, microphoneIdentityOf, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneIdentity } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 
@@ -539,7 +540,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // sozinho; onde há IPv6, ele ainda oferece o endereço global, que não tem
     // NAT no meio. A mídia continua cifrada de ponta a ponta por DTLS-SRTP e
     // não passa por nenhum servidor: o STUN só informa o endereço.
-    const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', iceServers: iceServersFor(currentNetworkPreferences()), iceCandidatePoolSize: 4 });
+    const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', iceServers: iceServers(currentNetworkPreferences()), iceCandidatePoolSize: 4 });
     const currentScreenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
     const screenBaseScale = currentScreenTrack ? screenScaleForQuality(currentScreenTrack.getSettings(), QUALITY[qualityRef.current]) : 1;
     const state: PeerConnectionState = {

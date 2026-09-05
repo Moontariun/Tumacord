@@ -9,11 +9,13 @@ Cada app ── servidor embutido :3927 (IPv4+IPv6) + descoberta UDP :3928
     ├── somente 1 conversa de texto + 1 call no modo P2P
     ╰══ WebRTC direto entre todos os participantes (DTLS-SRTP), com ICE/STUN
 
-Servidor dedicado Docker :4600
+Servidor de encontro Docker :4600
     │
     ├── API + Socket.IO + interface web no mesmo endereço
     ├── contas persistentes, chave de acesso e painel do administrador
-    ╰══ WebRTC direto entre os participantes (DTLS-SRTP)
+    ├── alcançado só por conexão de saída: atravessa CGNAT dos dois lados
+    ├── coturn opcional: relay TURN com credencial temporária
+    ╰══ WebRTC direto entre os participantes (DTLS-SRTP); relay só se preciso
 ```
 
 ## Fluxo de host
@@ -27,6 +29,18 @@ Em uma saída normal, o host antigo anuncia o vencedor e seu endpoint antes da t
 ## Descoberta
 
 O desktop envia probes e anúncios a cada segundo por UDP `3928`, tanto nos endereços de broadcast de cada interface IPv4 quanto no grupo multicast `239.255.42.99`. O endereço do host vem do pacote recebido, nunca de texto digitado pelo usuário. Anúncios expiram em 3,5 segundos. O anúncio carrega a chave do enlace direto, de modo que entrar por uma call vista na própria rede continua sendo um clique. Com o ZeroTier desligado nas preferências, o adaptador dele sai da lista de interfaces usadas aqui.
+
+## Encontro e relay
+
+Existe um caso que nenhuma travessia resolve: os dois lados atrás de CGNAT com NAT simétrico e sem IPv6. Não há endereço para furar. Para ele, o servidor de encontro inverte o sentido da conexão — os dois clientes ligam *para fora*, que é o que atravessa CGNAT — e o coturn entra como último recurso do ICE.
+
+O convite nesse modo não carrega endereço de máquina nenhuma: só a call e o segredo. Um convite indica um jeito só de entrar; misturar encontro e enlace direto no mesmo grupo partiria a call em duas, cada metade sinalizando em um lugar diferente.
+
+As credenciais de TURN seguem o esquema `use-auth-secret` do coturn (draft-uberti-behave-turn-rest-00): usuário é `<validade>:<nome>` e senha é o HMAC-SHA1 disso com um segredo compartilhado, em base64. Nenhum dos dois lados armazena senha; o coturn recalcula e compara. A renovação acontece com cinco minutos de folga, para uma credencial não vencer no meio de uma reconexão.
+
+A ordem entre caminho direto e relay não é decidida por nós: o ICE compara candidatos por prioridade e um par direto sempre vence um par por relay. O relay entra quando nenhum direto se forma, e sai de cena se um direto aparecer depois.
+
+Um relay que aceita qualquer destino vira uma porta para a rede interna da máquina que o hospeda. As faixas privadas, de loopback, de CGNAT e de multicast ficam proibidas como destino na configuração do coturn.
 
 ## Enlace direto
 

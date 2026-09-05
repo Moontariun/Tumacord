@@ -7,6 +7,7 @@ import {
   encodeBase64Url,
   encodeInvite,
   inviteExpired,
+  normalizeRendezvousUrl,
   orderPaths,
   pathToUrl,
   type DirectInvite,
@@ -18,7 +19,11 @@ export type { DirectInvite, DirectPath } from '../../shared/directLink';
 export interface ResolvedInvite {
   invite: DirectInvite;
   url: string;
-  path: DirectPath;
+  // Um convite indica um jeito só de entrar. Se ele aponta um servidor de
+  // encontro, todo mundo entra por lá; misturar os dois modos dentro do mesmo
+  // grupo partiria a call em duas, cada metade sinalizando em um lugar.
+  mode: 'p2p' | 'server';
+  path?: DirectPath;
 }
 
 export interface DirectReport {
@@ -59,14 +64,14 @@ const INVITE_RENEWAL_MARGIN_MS = 60 * 60 * 1000;
 
 let cachedInvite: { signature: string; code: string; issuedAt: number } | null = null;
 
-function inviteSignature(report: DirectReport, call: { callId: string; callName: string; hostUsername: string }, paths: DirectPath[]): string {
-  return [call.callId, call.callName, call.hostUsername, report.key, ...paths.map((path) => `${path.kind}:${path.host}:${path.port}`)].join('|');
-}
-
-export function buildInvite(report: DirectReport, call: { callId: string; callName: string; hostUsername: string }, now = Date.now()): string | null {
-  const paths = orderPaths(report.paths);
-  if (!paths.length || !report.key) return null;
-  const signature = inviteSignature(report, call, paths);
+export function buildInvite(report: DirectReport | null, call: { callId: string; callName: string; hostUsername: string; server?: string; key?: string }, now = Date.now()): string | null {
+  // Com servidor de encontro, o convite não carrega endereço de máquina
+  // nenhuma: só a call e o segredo que prova o direito de entrar.
+  const server = normalizeRendezvousUrl(call.server);
+  const paths = server ? [] : orderPaths(report?.paths ?? []);
+  const key = server ? (call.key ?? '') : (report?.key ?? '');
+  if ((!paths.length && !server) || !key) return null;
+  const signature = [call.callId, call.callName, call.hostUsername, key, server ?? '', ...paths.map((path) => `${path.kind}:${path.host}:${path.port}`)].join('|');
   // Renova com uma hora de folga: um código que vence no bolso de quem
   // recebeu é pior do que um código novo.
   const stillUseful = cachedInvite
@@ -79,8 +84,9 @@ export function buildInvite(report: DirectReport, call: { callId: string; callNa
     callId: call.callId,
     callName: call.callName,
     hostUsername: call.hostUsername,
-    key: report.key,
+    key,
     paths,
+    ...(server ? { server } : {}),
     issuedAt: now,
     ttlMs: DIRECT_INVITE_TTL_MS,
   });
@@ -152,6 +158,12 @@ export async function probeDirectHost(url: string, key: string, options: { timeo
 export async function resolveInvite(code: string, options: { timeoutMs?: number; staggerMs?: number; fetchImpl?: typeof fetch } = {}): Promise<ResolvedInvite | null> {
   const invite = readInvite(code);
   if (!invite) return null;
+  // Servidor de encontro dispensa a corrida: ele é alcançado por conexão de
+  // saída, que é o caminho que funciona mesmo com os dois lados em CGNAT.
+  if (invite.server) {
+    const reachable = await probeDirectHost(invite.server, invite.key, options);
+    return reachable ? { invite, url: invite.server, mode: 'server' } : null;
+  }
   const { staggerMs = 300 } = options;
   const paths = orderPaths(invite.paths);
   if (!paths.length) return null;
@@ -160,7 +172,7 @@ export async function resolveInvite(code: string, options: { timeoutMs?: number;
     const url = pathToUrl(path);
     const reachable = await probeDirectHost(url, invite.key, options);
     if (!reachable) throw new Error(`caminho indisponível: ${url}`);
-    return { invite, url, path } satisfies ResolvedInvite;
+    return { invite, url, mode: 'p2p', path } satisfies ResolvedInvite;
   });
   try {
     return await Promise.any(attempts);

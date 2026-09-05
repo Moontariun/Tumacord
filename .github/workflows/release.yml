@@ -55,11 +55,19 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Validar servidor dedicado Docker
+      - name: Validar servidor de encontro e relay
         env:
           TUMACORD_SERVER_ACCESS_KEY: chave-apenas-para-validacao-ci
+          # O serviço do coturn exige estas variáveis para não subir mal
+          # configurado. `docker compose config` avalia essa exigência, então
+          # a validação precisa fornecê-las — inclusive as do perfil `turn`,
+          # que o `config` inspeciona mesmo sem iniciar o contêiner.
+          TUMACORD_TURN_REALM: turn.validacao-ci
+          TUMACORD_TURN_SECRET: segredo-apenas-para-validacao-ci
+          TUMACORD_TURN_PUBLIC_IP: 203.0.113.10
         run: |
           docker compose config --quiet
+          docker compose --profile turn config --quiet
           docker build --tag tumacord-server:ci .
 
       - name: Gerar pacote portátil opcional
