@@ -369,8 +369,10 @@ function adminOverview(): AdminOverview {
     uptimeSeconds: Math.floor((Date.now() - startedAt.getTime()) / 1000),
     onlineUsers: [...new Map([...connectedUsers.values()].map((user) => [user.id, user])).values()],
     channels: availableChannels(),
+    categories: [...store.categories],
     voiceRooms: rooms.snapshot(),
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
+    turn: Boolean(turn),
   };
 }
 

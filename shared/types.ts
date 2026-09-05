@@ -102,12 +102,15 @@ export interface AdminOverview {
   uptimeSeconds: number;
   onlineUsers: PublicUser[];
   channels: Channel[];
+  categories: ChannelCategory[];
   voiceRooms: Record<string, VoiceState[]>;
   security: {
     accessKeyRequired: boolean;
     tls: boolean;
     media: 'DTLS-SRTP';
   };
+  // Apenas se existe relay configurado. Segredo e credencial nunca saem daqui.
+  turn: boolean;
 }
 
 export interface StreamMeta {

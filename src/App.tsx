@@ -4,6 +4,7 @@ import type { AdminOverview, Channel, ChatAttachment, ChatMessage, ChatSyncBundl
 import { profileIsNewer } from '../shared/profileVersion';
 import { Icon } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
+import { AdminPanel } from './components/AdminPanel';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
@@ -642,7 +643,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
-    {adminOpen && <AdminModal serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
+    {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
     {profileUser && <ProfileModal user={snapshot.onlineUsers.find((candidate) => candidate.id === profileUser.id) ?? (profileUser.id === session.user.id ? session.user : profileUser)} own={profileUser.id === session.user.id} serverUrl={session.serverUrl} token={session.token} onClose={() => setProfileUser(null)} onSaved={(updated) => { const nextSession = { ...session, user: updated }; saveSession(nextSession); onSessionChange(nextSession); setProfileUser(updated); showToast('Perfil atualizado.'); }} />}
@@ -1194,68 +1195,6 @@ function MemberList({ users, voiceMembers, currentUserId, serverUrl, onProfile }
   </aside>;
 }
 
-function AdminModal({ serverUrl, token, currentUserId, onClose, onNotice }: { serverUrl: string; token: string; currentUserId: string; onClose: () => void; onNotice: (message: string) => void }) {
-  const [overview, setOverview] = useState<AdminOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [disconnecting, setDisconnecting] = useState<string | null>(null);
-  const mounted = useRef(true);
-  const reloadTimer = useRef<number | null>(null);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
-    };
-  }, []);
-  const load = useCallback(async () => {
-    if (mounted.current) {
-      setLoading(true);
-      setError('');
-    }
-    try {
-      const response = await fetch(`${serverUrl}/api/admin/overview`, { headers: { authorization: `Bearer ${token}` } });
-      const body = await response.json() as AdminOverview & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? 'Não foi possível carregar o painel.');
-      if (mounted.current) setOverview(body);
-    } catch (caught) {
-      if (mounted.current) setError(caught instanceof Error ? caught.message : 'Não foi possível carregar o painel.');
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
-  }, [serverUrl, token]);
-  useEffect(() => { void load(); }, [load]);
-  const disconnectUser = async (user: PublicUser) => {
-    if (!window.confirm(`Desconectar ${user.username} do servidor agora?`)) return;
-    setDisconnecting(user.id);
-    try {
-      const response = await fetch(`${serverUrl}/api/admin/users/${encodeURIComponent(user.id)}/disconnect`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
-      const body = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(body.error ?? 'Não foi possível desconectar o usuário.');
-      if (!mounted.current) return;
-      onNotice(`${user.username} foi desconectado do servidor.`);
-      reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; void load(); }, 250);
-    } catch (caught) {
-      if (mounted.current) onNotice(caught instanceof Error ? caught.message : 'Não foi possível desconectar o usuário.');
-    } finally {
-      if (mounted.current) setDisconnecting(null);
-    }
-  };
-  const activeCalls = overview ? Object.values(overview.voiceRooms).filter((members) => members.length > 0).length : 0;
-  const uptime = overview ? formatUptime(overview.uptimeSeconds) : '—';
-  return <div className="modal-backdrop admin-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="admin-modal">
-    <header><div><span className="modal-eyebrow">Servidor dedicado</span><h1>Painel administrativo</h1><p>Visão operacional reservada ao usuário Moontariun.</p></div><div className="admin-header-actions"><button onClick={() => void load()} disabled={loading}><Icon name="refresh" /> Atualizar</button><button className="modal-close" onClick={onClose}><Icon name="close" /></button></div></header>
-    {error && <div className="form-error admin-error">{error}</div>}
-    {loading && !overview ? <div className="admin-loading">Carregando estado do servidor…</div> : overview && <div className="admin-content">
-      <div className="admin-stats"><article><span>Online agora</span><strong>{overview.onlineUsers.length}</strong></article><article><span>Calls ativas</span><strong>{activeCalls}</strong></article><article><span>Canais</span><strong>{overview.channels.length}</strong></article><article><span>Tempo ativo</span><strong>{uptime}</strong></article></div>
-      <div className="admin-security"><span className={overview.security.accessKeyRequired ? 'secure' : 'warning'}><Icon name="shield" />{overview.security.accessKeyRequired ? 'Chave de acesso ativa' : 'Sem chave de acesso'}</span><span className={overview.security.tls ? 'secure' : 'neutral'}>{overview.security.tls ? 'HTTPS/WSS ativo' : 'HTTP na rede privada'}</span><span className="secure">Mídia {overview.security.media}</span><small>Versão {overview.version} · iniciado em {new Date(overview.startedAt).toLocaleString('pt-BR')}</small></div>
-      <div className="admin-columns">
-        <section className="admin-section"><div className="admin-section-title"><div><small>Estrutura</small><h2>Canais</h2></div><b>{overview.channels.length}</b></div><div className="admin-list">{overview.channels.map((channel) => { const participants = channel.type === 'voice' ? overview.voiceRooms[channel.id]?.length ?? 0 : undefined; return <article key={channel.id}><span className="admin-list-icon"><Icon name={channel.type === 'voice' ? 'voice' : 'hash'} /></span><div><strong>{channel.name}</strong><small>{channel.type === 'voice' ? `${participants} na call` : 'Canal de texto'}</small></div></article>; })}</div></section>
-        <section className="admin-section"><div className="admin-section-title"><div><small>Presença</small><h2>Usuários conectados</h2></div><b>{overview.onlineUsers.length}</b></div><div className="admin-list admin-user-list">{overview.onlineUsers.map((user) => { const inVoice = Object.values(overview.voiceRooms).flat().find((member) => member.id === user.id); return <article key={user.id}><Avatar name={user.username} profile={user.profile} serverUrl={serverUrl} small online /><div><strong>{user.username}{user.isAdmin && <em>Admin</em>}</strong><small>{inVoice ? `Na call · ${inVoice.pingMs < 9999 ? `${inVoice.pingMs} ms` : 'conectado'}` : 'No servidor'}</small></div>{user.id !== currentUserId && <button disabled={disconnecting === user.id} onClick={() => void disconnectUser(user)}>{disconnecting === user.id ? 'Saindo…' : 'Desconectar'}</button>}</article>; })}{!overview.onlineUsers.length && <p>Nenhum usuário conectado.</p>}</div></section>
-      </div>
-    </div>}
-  </section></div>;
-}
 
 function formatUptime(totalSeconds: number): string {
   const days = Math.floor(totalSeconds / 86_400);
