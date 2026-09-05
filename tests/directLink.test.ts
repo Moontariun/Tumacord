@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DIRECT_INVITE_TTL_MS,
   betterHost,
   checksumOf,
   classifyIpv4,
@@ -13,8 +14,6 @@ import {
   inviteExpired,
   isTrustedLocalAddress,
   isZeroTierInterface,
-  orderPaths,
-  pathToUrl,
   reachabilityScore,
   type DirectInvite,
   type DirectPath,
@@ -83,37 +82,17 @@ test('a graduação exige que exista um caminho do tipo correspondente', () => {
   assert.equal(gradeFor({ paths: [], publicIpv4Interface: true, ipv6: true, mapped: true }), 'blocked');
 });
 
-test('a ordem de tentativa é rede local, IPv6 e depois IPv4, sem repetição', () => {
-  const paths: DirectPath[] = [
-    { kind: 'ipv4', host: '189.40.12.7', port: 3927, via: 'upnp' },
-    { kind: 'ipv6', host: '2804:14d:1::a', port: 3927, via: 'interface' },
-    { kind: 'lan', host: '192.168.0.4', port: 3927, via: 'interface' },
-    { kind: 'lan', host: '192.168.0.4', port: 3927, via: 'interface' },
-    { kind: 'ipv4', host: '189.40.12.7', port: 0, via: 'upnp' },
-  ];
-  assert.deepEqual(orderPaths(paths).map((path) => path.kind), ['lan', 'ipv6', 'ipv4']);
-  assert.deepEqual(orderPaths(paths, { ipv6Available: false }).map((path) => path.kind), ['lan', 'ipv4']);
-});
-
-test('a URL do caminho põe o IPv6 entre colchetes', () => {
-  assert.equal(pathToUrl({ kind: 'ipv6', host: '2804:14d:1::a', port: 3927, via: 'interface' }), 'http://[2804:14d:1::a]:3927');
-  assert.equal(pathToUrl({ kind: 'ipv4', host: '189.40.12.7', port: 3927, via: 'pcp' }), 'http://189.40.12.7:3927');
-  assert.equal(pathToUrl({ kind: 'lan', host: '192.168.0.4', port: 3927, via: 'interface' }), 'http://192.168.0.4:3927');
-});
-
+// Desde a 0.8.3 um convite aponta um servidor de encontro e nada mais. A lista
+// de endereços do host saiu junto com o caminho que a usava.
 const invite: DirectInvite = {
   version: 1,
   callId: 'call-geral',
-  callName: 'Call do grupo 🍅',
+  callName: 'Call do grupo 🎧',
   hostUsername: 'Moontariun',
-  key: 'ZmFrZS1jaGF2ZS1kZS1jb252aXRlLTMy',
-  paths: [
-    { kind: 'ipv6', host: '2804:14d:1::a', port: 3927, via: 'interface' },
-    { kind: 'ipv4', host: '189.40.12.7', port: 41_827, via: 'pcp' },
-    { kind: 'lan', host: '192.168.0.4', port: 3927, via: 'interface' },
-  ],
-  issuedAt: 1_757_000_000_000,
-  ttlMs: 43_200_000,
+  key: 'chave-de-acesso-do-servidor-de-encontro',
+  server: 'https://call.exemplo.com',
+  issuedAt: 1_700_000_000_000,
+  ttlMs: DIRECT_INVITE_TTL_MS,
 };
 
 test('o convite sobrevive à ida e à volta, inclusive com emoji no nome', () => {
@@ -123,24 +102,21 @@ test('o convite sobrevive à ida e à volta, inclusive com emoji no nome', () =>
   assert.deepEqual(decodeInvite(`  ${code.replace('TUMA1', 'tuma1')}\n`), invite, 'espaço em volta e prefixo em minúsculas continuam válidos');
 });
 
-test('convite truncado, adulterado ou sem caminho é recusado', () => {
+test('convite truncado, adulterado ou sem servidor é recusado', () => {
   const code = encodeInvite(invite);
   assert.equal(decodeInvite(code.slice(0, -3)), null);
   assert.equal(decodeInvite(code.replace('TUMA1', 'TUMA2')), null);
   assert.equal(decodeInvite('qualquer coisa'), null);
-  const semCaminho = encodeInvite({ ...invite, paths: [] });
-  assert.equal(decodeInvite(semCaminho), null);
   const chaveCurta = encodeInvite({ ...invite, key: 'curta' });
   assert.equal(decodeInvite(chaveCurta), null);
 });
 
-test('caminho com endereço inválido é descartado sem derrubar o convite inteiro', () => {
-  const code = encodeInvite({
-    ...invite,
-    paths: [{ kind: 'ipv4', host: '999.1.1.1', port: 3927, via: 'pcp' }, invite.paths[0]],
-  });
-  const decoded = decodeInvite(code);
-  assert.deepEqual(decoded?.paths, [invite.paths[0]]);
+// Um convite da 0.8.2 que só trazia endereços do host não tem para onde
+// apontar aqui. Recusar é o desfecho certo: aceitar produziria uma sessão sem
+// destino, e o caminho que ele descrevia não existe mais deste lado.
+test('convite antigo, só com endereços de máquina, é recusado', () => {
+  const antigo = 'TUMA1.eyJ2IjoxLCJyIjoiY2FsbC1nZXJhbCIsIm4iOiJDYWxsIiwiaCI6ImEiLCJrIjoiY2hhdmUtY29tLXZpbnRlLWUtZG9pcy1jaGFycyIsInQiOjEsIngiOjEsInAiOltbImwiLCIxOTIuMTY4LjAuNCIsMzkyNywiaSJdXX0';
+  assert.equal(decodeInvite(`${antigo}.${checksumOf(antigo.split('.')[1])}`), null);
 });
 
 test('o checksum muda quando um byte do corpo muda', () => {

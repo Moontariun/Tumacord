@@ -324,7 +324,6 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     if (!resolved) return false;
     try {
       const migrated = await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, resolved.mode, session.rememberMe ?? true, resolved.invite.key);
-      if (resolved.mode === 'p2p') await adoptDirectKey(resolved.invite.key);
       onSessionChange(migrated);
       return true;
     } catch {
@@ -1373,37 +1372,22 @@ function InviteModal({ callId, callName, hostUsername, server, serverKey, onClos
   // fazia a call inteira ditar o ritmo: cada atualização de ping re-renderizava
   // este modal e produzia um código diferente na tela.
   const [code, setCode] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const codeField = useRef<HTMLTextAreaElement>(null);
+  const codeField = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
-    let active = true;
-    // Com servidor de encontro não há o que sondar: o convite é a call mais o
-    // segredo, e quem entra chega lá por conexão de saída.
-    const material = server ? Promise.resolve(null) : readDirectReport();
-    void material.then((report) => {
-      if (!active) return;
-      setCode(buildInvite(report, { callId, callName, hostUsername, server, key: serverKey }));
-      setLoading(false);
-    });
-    return () => { active = false; };
+    setCode(buildInvite({ callId, callName, hostUsername, server, key: serverKey }));
   }, [callId, callName, hostUsername, server, serverKey]);
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="invite-modal">
     <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
-    <span className="modal-eyebrow">Enlace direto</span>
+    <span className="modal-eyebrow">Convite</span>
     <h2>Convidar pela internet</h2>
-    <p>{server
-      ? 'O código aponta o servidor da call e leva o segredo que dá direito de entrar. Nenhum endereço da sua máquina vai junto, e quem receber chega por conexão de saída — atravessa CGNAT sem abrir porta nenhuma.'
-      : 'O código carrega os endereços por onde este computador aceita entrada e a chave que protege a porta. Ele vale por 12 horas; mande por onde preferir.'}</p>
-    {loading && <p className="invite-status">Procurando os caminhos até aqui…</p>}
-    {!loading && !code && <p className="invite-status">{server
+    <p>O código aponta o servidor da call e leva o segredo que dá direito de entrar. Nenhum endereço da sua máquina vai junto, e quem receber chega por conexão de saída — atravessa CGNAT sem abrir porta nenhuma.</p>
+    {!code && <p className="invite-status">{server
       ? 'Faltou a chave de acesso deste servidor para montar o convite. Entre de novo informando a chave e tente outra vez.'
-      : 'Nenhum caminho de entrada foi encontrado. Use um servidor de encontro, peça para outra pessoa do grupo gerar o convite, ou ligue o ZeroTier em Configurações → Rede e conexão.'}</p>}
+      : 'Convidar pela internet exige um servidor. Nesta call, entre em Servidor dedicado e gere o convite de lá; no modo P2P, as calls só aparecem para quem está na mesma rede.'}</p>}
     {code && <>
-      <textarea ref={codeField} className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
+      <textarea className="invite-code" readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} ref={(field) => { codeField.current = field; }} />
       <button className="primary-button" onClick={() => { void copyText(code, codeField.current).then((copied) => onNotice(copied ? 'Convite copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar convite</button>
-      <small className="invite-hint">{server
-        ? 'Este é o mesmo código enquanto o servidor e a chave não mudarem. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada, e não precisa de porta aberta, UPnP nem IPv6.'
-        : 'Este é o mesmo código enquanto os endereços deste computador não mudarem: reabrir esta janela mostra ele de novo, e o que você já enviou continua valendo. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada. A chave vale para a call inteira, então a troca de host continua funcionando.'}</small>
+      <small className="invite-hint">Este é o mesmo código enquanto o servidor e a chave não mudarem. Quem receber cola em “Entrar por convite” ou no campo de convite da tela de entrada, e não precisa de porta aberta, UPnP nem IPv6.</small>
     </>}
   </div></div>;
 }

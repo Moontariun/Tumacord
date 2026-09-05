@@ -49,11 +49,14 @@ export interface DirectInvite {
   callName: string;
   hostUsername: string;
   key: string;
-  paths: DirectPath[];
-  // Endereço de um servidor de encontro. Quando existe, entrar não depende de
-  // alcançar o computador do host: os dois lados abrem conexão *de saída* até
-  // ele, que é o que atravessa CGNAT sem porta aberta em lugar nenhum.
-  server?: string;
+  // Endereço do servidor de encontro. Entrar não depende de alcançar o
+  // computador de ninguém: os dois lados abrem conexão *de saída* até ele, que
+  // é o que atravessa CGNAT sem porta aberta em lugar nenhum.
+  //
+  // Já foi opcional, ao lado de uma lista de endereços do host. Esse segundo
+  // caminho saiu na 0.8.3: ele exigia que alguém do grupo fosse alcançável da
+  // internet, e quase nunca era.
+  server: string;
   issuedAt: number;
   ttlMs: number;
 }
@@ -180,25 +183,6 @@ export function gradeFor(input: { paths: DirectPath[]; publicIpv4Interface: bool
 // Ordem de tentativa (Happy Eyeballs do RFC 8305 aplicado ao nosso caso): a
 // rede local primeiro porque não sai de casa, depois IPv6 porque não tem NAT
 // no meio, e só então o IPv4 mapeado, que depende do roteador manter a regra.
-const PATH_ORDER: Record<DirectPathKind, number> = { lan: 0, ipv6: 1, ipv4: 2 };
-
-export function orderPaths(paths: readonly DirectPath[], options: { ipv6Available?: boolean } = {}): DirectPath[] {
-  const usable = paths.filter((path) => path.port > 0 && path.port < 65_536 && Boolean(path.host));
-  const deduplicated = new Map<string, DirectPath>();
-  for (const path of usable) {
-    const key = `${path.kind}:${path.host}:${path.port}`;
-    if (!deduplicated.has(key)) deduplicated.set(key, path);
-  }
-  return [...deduplicated.values()]
-    .filter((path) => path.kind !== 'ipv6' || options.ipv6Available !== false)
-    .sort((a, b) => PATH_ORDER[a.kind] - PATH_ORDER[b.kind] || a.host.localeCompare(b.host) || a.port - b.port);
-}
-
-export function pathToUrl(path: DirectPath): string {
-  const host = path.kind === 'ipv6' || path.host.includes(':') ? `[${path.host.replace(/^\[|\]$/g, '')}]` : path.host;
-  return `http://${host}:${path.port}`;
-}
-
 const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 export function encodeBase64Url(bytes: Uint8Array): string {
@@ -284,11 +268,6 @@ export function checksumOf(text: string): string {
   return hash.toString(36).padStart(7, '0').slice(-7);
 }
 
-const PATH_KIND_CODE: Record<DirectPathKind, string> = { lan: 'l', ipv6: '6', ipv4: '4' };
-const PATH_VIA_CODE: Record<DirectPathVia, string> = { interface: 'i', pcp: 'p', 'nat-pmp': 'n', upnp: 'u', stun: 's' };
-const CODE_TO_PATH_KIND = new Map(Object.entries(PATH_KIND_CODE).map(([kind, code]) => [code, kind as DirectPathKind]));
-const CODE_TO_PATH_VIA = new Map(Object.entries(PATH_VIA_CODE).map(([via, code]) => [code, via as DirectPathVia]));
-
 export function encodeInvite(invite: DirectInvite): string {
   const compact = {
     v: 1,
@@ -298,8 +277,7 @@ export function encodeInvite(invite: DirectInvite): string {
     k: invite.key,
     t: Math.round(invite.issuedAt),
     x: Math.round(invite.ttlMs),
-    p: invite.paths.map((path) => [PATH_KIND_CODE[path.kind], path.host, path.port, PATH_VIA_CODE[path.via]]),
-    ...(invite.server ? { s: invite.server } : {}),
+    s: invite.server,
   };
   const payload = encodeBase64Url(utf8Encode(JSON.stringify(compact)));
   return `${DIRECT_INVITE_PREFIX}.${payload}.${checksumOf(payload)}`;
@@ -325,30 +303,18 @@ export function decodeInvite(code: string): DirectInvite | null {
   const callId = typeof compact.r === 'string' ? compact.r : '';
   const key = typeof compact.k === 'string' ? compact.k : '';
   if (!callId || key.length < 22) return null;
-  const rawPaths = Array.isArray(compact.p) ? compact.p : [];
-  const paths: DirectPath[] = [];
-  for (const entry of rawPaths) {
-    if (!Array.isArray(entry) || entry.length < 3) continue;
-    const kind = CODE_TO_PATH_KIND.get(String(entry[0]));
-    const host = typeof entry[1] === 'string' ? entry[1] : '';
-    const port = Number(entry[2]);
-    const via = CODE_TO_PATH_VIA.get(String(entry[3])) ?? 'interface';
-    if (!kind || !host || !Number.isInteger(port) || port < 1 || port > 65_535) continue;
-    if (kind === 'ipv6' ? !classifyIpv6(host) : !classifyIpv4(host)) continue;
-    paths.push({ kind, host, port, via });
-  }
   const server = normalizeRendezvousUrl(compact.s);
-  // Um convite precisa oferecer pelo menos uma forma de chegar: endereços do
-  // host, um servidor de encontro, ou os dois.
-  if (!paths.length && !server) return null;
+  // Sem servidor de encontro não há como chegar. Convites da 0.8.2 e
+  // anteriores que só traziam endereços do host caem aqui, e é o desejado:
+  // aquele caminho não existe mais deste lado.
+  if (!server) return null;
   return {
     version: 1,
     callId,
     callName: typeof compact.n === 'string' && compact.n ? compact.n : 'Call Geral',
     hostUsername: typeof compact.h === 'string' ? compact.h : '',
     key,
-    paths,
-    ...(server ? { server } : {}),
+    server,
     issuedAt: Number.isFinite(compact.t) ? Number(compact.t) : 0,
     ttlMs: Number.isFinite(compact.x) ? Number(compact.x) : DIRECT_INVITE_TTL_MS,
   };
