@@ -1324,6 +1324,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     microphoneFault.current = initialMicrophoneFault();
     microphoneSignal.current = { lastSignalAt: 0, warned: false };
     reconcileTick.current = 0;
+    // Restos da chamada anterior que não fazem sentido na próxima: a câmera
+    // ativa, um aviso de microfone pendente e opções de transmissão que nunca
+    // chegaram a ser usadas.
+    activeCameraDeviceId.current = '';
+    cameraSwitching.current = false;
+    microphoneFallbackNotice.current = false;
+    pendingShareOptions.current = { includeAudio: true, quality: qualityRef.current };
+    selfId.current = '';
     setChannelId(null);
     setMembers([]);
     setRemoteMedia([]);
@@ -1393,6 +1401,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (shouldInitiateRecovery(selfId.current, peer.socketId)) void negotiateRef.current(peer.socketId);
     };
     const onOffer = async ({ from, user: remoteUser, sdp }: { from: string; user: PublicUser; sdp: RTCSessionDescriptionInit }) => {
+      // Era o único handler que criava enlace sem conferir se ainda estamos na
+      // call. Uma oferta em trânsito no momento da saída — ou vinda de quem
+      // ainda não soube que saímos — criava um `RTCPeerConnection` depois de
+      // `leave()` já ter recolhido tudo: um zumbi que ninguém mais fecha.
+      if (!channelRef.current) return;
       const state = createPeer(from, remoteUser);
       const collision = state.makingOffer || state.pc.signalingState !== 'stable';
       const polite = isPolitePeer(selfId.current, from);
