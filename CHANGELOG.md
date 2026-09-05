@@ -1,5 +1,10 @@
 # Histórico de versões
 
+## 0.7.11 — o botão de copiar o convite volta a copiar
+
+- **o processo principal negava a permissão de escrita na área de transferência.** Ele autorizava só `media` e `display-capture`, e `navigator.clipboard.writeText` precisa de `clipboard-sanitized-write`: a promessa era rejeitada e o botão não fazia nada. A leitura da área de transferência continua negada — colar um convite é uma ação da pessoa, e o aplicativo não precisa ler o que está copiado;
+- além de autorizar, o botão ganhou uma reserva: se a escrita direta falhar por qualquer motivo, o campo é selecionado e a cópia sai pelo caminho antigo, que não passa por permissão. Quando as duas formas falham, o aviso diz que o texto ficou selecionado e pede Ctrl+C, em vez de falhar em silêncio.
+
 ## 0.7.10 — o código de convite para de mudar sozinho
 
 - **o convite era remontado a cada quadro da interface.** O código saía do corpo do render e carimbava `issuedAt` com o relógio a cada chamada; como a tela da call re-renderiza a cada atualização de ping e de participantes, o texto inteiro mudava várias vezes por segundo. O prazo sempre foi de doze horas e um código antigo nunca deixou de funcionar, mas era impossível acreditar nisso olhando para a tela — e o valor mudando embaixo da seleção atrapalhava até copiar;

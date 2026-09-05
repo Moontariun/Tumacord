@@ -254,9 +254,15 @@ app.whenReady().then(async () => {
   discovery = new TumacordDiscovery((calls) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:calls-changed', calls);
   }, { allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
-  const trustedMediaRequest = (webContents, permission) => webContents === mainWindow?.webContents && ['media', 'display-capture'].includes(permission);
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => trustedMediaRequest(webContents, permission));
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(trustedMediaRequest(webContents, permission)));
+  // `clipboard-sanitized-write` é o que o Chromium exige para
+  // `navigator.clipboard.writeText`. Sem ela na lista, o botão de copiar o
+  // convite tinha a promessa rejeitada e não copiava nada. A leitura da área
+  // de transferência continua negada: colar um convite é uma ação da pessoa,
+  // e o aplicativo não precisa ler o que está copiado.
+  const allowedPermissions = ['media', 'display-capture', 'clipboard-sanitized-write'];
+  const trustedRequest = (webContents, permission) => webContents === mainWindow?.webContents && allowedPermissions.includes(permission);
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => trustedRequest(webContents, permission));
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(trustedRequest(webContents, permission)));
 
   ipcMain.handle('tumacord:desktop-sources', async () => {
     const sources = await desktopCapturer.getSources({

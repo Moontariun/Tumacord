@@ -17,7 +17,7 @@ const SHELL_SCRIPTS = [
   'install-linux.sh',
   'install-cachyos.sh',
   'install-from-github.sh',
-  'install-v0.7.10.sh',
+  'install-v0.7.11.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
 ];
@@ -98,9 +98,9 @@ test('sem nenhum gerenciador conhecido o instalador explica o que instalar à m�
   }
 });
 
-test('o instalador da versão aponta para a branch da 0.7.10', () => {
-  const bootstrap = readFileSync(path.join(scripts, 'install-v0.7.10.sh'), 'utf8');
-  assert.match(bootstrap, /branch="release\/invite-stability-v0\.7\.10"/);
+test('o instalador da versão aponta para a branch da 0.7.11', () => {
+  const bootstrap = readFileSync(path.join(scripts, 'install-v0.7.11.sh'), 'utf8');
+  assert.match(bootstrap, /branch="release\/clipboard-and-invite-v0\.7\.11"/);
   assert.match(bootstrap, /install-from-github\.sh/);
 });
 
