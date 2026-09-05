@@ -19,7 +19,13 @@ export interface MicrophoneIdentity {
 export type MicrophoneFault = 'none' | 'muted' | 'device-changed' | 'dead' | 'silent';
 export type MicrophoneRecoveryAction = 'wait' | 'recapture' | 'warn';
 
-export const MUTED_HOLD_MS = 1_200;
+// Um segundo e dois décimos não cobriam o caso mais comum: outro aplicativo
+// soltando a captura do mesmo dispositivo. O grafo do PipeWire leva alguns
+// segundos para reassentar, e recapturar no meio disso troca uma piscada por
+// uma renegociação com todos os enlaces. A leitura no monitor tira o estado de
+// `muted` assim que a faixa volta, então esperar mais não atrasa nada real —
+// só evita agir sobre uma falha que já passou.
+export const MUTED_HOLD_MS = 3_000;
 export const DEVICE_CHANGE_HOLD_MS = 500;
 // Silêncio digital absoluto e sala silenciosa são coisas diferentes. Um
 // microfone vivo sempre entrega um piso de ruído; energia exatamente zero

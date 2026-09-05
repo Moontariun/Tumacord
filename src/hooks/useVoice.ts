@@ -1099,7 +1099,17 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           ...(deviceId === undefined ? {} : { deviceId }),
           echoCancellation: { ideal: true },
           noiseSuppression: { ideal: browserNoiseSuppression },
-          autoGainControl: { ideal: true },
+          // No Linux, o AGC do WebRTC não é um ganho interno: o Chromium mexe
+          // no volume da FONTE no PipeWire, que é do dispositivo e vale para
+          // todo mundo que captura dele. Com o Discord na mesma entrada, dois
+          // AGCs giram o mesmo botão — e foi assim que a fonte deste
+          // computador terminou em 28% (−32,95 dB) com todos os streams em
+          // 100%. O `module-device-restore` guarda esse valor, então ele
+          // sobrevive a reinício.
+          //
+          // A captura crua (`captureRawMicrophone`) já pedia `false`; esta era
+          // a única metade do aplicativo ainda participando da disputa.
+          autoGainControl: false,
           channelCount: { ideal: 1 },
           sampleRate: { ideal: 48_000 },
           sampleSize: { ideal: 16 },
@@ -1806,22 +1816,39 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         return;
       }
       const now = Date.now();
-      // `muted` e a troca do dispositivo padrão são detectados por evento e já
-      // chegam registrados; aqui resta medir a energia que entra.
-      if (state.kind === 'none' || state.kind === 'silent' || state.kind === 'dead') {
-        const reading = readMicrophone();
+      const reading = readMicrophone();
+      if (reading.track?.muted) {
         // Uma faixa que já nasce silenciada pelo sistema nunca dispara
         // `onmute`: o evento marca a transição, e aqui ela já aconteceu antes
         // de existir ouvinte. Sem esta checagem o caso ficava invisível.
-        if (reading.track?.muted) {
-          noteMicrophoneFault('muted');
-          return;
-        }
-        if (!microphoneIsMeasurable(reading)) {
-          signal.lastSignalAt = now;
-          noteMicrophoneFault('none');
-          return;
-        }
+        //
+        // Segue para o plano de recuperação abaixo em vez de retornar: um
+        // `muted` que persiste continua merecendo recaptura.
+        noteMicrophoneFault('muted');
+      } else if (state.kind === 'muted') {
+        // Um `muted` só vale enquanto continuar valendo, e é preciso conferir
+        // por leitura — não só pelo evento.
+        //
+        // Outro aplicativo que solta a captura do MESMO dispositivo sacode o
+        // grafo do PipeWire: o WirePlumber aborta a ativação do nó ("PipeWire
+        // proxy destroyed") e a faixa daqui pisca `muted` antes de voltar
+        // sozinha. O Discord faz exatamente isso toda vez que alguém muta —
+        // ele destrói a captura em vez de silenciá-la.
+        //
+        // Antes, sair de `muted` dependia só do evento `unmute`, que é
+        // justamente o que se perde no meio dessa sacudida. O estado ficava
+        // preso e a recaptura seguinte derrubava e recriava a faixa em todos
+        // os enlaces, renegociando com todo mundo. A reação saía muito mais
+        // cara que o defeito, e era ela que a pessoa sentia como "o microfone
+        // quebrou quando mutei o Discord".
+        signal.lastSignalAt = now;
+        noteMicrophoneFault('none');
+        return;
+      } else if (!microphoneIsMeasurable(reading)) {
+        signal.lastSignalAt = now;
+        noteMicrophoneFault('none');
+        return;
+      } else {
         const measured = faultFromReading(reading);
         if (measured === 'none') {
           signal.lastSignalAt = now;

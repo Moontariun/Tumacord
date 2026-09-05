@@ -171,3 +171,28 @@ test('com o orçamento devolvido, a recuperação volta a agir', () => {
   const devolvido = { ...gasto, ...initialMicrophoneFault(), now: agora, fault: 'dead' as const, faultSince: agora - DEAD_HOLD_MS };
   assert.equal(planMicrophoneRecovery(devolvido).action, 'recapture');
 });
+
+// Quando outro aplicativo solta a captura do MESMO dispositivo, o grafo do
+// PipeWire é sacudido: o WirePlumber aborta a ativação do nó e a faixa daqui
+// pisca `muted` antes de voltar sozinha. Medido com o Discord, que destrói a
+// captura em vez de silenciá-la a cada mute.
+//
+// O que importa é a leitura, não o evento: `unmute` é justamente o que se
+// perde no meio da sacudida, e agir sobre um `muted` que já passou custa uma
+// recaptura — a faixa cai e é recriada em todos os enlaces.
+test('uma faixa que voltou de `muted` não é mais uma falha', () => {
+  const base = { level: 0.05, contextState: 'running' as const, userMuted: false };
+  const piscou = { ...base, track: { readyState: 'live', enabled: true, muted: true } };
+  const voltou = { ...base, track: { readyState: 'live', enabled: true, muted: false } };
+  assert.equal(faultFromReading(piscou), 'muted');
+  assert.equal(faultFromReading(voltou), 'none', 'a leitura seguinte já não acusa falha nenhuma');
+});
+
+test('a folga do `muted` cobre o reassentamento do dispositivo', () => {
+  const preso = { now: 0, fault: 'muted' as const, faultSince: 0, lastRecaptureAt: 0, recaptures: 0, warned: false };
+  // Um segundo e meio era tempo de recapturar no meio da sacudida.
+  assert.equal(planMicrophoneRecovery({ ...preso, now: 1_500 }).action, 'wait');
+  assert.equal(planMicrophoneRecovery({ ...preso, now: 2_999 }).action, 'wait');
+  // Um `muted` que persiste continua merecendo recaptura: a paciência tem fim.
+  assert.equal(planMicrophoneRecovery({ ...preso, now: 3_001 }).action, 'recapture');
+});
