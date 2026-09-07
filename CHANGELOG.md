@@ -1,8 +1,11 @@
 # Histórico de versões
 
-## 0.8.4 — convite de 35 caracteres e build portátil de Windows
+## 0.8.5 — a interface para de sumir sob carga, e o convite curto passa a ser aceito
 
-### Auditoria da 0.8.4 — o que a revisão encontrou e corrigiu
+Esta versão é o resultado de uma auditoria da 0.8.4. Ela não muda formato de
+convite, protocolo, dados persistidos nem API pública: um servidor 0.8.4 e um
+cliente 0.8.5 continuam se entendendo nos dois sentidos, e a 0.8.4 segue
+instalável a partir da branch dela.
 
 **O convite curto não era aceito pela própria interface**
 
@@ -42,6 +45,12 @@ O relato era de opções e botões que somem e voltam quando a máquina está oc
 - o indicador de conexão continuava dizendo "conectado" durante a troca de host, que é o momento em que não há socket nenhum;
 - o README ainda descrevia o convite que carregava os endereços do host — caminho removido na 0.8.3, e contradito pelo próprio README algumas linhas abaixo.
 
+**Compatibilidade**
+
+- nada mudou em convite, sinalização, banco de dados ou API. Atualizar é trocar a instalação; voltar para a 0.8.4 é reinstalar a partir da branch dela, sem conversão de dados;
+- `npm test` passa com 389 testes, contra 354 na 0.8.4. Os 35 novos guardam exatamente o que esta versão corrige.
+
+## 0.8.4 — convite de 35 caracteres e build portátil de Windows
 
 **O convite encolheu 85%**
 
