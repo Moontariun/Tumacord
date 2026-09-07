@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     return () => ipcRenderer.removeListener('tumacord:calls-changed', handler);
   },
   setHosting: (details) => ipcRenderer.invoke('tumacord:set-hosting', details),
+  // Pinta o traço por cima do desktop de verdade enquanto o monitor inteiro
+  // está sendo transmitido. Sem traço nenhum, fecha a janela.
+  drawOverlay: (payload) => ipcRenderer.invoke('tumacord:draw-overlay', payload),
   getNetworkPreferences: () => ipcRenderer.invoke('tumacord:network-preferences'),
   setNetworkPreferences: (patch) => ipcRenderer.invoke('tumacord:set-network-preferences', patch),
   onNetworkPreferencesChanged: (listener) => {

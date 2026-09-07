@@ -14,6 +14,8 @@ import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLo
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectReport, requestShortInvite, resolveAnyInvite, type DirectReport } from './lib/directLink';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
+import { DRAW_COLORS, DRAW_LIFETIMES, fitFrame, isPersistent, pointFromViewport, pointToViewport, pointsAreFarEnough, strokeOpacity, POINTS_PER_MESSAGE, STROKE_LIFETIME_MS, type DrawPoint, type DrawStroke } from '../shared/telestration';
+import { readDrawPreferences, writeDrawPreferences, type DrawPreferences } from './lib/drawPreferences';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
 import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict } from './lib/mediaDiagnostics';
@@ -199,6 +201,10 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     try { return JSON.parse(localStorage.getItem('tumacord.user-muted') ?? '{}') as Record<string, boolean>; } catch { return {}; }
   });
   const devices = useDevices();
+  const [drawing, setDrawing] = useState<DrawPreferences>(() => readDrawPreferences(session.user.profile?.accentColor));
+  const changeDrawing = useCallback((patch: Partial<DrawPreferences>) => {
+    setDrawing((atual) => writeDrawPreferences({ ...atual, ...patch }));
+  }, []);
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const toastTimer = useRef<number | null>(null);
@@ -491,7 +497,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [toggleAppFullscreen]);
 
-  const voice = useVoice({ socket, user: session.user, preferences: devices.preferences, onError: showToast, onDevicesChanged: devices.refresh, onHostHandoff: handleHostHandoff, dynamicHosting: session.connectionMode !== 'server' });
+  const voice = useVoice({ socket, user: session.user, preferences: devices.preferences, onError: showToast, onDevicesChanged: devices.refresh, onHostHandoff: handleHostHandoff, dynamicHosting: session.connectionMode !== 'server', drawing });
   const visibleChannels = useMemo(() => {
     if (session.connectionMode === 'server') return snapshot.channels;
     const text = snapshot.channels.find((channel) => channel.id === 'geral' && channel.type === 'text')
@@ -530,6 +536,31 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   }, [selfVoiceState?.isHost, session.connectionMode, session.user.id, session.user.username, snapshot.channels, voice.channelId, voice.members.length]);
 
   useEffect(() => () => { void window.tumacordDesktop?.setHosting(null); }, []);
+
+  // O que desenharem na MINHA transmissão vai para a janela sobreposta ao
+  // desktop, para eu ver o traço sem precisar olhar para o Tumacord. Só faz
+  // sentido transmitindo um monitor inteiro: capturando uma janela, o quadro é
+  // aquela janela e não sabemos onde ela está na tela — aí o desenho continua
+  // aparecendo só dentro do aplicativo.
+  const meusTracos = selfVoiceState?.socketId ? voice.drawings[selfVoiceState.socketId] : undefined;
+  useEffect(() => {
+    const ponte = window.tumacordDesktop;
+    if (!ponte?.drawOverlay) return;
+    const fonte = voice.screenSource;
+    if (!fonte || fonte.kind !== 'screen' || !drawing.allowDraw || !meusTracos?.length) {
+      void ponte.drawOverlay(null).catch(() => undefined);
+      return;
+    }
+    void ponte.drawOverlay({
+      sourceId: fonte.id,
+      sourceKind: fonte.kind,
+      lifetime: drawing.drawLifetime,
+      strokes: meusTracos.map((stroke) => ({ color: stroke.color, at: stroke.at, points: stroke.points })),
+    }).catch(() => undefined);
+  }, [drawing.allowDraw, drawing.drawLifetime, meusTracos, voice.screenSource]);
+
+  // Fechar o app ou sair da call não pode deixar a janela sobreposta órfã.
+  useEffect(() => () => { void window.tumacordDesktop?.drawOverlay?.(null).catch(() => undefined); }, []);
 
   useEffect(() => {
     if (!socket || selectedChannel?.type !== 'text') return;
@@ -662,7 +693,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       </header>
       <div className="content-row">
         {selectedChannel?.type === 'voice'
-          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
+          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} drawing={drawing} /></Boundary>
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
         {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
@@ -671,7 +702,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(media.user?.id && mutedUsers[media.user.id])} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
-    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
@@ -742,6 +773,8 @@ interface VoiceViewModel {
   screenOn: boolean;
   remoteMedia: RemoteMedia[];
   peerHealth: Record<string, PeerHealth>;
+  drawings: Record<string, DrawStroke[]>;
+  sendDraw: (message: { target: string; strokeId: string; color: string; points: DrawPoint[]; done?: boolean; clear?: boolean; clearAll?: boolean }) => void;
   recoverPeer: (peerId: string, reason?: string, notifyRemote?: boolean) => void;
   recoverAllPeers: () => number;
   localCamera?: MediaStream;
@@ -757,7 +790,7 @@ interface VoiceViewModel {
   user: { id: string; username: string };
 }
 
-function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
+function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, onProfile, onNotice, drawing }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void; drawing: DrawPreferences }) {
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
   const [hiddenScreenUsers, setHiddenScreenUsers] = useState<Set<string>>(() => new Set());
   // Ampliar outro quadro desmontava o quadro solto, e com ele ia a janela
@@ -805,12 +838,29 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
     if (!validKeys.has(theaterMediaKey)) setTheaterMediaKey(null);
   }, [theaterMediaKey, visibleVideoMedia, voice.localCamera, voice.localScreen]);
   const showMedia = (key: string) => detachedKeys.has(key) || !theaterMediaKey || theaterMediaKey === key;
+  // Cada transmissão carrega a própria permissão e o próprio prazo: quem
+  // transmite decide, e quem assiste apenas obedece ao que foi anunciado.
+  const meuSocket = voice.members.find((member) => member.id === voice.user.id)?.socketId ?? '';
+  const tileDrawing = (target: string, dono: VoiceState | undefined, ehMinha: boolean): TileDrawing | undefined => {
+    if (!target) return undefined;
+    const permite = ehMinha ? drawing.allowDraw : dono?.allowDraw !== false;
+    const prazo = ehMinha ? drawing.drawLifetime : dono?.drawLifetime ?? STROKE_LIFETIME_MS;
+    return {
+      strokes: voice.drawings[target] ?? [],
+      lifetime: prazo,
+      allowed: permite,
+      color: drawing.drawColor,
+      onStroke: (strokeId, points, done) => voice.sendDraw({ target, strokeId, color: drawing.drawColor, points, done }),
+      onClear: () => voice.sendDraw({ target, strokeId: 'clear', color: drawing.drawColor, points: [], clear: true }),
+      ...(ehMinha ? { canClearAll: true, onClearAll: () => voice.sendDraw({ target, strokeId: 'clear', color: drawing.drawColor, points: [], clearAll: true }) } : {}),
+    };
+  };
   const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length + hiddenStreams.length;
   return <main className="call-view">
     <div className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''}`}>
-      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} />}
+      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} drawing={tileDrawing(meuSocket, undefined, true)} />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} drawing={screen ? tileDrawing(media.peerId, voice.members.find((member) => member.socketId === media.peerId), false) : undefined} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
       {!theaterMediaKey && missingStreams.map((member) => <div className="stream-recovery-card" key={`missing-${member.id}`}><span className="live-dot" /><strong>{member.username} está AO VIVO</strong><p>A transmissão está se reconectando automaticamente.</p><small>{voice.peerHealth[member.socketId] === 'recovering' ? 'Recuperando conexão…' : 'Aguardando a faixa de vídeo…'}</small><button onClick={() => voice.recoverPeer(member.socketId, 'tentativa manual da interface', true)}>Tentar agora</button></div>)}
       {!theaterMediaKey && hiddenStreams.map((member) => <div className="stream-recovery-card stream-hidden-card" key={`hidden-${member.id}`}><Icon name="screen" /><strong>Live de {member.username} ocultada</strong><p>Você saiu desta transmissão, mas continua na call.</p><button onClick={() => setHiddenScreenUsers((current) => { const next = new Set(current); next.delete(member.id); return next; })}>Assistir novamente</button></div>)}
       {!visibleVideoMedia.length && !missingStreams.length && !hiddenStreams.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
@@ -1011,7 +1061,184 @@ function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState;
   return <button className={`participant-tile ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => onProfile(member)}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong>{member.screen && <span className="streaming-label"><span className="live-dot" /> AO VIVO</span>}<span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void }) {
+
+interface TileDrawing {
+  strokes: DrawStroke[];
+  lifetime: number;
+  /** Se esta transmissão aceita desenho agora. */
+  allowed: boolean;
+  color: string;
+  onStroke: (strokeId: string, points: DrawPoint[], done: boolean) => void;
+  onClear: () => void;
+  /** Só quem transmite limpa o que os outros desenharam. */
+  canClearAll?: boolean;
+  onClearAll?: () => void;
+}
+
+// Camada de desenho sobre um vídeo.
+//
+// Ela é um canvas do tamanho exato do quadro, por cima da imagem. Quando não
+// há traço nenhum e não dá para desenhar, ela não intercepta clique nenhum —
+// o duplo clique que amplia e o arrasto da janela flutuante continuam
+// funcionando como sempre.
+//
+// As coordenadas vão normalizadas: quem desenha em uma janela de 600 px e quem
+// recebe em 4K precisam ver o traço no mesmo lugar do conteúdo, e não no mesmo
+// lugar da janela.
+function DrawingLayer({ videoRef, strokes, lifetime, canDraw, color, onStroke, onClear }: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  strokes: DrawStroke[];
+  lifetime: number;
+  canDraw: boolean;
+  color: string;
+  onStroke: (strokeId: string, points: DrawPoint[], done: boolean) => void;
+  onClear?: () => void;
+}) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const traco = useRef<{ id: string; pendentes: DrawPoint[]; ultimo?: DrawPoint } | null>(null);
+  const [, redesenhar] = useState(0);
+
+  // Um relógio leve só enquanto houver traço com prazo correndo: é ele que faz
+  // o desvanecimento acontecer, e ele para sozinho quando não há o que sumir.
+  const precisaAnimar = strokes.length > 0 && !isPersistent(lifetime);
+  useEffect(() => {
+    if (!precisaAnimar) return;
+    const timer = window.setInterval(() => redesenhar((n) => n + 1), 80);
+    return () => window.clearInterval(timer);
+  }, [precisaAnimar]);
+
+  const medir = useCallback(() => {
+    const video = videoRef.current;
+    const area = host.current;
+    if (!video || !area) return null;
+    const caixa = area.getBoundingClientRect();
+    return {
+      width: caixa.width,
+      height: caixa.height,
+      frameWidth: video.videoWidth,
+      frameHeight: video.videoHeight,
+    };
+  }, [videoRef]);
+
+  // Desenhar é caro o suficiente para não fazer a cada render do React: o
+  // canvas é repintado aqui, com o que existe agora.
+  useEffect(() => {
+    const tela = canvas.current;
+    const area = host.current;
+    if (!tela || !area) return;
+    const caixa = area.getBoundingClientRect();
+    const escala = window.devicePixelRatio || 1;
+    const largura = Math.max(1, Math.round(caixa.width * escala));
+    const altura = Math.max(1, Math.round(caixa.height * escala));
+    if (tela.width !== largura || tela.height !== altura) {
+      tela.width = largura;
+      tela.height = altura;
+    }
+    const ctx = tela.getContext('2d');
+    const viewport = medir();
+    if (!ctx) return;
+    ctx.setTransform(escala, 0, 0, escala, 0, 0);
+    ctx.clearRect(0, 0, caixa.width, caixa.height);
+    if (!viewport || !fitFrame(viewport)) return;
+    const agora = Date.now();
+    const grossura = Math.max(2.5, Math.min(caixa.width, caixa.height) * 0.006);
+    for (const stroke of strokes) {
+      const opacidade = strokeOpacity(stroke, agora, lifetime);
+      if (opacidade <= 0) continue;
+      const pontos = stroke.points.map((ponto) => pointToViewport(ponto, viewport)).filter((p): p is { x: number; y: number } => Boolean(p));
+      if (!pontos.length) continue;
+      ctx.globalAlpha = opacidade;
+      ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color;
+      ctx.lineWidth = grossura;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      // Um contorno escuro por baixo: sem ele um traço claro some sobre um
+      // fundo claro, que é metade do que se transmite.
+      ctx.shadowColor = 'rgba(0,0,0,.55)';
+      ctx.shadowBlur = grossura * 1.6;
+      if (pontos.length === 1) {
+        // Um toque sem arrasto é um apontador: um círculo que pulsa e some.
+        const pulso = 1 + Math.sin((agora - stroke.at) / 120) * 0.18;
+        ctx.beginPath();
+        ctx.arc(pontos[0].x, pontos[0].y, grossura * 2.6 * pulso, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = opacidade * 0.35;
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(pontos[0].x, pontos[0].y);
+        for (const ponto of pontos.slice(1)) ctx.lineTo(ponto.x, ponto.y);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
+  });
+
+  const enviarPendentes = (fim: boolean) => {
+    const atual = traco.current;
+    if (!atual) return;
+    if (!atual.pendentes.length && !fim) return;
+    onStroke(atual.id, atual.pendentes, fim);
+    atual.pendentes = [];
+  };
+
+  const comecar = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!canDraw || event.button !== 0) return;
+    const viewport = medir();
+    const area = host.current;
+    if (!viewport || !area) return;
+    const caixa = area.getBoundingClientRect();
+    const ponto = pointFromViewport(event.clientX - caixa.left, event.clientY - caixa.top, viewport);
+    if (!ponto) return;
+    event.preventDefault();
+    event.stopPropagation();
+    area.setPointerCapture(event.pointerId);
+    traco.current = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, pendentes: [ponto], ultimo: ponto };
+    enviarPendentes(false);
+  };
+
+  const mover = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const atual = traco.current;
+    const area = host.current;
+    if (!atual || !area) return;
+    const viewport = medir();
+    if (!viewport) return;
+    const caixa = area.getBoundingClientRect();
+    const ponto = pointFromViewport(event.clientX - caixa.left, event.clientY - caixa.top, viewport);
+    if (!ponto || !pointsAreFarEnough(atual.ultimo, ponto)) return;
+    atual.ultimo = ponto;
+    atual.pendentes.push(ponto);
+    if (atual.pendentes.length >= POINTS_PER_MESSAGE) enviarPendentes(false);
+  };
+
+  const terminar = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!traco.current) return;
+    enviarPendentes(true);
+    traco.current = null;
+    host.current?.releasePointerCapture(event.pointerId);
+  };
+
+  // Sem traço e sem permissão de desenhar, a camada some do caminho do mouse.
+  const transparenteAoClique = !canDraw;
+  return <div
+    ref={host}
+    className={`drawing-layer ${canDraw ? 'is-armed' : ''}`}
+    style={transparenteAoClique ? { pointerEvents: 'none' } : undefined}
+    onPointerDown={comecar}
+    onPointerMove={mover}
+    onPointerUp={terminar}
+    onPointerCancel={terminar}
+    onDoubleClick={(event) => { if (canDraw) event.stopPropagation(); }}
+  >
+    <canvas ref={canvas} />
+    {canDraw && onClear && strokes.length > 0 && <button className="drawing-clear" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClear(); }}>Limpar</button>}
+  </div>;
+}
+
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, drawing }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; drawing?: TileDrawing }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const detachedLive = useDetachedLive(mediaRef, label, `tumacord-live-${mediaKey.replace(/[^a-zA-Z0-9]/g, '')}`);
@@ -1058,11 +1285,16 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
   // Na tela cheia real o modo teatro não muda nada, então o duplo clique e o
   // botão ficam fora de ação em vez de responderem sem efeito.
   const toggleTheater = () => { if (!fullscreen) onTheater?.(theater ? null : mediaKey); };
+  const [drawArmed, setDrawArmed] = useState(false);
+  // Desarmar sozinho quando a permissão sai do ar: o botão some, e com ele o
+  // modo de desenho, sem deixar a camada capturando clique à toa.
+  useEffect(() => { if (!drawing?.allowed) setDrawArmed(false); }, [drawing?.allowed]);
   const onTileDoubleClick = (event: React.MouseEvent) => {
     if ((event.target as HTMLElement).closest('.video-actions')) return;
     toggleTheater();
   };
-  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  const podeRabiscar = Boolean(drawing?.allowed && drawArmed);
+  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${podeRabiscar ? 'is-drawing' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{drawing && <DrawingLayer videoRef={mediaRef} strokes={drawing.strokes} lifetime={drawing.lifetime} canDraw={podeRabiscar} color={drawing.color} onStroke={drawing.onStroke} onClear={drawing.onClear} />}{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{drawing?.allowed && <button className={podeRabiscar ? 'is-on' : ''} aria-pressed={podeRabiscar} onClick={() => setDrawArmed((atual) => !atual)} title={podeRabiscar ? 'Parar de desenhar' : 'Desenhar sobre esta transmissão'}><Icon name="pencil" /></button>}{drawing?.canClearAll && drawing.strokes.length > 0 && <button onClick={() => drawing.onClearAll?.()} title="Apagar tudo o que desenharam na minha tela"><Icon name="eraser" /></button>}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {
@@ -1292,13 +1524,14 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
   </div></div>;
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, connectionMode, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; connectionMode: 'p2p' | 'server'; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
-  const [tab, setTab] = useState<'media' | 'network' | 'diagnostics'>('media');
+function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
+  const [tab, setTab] = useState<'media' | 'drawing' | 'network' | 'diagnostics'>('media');
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
-    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
+    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho na tela</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
+    {tab === 'drawing' && <DrawingSettings drawing={drawing} onChange={onDrawing} onClose={onClose} />}
     {tab === 'network' && <NetworkSettings preferences={networkPreferences} onChange={onNetworkPreferences} onClose={onClose} />}
     {tab === 'diagnostics' && <MediaDiagnostics snapshot={mediaSnapshot} preferences={networkPreferences} connectionMode={connectionMode} onNotice={onNotice} onClose={onClose} />}
     {tab === 'media' && <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
@@ -1321,6 +1554,43 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
 //
 // Agora o último relatório bem-sucedido continua em tela enquanto o novo não
 // chega, e uma falha aparece como o que é: uma medição que não deu certo.
+
+// Desenho sobre a transmissão.
+//
+// Duas das três chaves são de quem transmite, e é por isso que elas ficam
+// juntas: é a mesma tela, é a mesma decisão. Desligar a primeira faz o lápis
+// sumir para quem assiste e faz o servidor recusar traço — esconder o botão
+// seria conveniência, não permissão.
+function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferences; onChange: (patch: Partial<DrawPreferences>) => void; onClose: () => void }) {
+  return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Desenho na tela</h1>
+    <p className="settings-intro">Quem assiste à sua transmissão pode rabiscar em cima dela para apontar alguma coisa. O traço aparece na live de todo mundo que está vendo, e na sua tela de verdade enquanto você compartilha o monitor inteiro.</p>
+
+    <label className="sound-toggle"><input type="checkbox" checked={drawing.allowDraw} onChange={(event) => onChange({ allowDraw: event.target.checked })} /><span><strong>Deixar quem assiste desenhar na minha transmissão</strong><small>Desligado, o lápis some para quem está vendo e o servidor recusa qualquer traço — nem um cliente modificado desenha na sua tela. O que já estava desenhado é apagado na hora.</small></span></label>
+
+    {drawing.allowDraw && <>
+      <div className="setting-label"><span className="setting-title">Quanto tempo o traço fica<small>Vale para quem desenhar na sua transmissão. O padrão some sozinho; "não apagar" deixa o desenho parado até alguém limpar.</small></span><Dropdown label="Duração do traço" value={String(drawing.drawLifetime)} options={DRAW_LIFETIMES.map((opcao) => ({ value: String(opcao.value), label: opcao.label }))} onChange={(valor) => onChange({ drawLifetime: Number(valor) })} /></div>
+
+      {isPersistent(drawing.drawLifetime) && <div className="quality-note"><strong>O traço não vai sumir sozinho</strong><span>Use o borrachinha no canto do seu quadro para apagar tudo de uma vez. Quem desenhou também pode limpar o próprio traço, e tudo é apagado quando a transmissão termina.</span></div>}
+    </>}
+
+    <div className="setting-label"><span className="setting-title">A cor do meu traço<small>Vale quando você desenha na transmissão dos outros. Cada pessoa aparece com a própria cor, então dá para saber quem apontou o quê.</small></span></div>
+    <div className="draw-colors" role="radiogroup" aria-label="Cor do meu traço">
+      {DRAW_COLORS.map((cor) => <button
+        key={cor}
+        type="button"
+        role="radio"
+        aria-checked={drawing.drawColor.toLowerCase() === cor.toLowerCase()}
+        aria-label={`Cor ${cor}`}
+        className={drawing.drawColor.toLowerCase() === cor.toLowerCase() ? 'selected' : ''}
+        style={{ background: cor }}
+        onClick={() => onChange({ drawColor: cor })}
+      />)}
+    </div>
+
+    <div className="quality-note"><strong>Como se desenha</strong><span>No quadro de quem está transmitindo, o lápis liga o modo de desenho. Arrastar faz um traço; um toque sem arrastar deixa um apontador que pulsa. Enquanto o lápis está ligado, o clique duplo para ampliar fica desativado naquele quadro.</span></div>
+  </section>;
+}
+
 function NetworkSettings({ preferences, onChange, onClose }: { preferences: NetworkPreferences; onChange: (patch: Partial<NetworkPreferences>) => void; onClose: () => void }) {
   const [alcance, setAlcance] = useState<Tracked<DirectReport>>(() => untracked<DirectReport>());
   const montado = useRef(true);

@@ -84,3 +84,33 @@ export class AuthRateLimiter {
     return this.entries.size;
   }
 }
+
+
+// Vazão de eventos curtos e frequentes — hoje, os pontos de desenho sobre uma
+// transmissão. Uma mão desenhando produz algumas mensagens por segundo; um
+// cliente adulterado produziria milhares, e cada uma é reenviada para a sala
+// inteira. O balde deixa a mão passar e corta a inundação.
+//
+// Estado em memória e por socket: quando o socket cai, o balde vai junto.
+export class TokenBucket {
+  private tokens: number;
+  private lastRefillAt: number;
+
+  constructor(private readonly capacity = 60, private readonly refillPerSecond = 30, now = Date.now()) {
+    this.tokens = capacity;
+    this.lastRefillAt = now;
+  }
+
+  take(now = Date.now(), cost = 1): boolean {
+    const decorrido = Math.max(0, now - this.lastRefillAt) / 1_000;
+    this.tokens = Math.min(this.capacity, this.tokens + decorrido * this.refillPerSecond);
+    this.lastRefillAt = now;
+    if (this.tokens < cost) return false;
+    this.tokens -= cost;
+    return true;
+  }
+
+  get available(): number {
+    return this.tokens;
+  }
+}

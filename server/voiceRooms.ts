@@ -1,5 +1,6 @@
 import type { PublicUser, VoiceState } from '../shared/types.js';
 import { betterHost } from '../shared/directLink.js';
+import { STROKE_LIFETIME_MS } from '../shared/telestration.js';
 
 export interface ParticipantInput extends PublicUser {
   socketId: string;
@@ -21,6 +22,8 @@ export class VoiceRooms {
     room.set(participant.socketId, {
       ...participant,
       reachability: Math.max(0, Math.min(100, Math.round(participant.reachability ?? 0))),
+      allowDraw: true,
+      drawLifetime: STROKE_LIFETIME_MS,
       joinedAt: this.sequence++,
       isHost: room.size === 0,
       pingMs: 9999,
@@ -63,7 +66,7 @@ export class VoiceRooms {
     return changed;
   }
 
-  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio'>>): VoiceState[] {
+  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'allowDraw' | 'drawLifetime'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
     if (participant) {
       Object.assign(participant, patch);

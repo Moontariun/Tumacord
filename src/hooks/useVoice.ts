@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { GtcrnWorkletNode } from '@sapphi-red/web-noise-suppressor';
 import gtcrnWorkletSource from '@sapphi-red/web-noise-suppressor/gtcrnWorklet.js?raw';
@@ -19,6 +19,8 @@ import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/media
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
+import { STROKE_LIFETIME_MS, applyDrawMessage, dropAuthor, expireStrokes, type DrawMessage, type DrawStroke } from '../../shared/telestration';
+import type { DrawPreferences } from '../lib/drawPreferences';
 
 export type { StreamQuality } from '../lib/screenQuality';
 
@@ -106,6 +108,9 @@ interface UseVoiceOptions {
   onDevicesChanged: () => Promise<void>;
   onHostHandoff: (host: VoiceState, channelId: string, abrupt: boolean) => void;
   dynamicHosting: boolean;
+  // Quem transmite decide se aceita desenho e por quanto tempo o traço fica.
+  // As duas viajam no estado de voz; a cor é local de quem desenha.
+  drawing: DrawPreferences;
 }
 
 export const qualityOptions = screenQualityOptions;
@@ -352,7 +357,7 @@ async function captureIsolatedScreenAudio(deviceName: string): Promise<MediaStre
   });
 }
 
-export function useVoice({ socket, user, preferences, onError, onDevicesChanged, onHostHandoff, dynamicHosting }: UseVoiceOptions) {
+export function useVoice({ socket, user, preferences, onError, onDevicesChanged, onHostHandoff, dynamicHosting, drawing }: UseVoiceOptions) {
   const [channelId, setChannelId] = useState<string | null>(null);
   const channelRef = useRef<string | null>(null);
   const [members, setMembers] = useState<VoiceState[]>([]);
@@ -370,8 +375,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
   const [showShareSetup, setShowShareSetup] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
+  // Qual fonte está no ar. A janela sobreposta ao desktop só sabe onde pintar
+  // quando o que se transmite é um monitor inteiro: aí o quadro é o monitor.
+  const [screenSource, setScreenSource] = useState<{ id: string; kind: DesktopSource['kind'] } | null>(null);
   const [shareBusy, setShareBusy] = useState(false);
   const [peerHealth, setPeerHealth] = useState<Record<string, PeerHealth>>({});
+  // Traços por transmissão anotada, com a chave sendo o socket de quem
+  // transmite — inclusive o próprio, quando desenham na minha tela.
+  const [drawings, setDrawings] = useState<Record<string, DrawStroke[]>>({});
+  const drawingRef = useRef(drawing);
+  drawingRef.current = drawing;
   const peers = useRef(new Map<string, PeerConnectionState>());
   const localStreams = useRef(new Map<'microphone' | 'camera' | 'screen', MediaStream>());
   const streamMeta = useRef(new Map<string, StreamMeta['kind']>());
@@ -482,7 +495,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     microphoneFault.current = { ...state, kind, since: Date.now() };
   }, []);
 
-  const publishState = useCallback((patch: Record<string, boolean>) => socket?.emit('voice:state', patch), [socket]);
+  // `drawLifetime` é número; o resto continua sendo bandeira. O servidor
+  // valida cada chave de novo, então o tipo aqui é só conveniência de quem
+  // escreve a chamada.
+  const publishState = useCallback((patch: Record<string, boolean | number>) => socket?.emit('voice:state', patch), [socket]);
 
   const stopSpeakingMonitor = useCallback(() => {
     const monitor = speakingMonitor.current;
@@ -980,6 +996,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
       screenAudioRecovery.current.timer = undefined;
       setScreenOn(false);
+      setScreenSource(null);
       setShowShareSetup(false);
       setShowSourcePicker(false);
       publishState({ screen: false, screenAudio: false });
@@ -1302,6 +1319,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         screen: localStreams.current.has('screen'),
         screenAudio: screenAudioEnabled.current,
         speaking: false,
+        allowDraw: drawingRef.current.allowDraw,
+        drawLifetime: drawingRef.current.drawLifetime,
       });
       playSound('join');
     });
@@ -1346,6 +1365,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     setMembers([]);
     setRemoteMedia([]);
     setPeerHealth({});
+    setDrawings({});
     setCameraOn(false);
     setScreenOn(false);
     setShowShareSetup(false);
@@ -1392,6 +1412,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       missingScreenSince.current.delete(peerId);
       missingVoiceSince.current.delete(peerId);
       updatePeerHealth(peerId);
+      // A transmissão dele acabou junto, e os traços que ele desenhou nas
+      // outras também: nada sobra apontando para quem não está mais aqui.
+      setDrawings((atual) => {
+        const proximo: Record<string, DrawStroke[]> = {};
+        for (const [alvo, tracos] of Object.entries(atual)) {
+          if (alvo === peerId) continue;
+          proximo[alvo] = dropAuthor(tracos, peerId);
+        }
+        return proximo;
+      });
       refreshRemote();
       playSound('leave');
     };
@@ -1407,6 +1437,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         screen: localStreams.current.has('screen'),
         screenAudio: screenAudioEnabled.current,
         speaking: speakingRef.current,
+        allowDraw: drawingRef.current.allowDraw,
+        drawLifetime: drawingRef.current.drawLifetime,
       });
       if (shouldInitiateRecovery(selfId.current, peer.socketId)) void negotiateRef.current(peer.socketId);
     };
@@ -1467,6 +1499,19 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       const state = peers.current.get(from);
       if (state) state.receiverFrozenUntil = Date.now() + 8_000;
     };
+    const onDraw = (payload: DrawMessage & { author: string; authorName: string }) => {
+      if (!payload?.target || typeof payload.author !== 'string') return;
+      setDrawings((atual) => {
+        const proximos = applyDrawMessage(atual[payload.target] ?? [], payload, Date.now());
+        if (proximos === atual[payload.target]) return atual;
+        if (!proximos.length) {
+          if (!(payload.target in atual)) return atual;
+          const { [payload.target]: _limpo, ...resto } = atual;
+          return resto;
+        }
+        return { ...atual, [payload.target]: proximos };
+      });
+    };
     const onResync = ({ from }: { from: string }) => recoverPeer(from, 'pedido do outro participante', false);
     const onHandoff = ({ channelId: handoffChannel, host }: { channelId: string; host: VoiceState }) => {
       if (!dynamicHosting) return;
@@ -1494,6 +1539,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket.on('rtc:ice', onIce);
     socket.on('rtc:stream-meta', onMeta);
     socket.on('rtc:stream-health', onStreamHealth);
+    socket.on('rtc:draw', onDraw);
     socket.on('rtc:resync', onResync);
     socket.on('voice:host-handoff', onHandoff);
     socket.on('disconnect', onDisconnect);
@@ -1506,11 +1552,68 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       socket.off('rtc:ice', onIce);
       socket.off('rtc:stream-meta', onMeta);
       socket.off('rtc:stream-health', onStreamHealth);
+      socket.off('rtc:draw', onDraw);
       socket.off('rtc:resync', onResync);
       socket.off('voice:host-handoff', onHandoff);
       socket.off('disconnect', onDisconnect);
     };
   }, [createPeer, dynamicHosting, flushPendingCandidates, onHostHandoff, publishState, recoverPeer, refreshRemote, socket, updatePeerHealth]);
+
+  // Enviar é só empurrar; o servidor é quem confere se aquela transmissão
+  // aceita desenho. Esconder o botão do outro lado é conveniência, não
+  // permissão — a mesma regra que vale no painel de administração.
+  const sendDraw = useCallback((message: DrawMessage) => {
+    if (!socket || !channelRef.current) return;
+    socket.emit('rtc:draw', message);
+  }, [socket]);
+
+  // Os traços vencem sozinhos, e é preciso alguém olhando o relógio: sem isto
+  // o último traço de uma live ficaria parado até chegar outro evento. O
+  // relógio só existe enquanto houver traço com prazo para vencer.
+  const drawingLifetimes = useMemo(() => {
+    const porAlvo: Record<string, number> = {};
+    for (const member of members) porAlvo[member.socketId] = member.drawLifetime ?? STROKE_LIFETIME_MS;
+    return porAlvo;
+  }, [members]);
+  const lifetimesRef = useRef(drawingLifetimes);
+  lifetimesRef.current = drawingLifetimes;
+
+  const temPrazoCorrendo = Object.entries(drawings).some(([alvo, tracos]) => tracos.length && (drawingLifetimes[alvo] ?? STROKE_LIFETIME_MS) !== 0);
+  useEffect(() => {
+    if (!temPrazoCorrendo) return;
+    const timer = window.setInterval(() => {
+      const agora = Date.now();
+      setDrawings((atual) => {
+        let mudou = false;
+        const proximo: Record<string, DrawStroke[]> = {};
+        for (const [alvo, tracos] of Object.entries(atual)) {
+          const vivos = expireStrokes(tracos, agora, lifetimesRef.current[alvo] ?? STROKE_LIFETIME_MS);
+          if (vivos !== tracos) mudou = true;
+          if (vivos.length) proximo[alvo] = vivos;
+          else mudou = true;
+        }
+        return mudou ? proximo : atual;
+      });
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [temPrazoCorrendo]);
+
+  // Mudar a preferência no meio da call precisa valer na hora: quem assiste lê
+  // `allowDraw` do estado de voz para saber se mostra o botão, e o servidor lê
+  // o mesmo campo para aceitar ou recusar o traço.
+  useEffect(() => {
+    if (!channelId) return;
+    publishState({ allowDraw: drawing.allowDraw, drawLifetime: drawing.drawLifetime });
+    // Desligar não deixa para trás o que já estava na tela.
+    if (!drawing.allowDraw && selfId.current) {
+      socket?.emit('rtc:draw', { target: selfId.current, strokeId: 'off', color: '#ffffff', points: [], clearAll: true });
+      setDrawings((atual) => {
+        if (!(selfId.current in atual)) return atual;
+        const { [selfId.current]: _limpo, ...resto } = atual;
+        return resto;
+      });
+    }
+  }, [channelId, drawing.allowDraw, drawing.drawLifetime, publishState, socket]);
 
   const leaveRef = useRef(leave);
   leaveRef.current = leave;
@@ -2124,6 +2227,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         windowAudio: 'window',
       } as DisplayMediaStreamOptions);
       setShowShareSetup(false);
+      setScreenSource(null);
       await attachStream('screen', stream, selectedQuality, captureGeneration);
     } catch (error) {
       if ((error as DOMException).name !== 'NotAllowedError') onError(error instanceof Error ? error.message : 'Não consegui compartilhar a tela.');
@@ -2133,7 +2237,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     }
   };
 
-  async function shareDesktopSource(sourceId: string, _sourceKind: DesktopSource['kind'], captureGeneration = mediaCaptureGeneration.current.screen): Promise<void> {
+  async function shareDesktopSource(sourceId: string, sourceKind: DesktopSource['kind'], captureGeneration = mediaCaptureGeneration.current.screen): Promise<void> {
     if (shareCapture.current) return;
     if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) return;
     shareCapture.current = true;
@@ -2198,6 +2302,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       ]);
       if (!includeAudio) screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
       const attached = await attachStream('screen', stream, selectedQuality, captureGeneration);
+      setScreenSource(attached ? { id: sourceId, kind: sourceKind } : null);
       if (!attached && routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     } catch (error) {
       capturedDisplay?.getTracks().forEach((track) => track.stop());
@@ -2265,6 +2370,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     mediaSnapshot,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
+    drawings, sendDraw, screenSource,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
     showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource,

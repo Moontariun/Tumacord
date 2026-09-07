@@ -1,5 +1,55 @@
 # Histórico de versões
 
+## 0.8.7 — desenhar na tela de quem está transmitindo
+
+Quem assiste a uma transmissão pode rabiscar em cima dela para apontar alguma
+coisa. O traço aparece para quem transmite, para quem desenhou e para todo mundo
+que estiver vendo a mesma live — e, quando o que se compartilha é o monitor
+inteiro, ele aparece **sobre o desktop de verdade**, não só dentro do Tumacord.
+É o que permite continuar olhando para o jogo ou para o editor e ainda ver o que
+estão apontando.
+
+**A permissão é de quem transmite**
+
+- em **Configurações › Desenho na tela**, a chave **Deixar quem assiste desenhar na minha transmissão**. Desligada, o lápis some do quadro para quem está vendo, o que já estava desenhado é apagado na hora, e o servidor passa a **recusar** qualquer traço destinado à sua tela — nem um cliente modificado desenha nela. Esconder o botão é conveniência; quem decide é o servidor, a mesma regra que já vale no painel de administração;
+- religar volta a funcionar na hora, sem precisar sair e entrar na call.
+
+**Quanto tempo o traço fica, incluindo "para sempre"**
+
+- quatro escolhas: **3 s**, **6 s** (padrão), **15 s** e **não apagar sozinho**. Também de quem transmite, porque é a mesma tela e a mesma decisão;
+- com prazo, o traço desaparece suave em vez de piscar — o desvanecimento é um terço da vida, no máximo dois segundos;
+- **sem prazo**, o desenho fica parado até alguém limpar. São três os caminhos: quem desenhou limpa o próprio traço, quem transmite limpa tudo pelo borrachinha no canto do quadro, e tudo é apagado quando a transmissão termina. Um teto de 64 traços é o que impede a tela de virar um borrão depois de meia hora.
+
+**As mecânicas**
+
+- **arrastar** faz um traço; **um toque sem arrastar** deixa um apontador que pulsa e some — o "olha aqui" mais curto que existe;
+- **cada pessoa desenha na própria cor**, que começa igual à cor de destaque do perfil e pode ser trocada em uma paleta de seis. Dá para saber quem apontou o quê sem legenda nenhuma;
+- o traço sai com um contorno escuro por baixo: sem ele um traço claro some sobre um fundo claro, que é metade do que se transmite;
+- o lápis liga e desliga o modo de desenho por quadro. Desligado, a camada não intercepta clique nenhum — o duplo clique que amplia e o arrasto da janela flutuante continuam como sempre.
+
+**Coordenadas que significam a mesma coisa nas duas pontas**
+
+- um ponto viaja como fração de 0 a 1 do quadro capturado, nunca em pixels. Quem desenha em uma janela de 600 px e quem transmite em 4K veem o traço no mesmo lugar do conteúdo;
+- as barras pretas do `object-fit: contain` são descontadas: sem isso o traço escorrega, e o erro cresce quanto mais diferentes forem as duas janelas. Clique na barra preta não vira traço.
+
+**A janela sobreposta ao desktop**
+
+- transparente, sem moldura, sempre no topo, sem roubar foco e deixando o clique passar. Ela cobre o monitor que está sendo capturado;
+- **só para monitor inteiro.** Capturando uma janela, o quadro é aquela janela — e não dá para saber onde ela está na tela nem se ela se moveu desde então. Nesse caso a sobreposição não abre e o desenho continua aparecendo dentro do aplicativo, que é onde as coordenadas fecham;
+- transparência, alfinete e clique-passante dependem do compositor. Toda chamada de enfeite é tentada e esquecida: um KDE, GNOME ou DWM que recuse não derruba nada, e a camada de dentro do aplicativo continua funcionando.
+
+**Limites, que é onde mora a proteção**
+
+- um balde de fichas por socket no servidor: a mão de quem desenha passa, a inundação de um cliente adulterado não — cada mensagem é reenviada para a sala inteira;
+- coordenada fora da faixa é grampeada, cor que não é `#rrggbb` cai na cor padrão, traço interminável é cortado em 600 pontos, e nada disso derruba o servidor;
+- só se desenha sobre uma transmissão que existe, de alguém que está na mesma call e que permite. Limpar tudo é só de quem transmite.
+
+**Compatibilidade**
+
+- `allowDraw` e `drawLifetime` são campos novos e opcionais no estado de voz. Um cliente anterior à 0.8.7 não os envia, e ausência é lida como permitido — o padrão de quem tem a versão nova. Ele simplesmente não desenha nem vê traço;
+- nada mudou em convite, sinalização de mídia, banco de dados ou API;
+- 448 testes, contra 404 na 0.8.6. Os 44 novos cobrem geometria, prazo, limites, e o fluxo inteiro contra um servidor de verdade — inclusive a recusa com a opção desligada.
+
 ## 0.8.6 — o aparelho removido volta a sumir da lista
 
 Validação de release da 0.8.5. Ela encontrou **um** defeito, e ele tinha sido

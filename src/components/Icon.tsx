@@ -5,7 +5,7 @@ export type IconName =
   | 'settings' | 'leave' | 'plus' | 'users' | 'send' | 'host' | 'close'
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
-  | 'shield' | 'refresh' | 'popOut' | 'popIn';
+  | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -15,6 +15,8 @@ const MIC_BODY = 'M12 3.4a2.7 2.7 0 0 1 2.7 2.7v5.4a2.7 2.7 0 0 1-5.4 0V6.1A2.7 
 const MIC_STAND = 'M5.8 11.3v.7a6.2 6.2 0 0 0 12.4 0v-.7M12 18.2v2.4M8.6 20.6h6.8';
 
 const glyphs: Record<IconName, ReactNode> = {
+  pencil: <><path d="M4.2 19.8h3.4L18.9 8.5a2.4 2.4 0 0 0-3.4-3.4L4.2 16.4v3.4Z" /><path d="M14.4 6.2l3.4 3.4" /></>,
+  eraser: <><path d="M8.6 19.8H19.8" /><path d="M6.2 17.4 4.5 15.7a1.8 1.8 0 0 1 0-2.5l8-8a1.8 1.8 0 0 1 2.5 0l4.3 4.3a1.8 1.8 0 0 1 0 2.5l-6.1 6.1H8.7l-2.5-1.7Z" /></>,
   hash: <path d="M10.2 3.6 8.2 20.4M15.8 3.6l-2 16.8M4.4 9h15.2M3.8 15h15.2" />,
   voice: <><path d={SPEAKER} /><path d="M15.2 9.6a3.4 3.4 0 0 1 0 4.8" /><path d="M17.9 6.9a7.2 7.2 0 0 1 0 10.2" /></>,
   volume: <><path d={SPEAKER} /><path d="M15.2 9.6a3.4 3.4 0 0 1 0 4.8" /><path d="M17.9 6.9a7.2 7.2 0 0 1 0 10.2" /></>,

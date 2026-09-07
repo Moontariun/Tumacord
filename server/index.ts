@@ -11,10 +11,11 @@ import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
+import { MAX_POINTS_PER_STROKE, parseDrawLifetime } from '../shared/telestration.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hashToken, normalizeInviteToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
-import { AuthRateLimiter } from './rateLimit.js';
+import { AuthRateLimiter, TokenBucket } from './rateLimit.js';
 import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
 import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
@@ -188,6 +189,17 @@ const rtcIceSchema = z.object({
 const rtcResyncSchema = z.object({ target: rtcTargetSchema });
 const rtcStreamHealthSchema = z.object({ target: rtcTargetSchema, frozen: z.boolean() });
 const rtcStreamMetaSchema = z.object({ target: rtcTargetSchema, meta: z.object({ streamId: z.string().min(1).max(256), kind: z.enum(['camera', 'screen']) }) });
+// Desenho sobre a transmissão de alguém. `target` é quem transmite: é dele a
+// tela, e é dele a permissão.
+const rtcDrawSchema = z.object({
+  target: rtcTargetSchema,
+  strokeId: z.string().min(1).max(64),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  points: z.array(z.object({ x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1) })).max(MAX_POINTS_PER_STROKE),
+  done: z.boolean().optional(),
+  clear: z.boolean().optional(),
+  clearAll: z.boolean().optional(),
+});
 
 app.get('/api/health', (_request, response) => {
   response.json({
@@ -1001,7 +1013,12 @@ io.on('connection', (socket) => {
 
   socket.on('voice:state', (patch: unknown) => {
     const channelId = rooms.roomOf(socket.id);
-    const parsed = z.object({ muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(), camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional() }).safeParse(patch);
+    const parsed = z.object({
+      muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(),
+      camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional(),
+      allowDraw: z.boolean().optional(),
+      drawLifetime: z.number().optional().transform((value) => (value === undefined ? undefined : parseDrawLifetime(value))),
+    }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
     broadcastSnapshot();
@@ -1036,6 +1053,33 @@ io.on('connection', (socket) => {
       io.to(target).emit(event, { ...forwarded, from: socket.id, user: socket.data.user as PublicUser });
     });
   }
+
+  // Um balde por socket: a mão de quem desenha passa, a inundação de um
+  // cliente adulterado não. Cada mensagem é reenviada para a sala inteira, e é
+  // por isso que o limite mora aqui e não no cliente.
+  const drawBucket = new TokenBucket();
+  socket.on('rtc:draw', (payload: unknown) => {
+    const parsed = rtcDrawSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const channelId = rooms.roomOf(socket.id);
+    if (!channelId || rooms.roomOf(parsed.data.target) !== channelId) return;
+    const dono = rooms.members(channelId).find((member) => member.socketId === parsed.data.target);
+    // Só se desenha sobre uma transmissão que existe, e cuja dona permite.
+    // `allowDraw` ausente é um cliente anterior à 0.8.7: permitido, como o
+    // padrão da versão nova.
+    if (!dono?.screen || dono.allowDraw === false) return;
+    // Limpar tudo é da dona da tela. Qualquer outro pode limpar só o que é seu.
+    if (parsed.data.clearAll && parsed.data.target !== socket.id) return;
+    if (!drawBucket.take()) return;
+    const { target, ...traco } = parsed.data;
+    io.to(`voice:${channelId}`).emit('rtc:draw', {
+      ...traco,
+      target,
+      from: socket.id,
+      author: socket.id,
+      authorName: (socket.data.user as PublicUser).username,
+    });
+  });
 
   socket.on('rtc:stream-meta', (payload: unknown) => {
     const parsed = rtcStreamMetaSchema.safeParse(payload);

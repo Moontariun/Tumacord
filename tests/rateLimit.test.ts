@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ATTEMPT_WINDOW_MS, AuthRateLimiter, BASE_DELAY_MS, FREE_ATTEMPTS, MAX_DELAY_MS } from '../server/rateLimit';
+import { ATTEMPT_WINDOW_MS, AuthRateLimiter, BASE_DELAY_MS, FREE_ATTEMPTS, MAX_DELAY_MS, TokenBucket } from '../server/rateLimit';
 
 // Medido no servidor sem limite: doze senhas erradas em 595 ms, todas 401.
 test('as primeiras tentativas passam; a partir do limite o bloqueio aparece', () => {
@@ -77,4 +77,38 @@ test('o mapa não cresce sem limite com origens descartáveis', () => {
   for (let i = 0; i < 500; i += 1) limiter.fail('renan', `10.0.0.${i}`, agora + i);
   assert.ok(limiter.size <= 50, `o mapa ficou com ${limiter.size} entradas`);
   assert.equal(limiter.check('renan', '10.0.0.499', agora + 499).allowed, true);
+});
+
+// O balde que segura os pontos de desenho. A mão de quem desenha produz alguns
+// pedidos por segundo; um cliente adulterado produziria milhares, e cada um é
+// reenviado para a sala inteira.
+test('o balde deixa a mão passar e corta a inundação', () => {
+  const balde = new TokenBucket(60, 30, 0);
+  let passaram = 0;
+  for (let i = 0; i < 500; i += 1) if (balde.take(0)) passaram += 1;
+  assert.equal(passaram, 60, 'o jorro instantâneo para na capacidade');
+  assert.equal(balde.take(0), false);
+});
+
+test('o balde se enche de novo com o tempo, no ritmo combinado', () => {
+  const balde = new TokenBucket(60, 30, 0);
+  while (balde.take(0)) { /* esvazia */ }
+  assert.equal(balde.take(500), true, 'meio segundo já devolve fichas');
+  const emUmSegundo = [...Array(60)].filter(() => balde.take(1_000)).length;
+  assert.ok(emUmSegundo >= 25 && emUmSegundo <= 45, `devolveu ${emUmSegundo} em um segundo`);
+});
+
+test('uma mão desenhando por um minuto nunca esbarra no balde', () => {
+  const balde = new TokenBucket(60, 30, 0);
+  // Oito pedidos por segundo é o ritmo de quem desenha, com o agrupamento de
+  // pontos que o cliente já faz.
+  let recusados = 0;
+  for (let ms = 0; ms < 60_000; ms += 125) if (!balde.take(ms)) recusados += 1;
+  assert.equal(recusados, 0);
+});
+
+test('o balde nunca guarda mais fichas do que cabe', () => {
+  const balde = new TokenBucket(60, 30, 0);
+  balde.take(10 * 60_000);
+  assert.ok(balde.available <= 60);
 });

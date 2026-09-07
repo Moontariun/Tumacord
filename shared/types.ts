@@ -86,6 +86,11 @@ export interface VoiceState extends PublicUser {
   camera: boolean;
   screen: boolean;
   screenAudio: boolean;
+  // Quem transmite decide se quem assiste pode desenhar em cima, e por quanto
+  // tempo o traço fica. Ausentes nos clientes anteriores à 0.8.7: `allowDraw`
+  // ausente é lido como permitido, que é o padrão de quem tem a versão nova.
+  allowDraw?: boolean;
+  drawLifetime?: number;
 }
 
 export interface ServerSnapshot {

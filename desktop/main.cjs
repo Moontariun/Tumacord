@@ -7,6 +7,7 @@ const { readNetworkPreferences, writeNetworkPreferences } = require('./network-p
 const { ScreenAudioRouter } = require('./audio-router.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
+const { DrawingOverlay } = require('./drawing-overlay.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
 // isso para manter a voz da call fora do áudio compartilhado.
@@ -49,6 +50,7 @@ let tray;
 let mediaFullscreenActive = false;
 let mediaFullscreenWasActive = false;
 const screenAudioRouter = new ScreenAudioRouter();
+const drawingOverlay = new DrawingOverlay();
 let quittingAfterAudioCleanup = false;
 let safeGpuRelaunching = false;
 const liveWindows = new Set();
@@ -204,6 +206,7 @@ async function createWindow() {
     child.on('closed', () => liveWindows.delete(child));
   });
   window.on('closed', () => {
+    drawingOverlay.close();
     for (const child of liveWindows) {
       if (!child.isDestroyed()) child.close();
     }
@@ -327,6 +330,22 @@ app.whenReady().then(async () => {
       return directLink.lastKnownReport();
     }
   });
+  // O renderer manda o que precisa ser pintado; a janela sobreposta abre, se
+  // atualiza ou fecha a partir disso. Sem transmissão de monitor inteiro, o
+  // pedido é recusado e o desenho fica só dentro do aplicativo.
+  ipcMain.handle('tumacord:draw-overlay', (_event, payload) => {
+    try {
+      if (!payload || !Array.isArray(payload.strokes) || !payload.strokes.length) {
+        drawingOverlay.close();
+        return false;
+      }
+      return drawingOverlay.show(payload);
+    } catch (error) {
+      appendRuntimeEvent(runtimeLogFile, { event: 'draw-overlay-failed', message: String(error && error.message ? error.message : error) });
+      drawingOverlay.close();
+      return false;
+    }
+  });
   ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery?.setHosting(details) ?? null);
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
@@ -370,6 +389,7 @@ app.on('before-quit', (event) => {
   if (!hasSingleInstanceLock) return;
   if (quittingAfterAudioCleanup) return;
   quittingAfterAudioCleanup = true;
+  drawingOverlay.close();
   discovery?.close();
   event.preventDefault();
   // Fechar o app sem devolver a regra de porta deixaria o roteador aceitando
