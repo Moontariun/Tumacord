@@ -1,5 +1,31 @@
 # Histórico de versões
 
+## 0.8.6 — o aparelho removido volta a sumir da lista
+
+Validação de release da 0.8.5. Ela encontrou **um** defeito, e ele tinha sido
+introduzido pela própria correção anterior.
+
+**A proteção contra o seletor piscando não tinha prazo**
+
+- a 0.8.5 parou o seletor de microfone, saída e câmera de esvaziar sozinho durante as rajadas de `devicechange` do PipeWire: um tipo que viesse vazio mantinha os aparelhos que já se conhecia;
+- só que essa preservação valia para sempre. **Quem tem um único microfone e o desconecta produz uma enumeração vazia que está CERTA** — e o aparelho continuava no seletor indefinidamente. Escolhê-lo falhava e caía no padrão do sistema com um aviso. Um defeito trocado por outro;
+- reproduzido: mil enumerações vazias seguidas e o `mic-usb` ainda listado;
+- agora a preservação é uma **janela de oito segundos**. Dentro dela, vazio é o navegador não contando; passada ela, vazio é a verdade. Oito segundos cobrem com folga a sacudida do grafo do PipeWire, que se assenta em um a três segundos e é o que a montagem do barramento da live provoca;
+- e um detalhe que a janela sozinha não resolvia: `devicechange` só chega quando algo muda. Desconectar o único microfone dispara um evento e mais nenhum — a janela venceria sem ninguém olhar. Quem preserva agora agenda um único reexame para o instante em que o prazo termina.
+
+**O resto da validação não encontrou defeito, e isso foi verificado, não presumido**
+
+- **teste de mutação**: os 16 defeitos corrigidos na 0.8.5 foram recolocados um a um no código, e em todos os casos a suíte reprovou. Um teste que passa com o bug de volta não protege nada; nenhum destes passou;
+- **convite**: 24 casos — código com espaço, quebra de linha e minúsculas; token curto, longo e fora do alfabeto; esquema, porta, credencial embutida e caminho inválidos no servidor; convite longo vencido; servidor fora do ar, lento, respondendo 404, 500, JSON sem `callId` e HTML de portal de wifi. Nenhum código inválido é resgatado pelo caminho de reserva, e nenhum deles chega a virar consulta de rede;
+- **endereço da interface**: caminhos com espaço, acento, `%`, parênteses e `C:\Program Files`. O `#` mereceu caso próprio: era o único em que a concatenação `file://` parecia certa e apontava para outro arquivo. A guarda de navegação continua recusando qualquer endereço que não seja o do próprio aplicativo, inclusive `file:///etc/passwd`, `javascript:` e `data:`;
+- **servidor embutido quebrado**, medido no aplicativo empacotado: a janela abre, o erro fica registrado no diagnóstico com o caminho que faltou, a tentativa acontece uma única vez e o processo segue de pé. Não há retry previsto pela arquitetura, e nenhum foi inventado aqui;
+- 404 testes, contra 389 na 0.8.5.
+
+**Compatibilidade**
+
+- nada mudou em convite, sinalização, banco de dados ou API. A única mudança de comportamento é a lista de dispositivos deixar de guardar um aparelho ausente por mais de oito segundos;
+- `preserveKnownDevices` passou a devolver `{ devices, absence, recheckInMs }` em vez de um vetor. É uma função interna da interface, não faz parte de nenhum contrato entre máquinas.
+
 ## 0.8.5 — a interface para de sumir sob carga, e o convite curto passa a ser aceito
 
 Esta versão é o resultado de uma auditoria da 0.8.4. Ela não muda formato de

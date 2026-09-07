@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { beginLoad, failLoad, isBlank, settle, untracked, type Tracked } from '../src/lib/freshness';
-import { preserveKnownDevices, visibleAudioInputs, visibleVideoInputs } from '../src/hooks/useDevices';
+import { DEVICE_ABSENCE_GRACE_MS, preserveKnownDevices, visibleAudioInputs, visibleVideoInputs } from '../src/hooks/useDevices';
 
 // Simulação das condições que faziam a interface piscar sob carga alta.
 //
@@ -102,19 +102,29 @@ test('rajada de devicechange com respostas incompletas não esvazia o seletor', 
     { kind: 'videoinput', deviceId: 'cam', label: 'Webcam' },
   ] as MediaDeviceInfo[];
   const sortear = sorteioDeterministico(7);
-  let lista = preserveKnownDevices([], reais);
+  let estado = preserveKnownDevices([], reais, {}, 0);
 
-  for (let evento = 0; evento < 200; evento += 1) {
+  // 200 eventos em vinte segundos: mais denso do que qualquer rajada real, e
+  // muito além da janela de preservação — que aqui não pode salvar nada, porque
+  // o aparelho continua aparecendo em enumerações boas o tempo todo.
+  for (let evento = 1; evento <= 200; evento += 1) {
+    const agora = evento * 100;
     const sorte = sortear();
-    // Metade das enumerações volta vazia ou só com as entradas virtuais do
+    // Parte das enumerações volta vazia ou só com as entradas virtuais do
     // Chromium, que é o que acontece enquanto o grafo do PipeWire reassenta.
     const enumeracao = sorte < 0.3 ? [] as MediaDeviceInfo[]
       : sorte < 0.5 ? [{ kind: 'audioinput', deviceId: 'default', label: '' }] as MediaDeviceInfo[]
       : reais;
-    lista = preserveKnownDevices(lista, enumeracao);
-    assert.equal(visibleAudioInputs(lista).length, 1, `evento ${evento}: o microfone sumiu da lista`);
-    assert.equal(visibleVideoInputs(lista).length, 1, `evento ${evento}: a câmera sumiu da lista`);
+    estado = preserveKnownDevices(estado.devices, enumeracao, estado.absence, agora);
+    assert.equal(visibleAudioInputs(estado.devices).length, 1, `evento ${evento}: o microfone sumiu da lista`);
+    assert.equal(visibleVideoInputs(estado.devices).length, 1, `evento ${evento}: a câmera sumiu da lista`);
   }
+
+  // E, encerrada a rajada, um sumiço que persiste além da janela é aceito.
+  const agora = 200 * 100;
+  let sumindo = preserveKnownDevices(estado.devices, [], estado.absence, agora);
+  sumindo = preserveKnownDevices(sumindo.devices, [], sumindo.absence, agora + DEVICE_ABSENCE_GRACE_MS + 1);
+  assert.deepEqual(visibleAudioInputs(sumindo.devices), [], 'preservar não pode virar memória eterna');
 });
 
 // E o contrário também precisa valer: um aparelho realmente desligado sai.
@@ -123,9 +133,9 @@ test('quando o navegador responde de verdade, o aparelho removido some', () => {
     { kind: 'audioinput', deviceId: 'mic-usb', label: 'USB PnP Sound Device' },
     { kind: 'audioinput', deviceId: 'mic-webcam', label: 'Microfone da webcam' },
   ] as MediaDeviceInfo[];
-  const comOsDois = preserveKnownDevices([], dois);
+  const comOsDois = preserveKnownDevices([], dois).devices;
   assert.equal(visibleAudioInputs(comOsDois).length, 2);
 
-  const soUm = preserveKnownDevices(comOsDois, [dois[1]]);
+  const soUm = preserveKnownDevices(comOsDois, [dois[1]]).devices;
   assert.deepEqual(visibleAudioInputs(soUm).map((device) => device.deviceId), ['mic-webcam']);
 });

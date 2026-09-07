@@ -77,15 +77,57 @@ export function visibleVideoInputs<T extends Pick<MediaDeviceInfo, 'kind' | 'dev
 // se sabia; um tipo que veio com pelo menos um aparelho é aceito inteiro,
 // porque aí o navegador está mesmo respondendo e um aparelho desligado
 // precisa sumir da lista.
+//
+// Mas preservar não pode ser para sempre. Quem tem um único microfone e o
+// desconecta produz uma enumeração vazia que está CERTA, e a lista boa
+// anterior virava um aparelho fantasma que nunca saía do seletor: escolhê-lo
+// falhava e caía no padrão do sistema. Trocar um defeito por outro.
+//
+// Por isso a preservação é uma janela. Dentro dela, vazio é o navegador não
+// contando; passada ela, vazio é a verdade. Oito segundos cobrem com folga a
+// sacudida do grafo do PipeWire — que se assenta em um a três segundos, e é o
+// que a montagem do barramento da live provoca — sem deixar um aparelho
+// removido de verdade parado na tela tempo suficiente para alguém confiar
+// nele.
 const DEVICE_KINDS: readonly MediaDeviceKind[] = ['audioinput', 'audiooutput', 'videoinput'];
+export const DEVICE_ABSENCE_GRACE_MS = 8_000;
 
-export function preserveKnownDevices<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(previous: readonly T[], next: readonly T[]): T[] {
+/** Desde quando cada tipo vem vazio. Tipo ausente daqui não está vazio. */
+export type DeviceAbsence = Partial<Record<MediaDeviceKind, number>>;
+
+export interface PreservedDevices<T> {
+  devices: T[];
+  absence: DeviceAbsence;
+  /** Quanto falta para a janela do tipo que vence primeiro; ausente se nada foi resgatado. */
+  recheckInMs?: number;
+}
+
+export function preserveKnownDevices<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(
+  previous: readonly T[],
+  next: readonly T[],
+  absence: DeviceAbsence = {},
+  now = Date.now(),
+  graceMs = DEVICE_ABSENCE_GRACE_MS,
+): PreservedDevices<T> {
   const resgatados: T[] = [];
+  const proxima: DeviceAbsence = {};
+  let recheckInMs: number | undefined;
   for (const kind of DEVICE_KINDS) {
     if (realDevices(next, kind).length) continue;
-    resgatados.push(...realDevices(previous, kind));
+    const vazioDesde = absence[kind] ?? now;
+    proxima[kind] = vazioDesde;
+    const restante = graceMs - (now - vazioDesde);
+    if (restante <= 0) continue;
+    const conhecidos = realDevices(previous, kind);
+    if (!conhecidos.length) continue;
+    resgatados.push(...conhecidos);
+    recheckInMs = recheckInMs === undefined ? restante : Math.min(recheckInMs, restante);
   }
-  return resgatados.length ? [...next, ...resgatados] : [...next];
+  return {
+    devices: resgatados.length ? [...next, ...resgatados] : [...next],
+    absence: proxima,
+    ...(recheckInMs === undefined ? {} : { recheckInMs }),
+  };
 }
 
 export function reconcileDevicePreferences<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label'>>>(preferences: DevicePreferences, devices: readonly T[]): DevicePreferences {
@@ -126,6 +168,17 @@ export function useDevices() {
   // começou antes pode terminar depois — gravando por cima da mais nova uma
   // lista já vencida. O número da consulta resolve isso.
   const consulta = useRef(0);
+  // A lista publicada e a memória de quais tipos estão vindo vazios. Ficam em
+  // ref porque o cálculo precisa acontecer fora do atualizador do React: um
+  // atualizador tem de ser puro, e este passo escreve memória.
+  const listaRef = useRef<MediaDeviceInfo[]>([]);
+  const ausencia = useRef<DeviceAbsence>({});
+  // `devicechange` só chega quando algo muda. Desconectar o único microfone
+  // dispara um evento e mais nenhum: sem este reexame, a janela de preservação
+  // venceria sem ninguém olhar e o aparelho fantasma ficaria na tela até o
+  // próximo evento — que pode não vir nunca.
+  const reexame = useRef<number | undefined>(undefined);
+  const refreshRef = useRef<() => void>(() => undefined);
 
   const refresh = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -133,7 +186,14 @@ export function useDevices() {
     try {
       const enumerados = await navigator.mediaDevices.enumerateDevices();
       if (pedido !== consulta.current) return;
-      setDevices((anteriores) => preserveKnownDevices(anteriores, enumerados));
+      const preservado = preserveKnownDevices(listaRef.current, enumerados, ausencia.current);
+      ausencia.current = preservado.absence;
+      listaRef.current = preservado.devices;
+      setDevices(preservado.devices);
+      if (reexame.current) window.clearTimeout(reexame.current);
+      reexame.current = preservado.recheckInMs === undefined
+        ? undefined
+        : window.setTimeout(() => { reexame.current = undefined; refreshRef.current(); }, preservado.recheckInMs + 50);
       setPreferencesState((current) => {
         const next = reconcileDevicePreferences(current, enumerados);
         if (next.microphoneId === current.microphoneId && next.cameraId === current.cameraId && next.speakerId === current.speakerId) return current;
@@ -146,11 +206,16 @@ export function useDevices() {
       // devicechange, sem criar uma rejeição não tratada no React.
     }
   }, []);
+  refreshRef.current = () => { void refresh(); };
 
   useEffect(() => {
     void refresh();
     navigator.mediaDevices?.addEventListener('devicechange', refresh);
-    return () => navigator.mediaDevices?.removeEventListener('devicechange', refresh);
+    return () => {
+      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
+      if (reexame.current) window.clearTimeout(reexame.current);
+      reexame.current = undefined;
+    };
   }, [refresh]);
 
   const setPreferences = (next: DevicePreferences) => {

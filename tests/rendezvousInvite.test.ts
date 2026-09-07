@@ -180,3 +180,112 @@ test('um código que não é convite nenhum não vira consulta de rede', async (
   assert.equal(await resolveAnyInvite('bom dia', { fetchImpl }), null);
   assert.equal(consultou, false);
 });
+
+// Validação de release: os casos que um convite encontra no mundo real.
+//
+// A regra que sustenta todos eles: o caminho de reserva existe para reconhecer
+// o formato antigo, nunca para aceitar um código que o formato atual recusou.
+// Um convite inválido não pode entrar pela porta dos fundos.
+const respostaBoa: typeof fetch = async () => new Response(JSON.stringify({ callId: 'call-geral', callName: 'Call do grupo', hostUsername: 'Moontariun' }), { status: 200 });
+
+test('convite curto com espaços, quebras e minúsculas continua sendo o mesmo convite', async () => {
+  for (const sujo of [
+    ' TUMA2~call.exemplo.com~7K3P9QXM2W4V ',
+    'tuma2~call.exemplo.com~7k3p9qxm2w4v',
+    'TUMA2~call.exemplo.com~7K3P 9QXM 2W4V',
+    'TUMA2~call.exemplo.com~7K3P9QXM2W4V\n',
+  ]) {
+    assert.equal(inviteFormat(sujo), 'short', `não reconheceu: ${JSON.stringify(sujo)}`);
+    const resolvido = await resolveAnyInvite(sujo, { fetchImpl: respostaBoa });
+    assert.equal(resolvido?.invite.key, '7K3P9QXM2W4V', `não resolveu: ${JSON.stringify(sujo)}`);
+  }
+});
+
+test('código malformado é recusado, e a reserva não o resgata', async () => {
+  const ruins = [
+    '',
+    '   ',
+    'bom dia',
+    'TUMA2',
+    'TUMA2~call.exemplo.com',
+    'TUMA2~call.exemplo.com~',
+    'TUMA2~~7K3P9QXM2W4V',
+    'TUMA2~call.exemplo.com~7K3P9QXM2W4',      // token curto demais
+    'TUMA2~call.exemplo.com~7K3P9QXM2W4VX',    // token longo demais
+    'TUMA2~call.exemplo.com~IIIIOOOO1111',     // fora do alfabeto
+    'TUMA2~ftp://call.exemplo.com~7K3P9QXM2W4V',
+    'TUMA2~javascript:alert(1)~7K3P9QXM2W4V',
+    'TUMA2~call.exemplo.com:999999~7K3P9QXM2W4V',  // porta inválida
+    'TUMA2~usuario:senha@call.exemplo.com~7K3P9QXM2W4V',
+    'TUMA2~call.exemplo.com/caminho~7K3P9QXM2W4V',
+    'TUMA3~call.exemplo.com~7K3P9QXM2W4V',
+    'TUMA1.naoehbase64.zz',
+  ];
+  for (const ruim of ruins) {
+    assert.equal(inviteFormat(ruim), null, `a interface aceitou o formato: ${JSON.stringify(ruim)}`);
+    let consultou = false;
+    const espiao: typeof fetch = async (...args) => { consultou = true; return respostaBoa(...args); };
+    assert.equal(await resolveAnyInvite(ruim, { fetchImpl: espiao }), null, `a reserva resgatou: ${JSON.stringify(ruim)}`);
+    assert.equal(consultou, false, `${JSON.stringify(ruim)} não deveria virar consulta de rede`);
+  }
+});
+
+test('convite longo vencido é recusado, e a reserva não o resgata', async () => {
+  forgetCachedInvite();
+  const doisDiasAtras = Date.now() - 48 * 60 * 60 * 1000;
+  const vencido = buildInvite({ ...call, server: 'https://call.exemplo.com', key: KEY }, doisDiasAtras)!;
+  assert.equal(readInvite(vencido), null, 'o convite precisa estar vencido');
+  assert.equal(inviteFormat(vencido), null);
+  assert.equal(await resolveAnyInvite(vencido, { fetchImpl: respostaBoa }), null);
+  forgetCachedInvite();
+});
+
+test('servidor fora do ar: o convite continua válido, mas não resolve', async () => {
+  const codigo = encodeShortInvite({ server: 'https://call.exemplo.com', token: '7K3P9QXM2W4V' })!;
+  const caiu: typeof fetch = async () => { throw new TypeError('fetch failed'); };
+  assert.equal(inviteFormat(codigo), 'short', 'o formato continua reconhecido — é o alcance que falhou');
+  assert.equal(await resolveAnyInvite(codigo, { fetchImpl: caiu }), null);
+});
+
+test('servidor que responde qualquer coisa não vira uma call', async () => {
+  const codigo = encodeShortInvite({ server: 'https://call.exemplo.com', token: '7K3P9QXM2W4V' })!;
+  const respostas: Array<[string, typeof fetch]> = [
+    ['404', async () => new Response('{"error":"não existe"}', { status: 404 })],
+    ['500', async () => new Response('erro', { status: 500 })],
+    ['200 sem callId', async () => new Response(JSON.stringify({ callName: 'Call' }), { status: 200 })],
+    ['200 com callId vazio', async () => new Response(JSON.stringify({ callId: '' }), { status: 200 })],
+    ['200 com callId não-texto', async () => new Response(JSON.stringify({ callId: 42 }), { status: 200 })],
+    ['200 que não é JSON', async () => new Response('<html>portal de wifi</html>', { status: 200 })],
+  ];
+  for (const [nome, fetchImpl] of respostas) {
+    assert.equal(await resolveAnyInvite(codigo, { fetchImpl, timeoutMs: 200 }), null, `aceitou resposta ${nome}`);
+  }
+});
+
+test('servidor lento estoura o prazo em vez de pendurar a tela', async () => {
+  const codigo = encodeShortInvite({ server: 'https://call.exemplo.com', token: '7K3P9QXM2W4V' })!;
+  const lento: typeof fetch = (_url, init) => new Promise((_r, reject) => {
+    (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => reject(new DOMException('Abortado.', 'AbortError')));
+  });
+  const comecou = Date.now();
+  assert.equal(await resolveAnyInvite(codigo, { fetchImpl: lento, timeoutMs: 60 }), null);
+  assert.ok(Date.now() - comecou < 4_000, 'o prazo precisa valer também pela reserva');
+});
+
+// O formato longo continua sendo lido — é a razão de a reserva existir.
+test('o convite longo válido continua entrando pelo mesmo caminho', async () => {
+  forgetCachedInvite();
+  const longo = buildInvite({ ...call, server: 'https://call.exemplo.com', key: KEY })!;
+  assert.equal(inviteFormat(longo), 'long');
+  const helloOk: typeof fetch = async (url) => {
+    const nonce = new URL(String(url)).searchParams.get('nonce') ?? '';
+    return new Response(JSON.stringify({
+      ok: true, requiresKey: true,
+      proofs: [createHmac('sha256', KEY).update(nonce, 'utf8').digest('base64url')],
+    }), { status: 200 });
+  };
+  const resolvido = await resolveAnyInvite(longo, { fetchImpl: helloOk });
+  assert.equal(resolvido?.invite.callId, call.callId);
+  assert.equal(resolvido?.url, 'https://call.exemplo.com');
+  forgetCachedInvite();
+});

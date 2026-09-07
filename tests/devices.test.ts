@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cleanDeviceLabel, normalizeSpeakerId, preserveKnownDevices, reconcileDevicePreferences, visibleAudioInputs, visibleAudioOutputs, visibleVideoInputs } from '../src/hooks/useDevices.js';
+import { DEVICE_ABSENCE_GRACE_MS, cleanDeviceLabel, normalizeSpeakerId, preserveKnownDevices, reconcileDevicePreferences, visibleAudioInputs, visibleAudioOutputs, visibleVideoInputs } from '../src/hooks/useDevices.js';
 
 test('saídas pseudo do Chromium usam o padrão real do sistema', () => {
   assert.equal(normalizeSpeakerId(''), '');
@@ -86,7 +86,7 @@ test('enumeração vazia não apaga os dispositivos que já eram conhecidos', ()
     { kind: 'audiooutput', deviceId: 'saida-1', label: 'Fone' },
     { kind: 'videoinput', deviceId: 'cam-1', label: 'Webcam' },
   ] as MediaDeviceInfo[];
-  const preservados = preserveKnownDevices(conhecidos, []);
+  const preservados = preserveKnownDevices(conhecidos, []).devices;
   assert.deepEqual(visibleAudioInputs(preservados).map((device) => device.deviceId), ['mic-1']);
   assert.deepEqual(visibleAudioOutputs(preservados).map((device) => device.deviceId), ['saida-1']);
   assert.deepEqual(visibleVideoInputs(preservados).map((device) => device.deviceId), ['cam-1']);
@@ -101,7 +101,7 @@ test('cada tipo é julgado sozinho: só o que veio vazio é preservado', () => {
   // O navegador respondeu sobre microfones — e agora só existe um. Isso é uma
   // resposta de verdade e precisa valer: o aparelho desligado some da lista.
   const proximos = [{ kind: 'audioinput', deviceId: 'mic-1', label: 'USB PnP Sound Device' }] as MediaDeviceInfo[];
-  const resultado = preserveKnownDevices(conhecidos, proximos);
+  const resultado = preserveKnownDevices(conhecidos, proximos).devices;
   assert.deepEqual(visibleAudioInputs(resultado).map((device) => device.deviceId), ['mic-1']);
   // Sobre câmeras ele não disse nada, então a que se conhecia continua lá.
   assert.deepEqual(visibleVideoInputs(resultado).map((device) => device.deviceId), ['cam-1']);
@@ -113,9 +113,72 @@ test('uma lista só com as entradas virtuais do Chromium conta como vazia', () =
     { kind: 'audioinput', deviceId: 'default', label: '' },
     { kind: 'audioinput', deviceId: 'communications', label: '' },
   ] as MediaDeviceInfo[];
-  assert.deepEqual(visibleAudioInputs(preserveKnownDevices(conhecidos, soVirtuais)).map((device) => device.deviceId), ['mic-1']);
+  assert.deepEqual(visibleAudioInputs(preserveKnownDevices(conhecidos, soVirtuais).devices).map((device) => device.deviceId), ['mic-1']);
 });
 
 test('sem nada conhecido antes, a lista vazia continua vazia', () => {
-  assert.deepEqual(preserveKnownDevices([], []), []);
+  assert.deepEqual(preserveKnownDevices([], []).devices, []);
+});
+
+// O outro lado da moeda, e a razão de a preservação ser uma janela e não uma
+// memória: quem tem um único microfone e o desconecta produz uma enumeração
+// vazia que está CERTA. Preservar para sempre deixava um aparelho fantasma no
+// seletor — escolhê-lo falhava e caía no padrão do sistema. Trocar um defeito
+// por outro.
+test('aparelho realmente removido some quando a janela de preservação vence', () => {
+  const conhecidos = [{ kind: 'audioinput', deviceId: 'mic-usb', label: 'USB PnP Sound Device' }] as MediaDeviceInfo[];
+  const inicio = 1_000_000;
+
+  // Logo depois de sumir, ainda é a sacudida do grafo: o aparelho fica.
+  const durante = preserveKnownDevices(conhecidos, [], {}, inicio);
+  assert.deepEqual(visibleAudioInputs(durante.devices).map((d) => d.deviceId), ['mic-usb']);
+  assert.equal(typeof durante.recheckInMs, 'number', 'quem resgata precisa pedir para ser reexaminado');
+
+  // A meio caminho, idem — e a marca de quando o vazio começou não se move.
+  const meio = preserveKnownDevices(durante.devices, [], durante.absence, inicio + DEVICE_ABSENCE_GRACE_MS / 2);
+  assert.deepEqual(visibleAudioInputs(meio.devices).map((d) => d.deviceId), ['mic-usb']);
+  assert.equal(meio.absence.audioinput, inicio);
+
+  // Passada a janela, o vazio é a verdade.
+  const depois = preserveKnownDevices(meio.devices, [], meio.absence, inicio + DEVICE_ABSENCE_GRACE_MS + 1);
+  assert.deepEqual(visibleAudioInputs(depois.devices), []);
+  assert.equal(depois.recheckInMs, undefined, 'sem resgate não há o que reexaminar');
+
+  // E não volta sozinho depois disso.
+  const bemDepois = preserveKnownDevices(depois.devices, [], depois.absence, inicio + 60 * 60_000);
+  assert.deepEqual(visibleAudioInputs(bemDepois.devices), []);
+});
+
+test('o relógio da janela zera quando o aparelho reaparece', () => {
+  const conhecidos = [{ kind: 'videoinput', deviceId: 'cam', label: 'Webcam' }] as MediaDeviceInfo[];
+  const inicio = 2_000_000;
+  const sumiu = preserveKnownDevices(conhecidos, [], {}, inicio);
+  assert.equal(sumiu.absence.videoinput, inicio);
+
+  const voltou = preserveKnownDevices(sumiu.devices, conhecidos, sumiu.absence, inicio + 1_000);
+  assert.equal(voltou.absence.videoinput, undefined, 'tipo que respondeu não está vazio');
+
+  // Some de novo bem depois: a janela recomeça, não herda o vazio antigo.
+  const sumiuOutraVez = preserveKnownDevices(voltou.devices, [], voltou.absence, inicio + 100_000);
+  assert.deepEqual(visibleVideoInputs(sumiuOutraVez.devices).map((d) => d.deviceId), ['cam']);
+});
+
+// Cada tipo tem a própria janela: a câmera sumir não pode encurtar a do
+// microfone, nem o contrário.
+test('as janelas de cada tipo correm em separado', () => {
+  const conhecidos = [
+    { kind: 'audioinput', deviceId: 'mic', label: 'Microfone' },
+    { kind: 'videoinput', deviceId: 'cam', label: 'Webcam' },
+  ] as MediaDeviceInfo[];
+  const t = 3_000_000;
+  // O microfone some primeiro.
+  const soCamera = [conhecidos[1]];
+  let estado = preserveKnownDevices(conhecidos, soCamera, {}, t);
+  assert.equal(estado.absence.audioinput, t);
+  assert.equal(estado.absence.videoinput, undefined);
+
+  // A câmera some bem depois, quando a janela do microfone já venceu.
+  estado = preserveKnownDevices(estado.devices, [], estado.absence, t + DEVICE_ABSENCE_GRACE_MS + 1);
+  assert.deepEqual(visibleAudioInputs(estado.devices), [], 'o microfone já tinha vencido o prazo');
+  assert.deepEqual(visibleVideoInputs(estado.devices).map((d) => d.deviceId), ['cam'], 'a câmera acabou de sumir');
 });
