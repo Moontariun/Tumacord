@@ -22,9 +22,13 @@ const runtimeHealthFile = path.join(app.getPath('userData'), 'runtime-health.jso
 const runtimeLogFile = path.join(app.getPath('userData'), 'logs', 'runtime-health.log');
 const safeGpuMode = consumeSafeGpuMode(runtimeHealthFile);
 if (safeGpuMode) app.disableHardwareAcceleration();
-app.commandLine.appendSwitch('enable-features', streamingFeatures(process.platform, gpuVendors, safeGpuMode).join(','));
+const enabledFeatures = streamingFeatures(process.platform, gpuVendors, safeGpuMode);
+if (enabledFeatures.length) app.commandLine.appendSwitch('enable-features', enabledFeatures.join(','));
+// Esta vale em todo sistema: sem ela o Chromium esconde os endereços locais
+// atrás de nomes mDNS e o ICE perde o candidato da própria rede.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
-app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+// Ozone é a camada de janelas do Chromium no Linux. No Windows não existe.
+if (process.platform === 'linux') app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 // Sem estes, o Chromium trata a janela coberta pela live flutuante como
 // oculta e reduz o ritmo de composição: a imagem escurece e engasga
 // exatamente quando a janela solta ganha foco.
@@ -214,7 +218,15 @@ async function createWindow() {
     }
   });
 
-  const target = process.env.TUMACORD_WEB_URL || `file://${path.join(__dirname, '../dist-web/index.html')}`;
+  // `file://` colado a um caminho de arquivo só dá certo por coincidência: no
+  // Linux o caminho já começa com `/`, que completa as três barras. No Windows
+  // ele começa com `C:\`, e o resultado — `file://C:\...` — não é um endereço
+  // válido: o navegador normaliza para `file:///C:/...` e a comparação de
+  // `will-navigate` abaixo deixa de bater, bloqueando a própria recarga do
+  // aplicativo. Um caminho de instalação com espaço ou acento quebra do mesmo
+  // jeito no Linux, porque o navegador percent-encoda e o texto guardado aqui
+  // não. `pathToFileURL` já entrega o endereço normalizado nos dois sistemas.
+  const target = process.env.TUMACORD_WEB_URL || pathToFileURL(path.join(__dirname, '../dist-web/index.html')).href;
   const trustedOrigin = new URL(target).origin;
   window.webContents.on('will-navigate', (event, destination) => {
     try {
@@ -250,10 +262,24 @@ app.whenReady().then(async () => {
   // Remove módulos deixados por encerramento forçado ou atualização. Assim,
   // reiniciar apenas o aplicativo basta para recuperar o áudio da live.
   await screenAudioRouter.reset().catch(() => undefined);
-  await startEmbeddedServer();
-  discovery = new TumacordDiscovery((calls) => {
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:calls-changed', calls);
-  }, { allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
+  // O servidor embutido é o que sustenta o modo P2P desta máquina, e perdê-lo
+  // dói. Mas ele não pode custar a janela: sem janela o aplicativo "abre" e
+  // não mostra nada, sem uma linha dizendo por quê — era o que acontecia,
+  // porque a falha subia por uma promessa que ninguém tratava e o resto da
+  // inicialização, inclusive `createWindow`, simplesmente não corria. Com a
+  // janela de pé ainda dá para entrar em um servidor dedicado.
+  try {
+    await startEmbeddedServer();
+    discovery = new TumacordDiscovery((calls) => {
+      // Só a janela principal tem o preload e um ouvinte para isto. A janela
+      // solta da live recebia o mesmo aviso a cada segundo e não fazia nada
+      // com ele — trabalho de IPC gasto justamente durante uma transmissão.
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:calls-changed', calls);
+    }, { allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
+  } catch (error) {
+    appendRuntimeEvent(runtimeLogFile, { event: 'embedded-server-failed', message: String(error && error.message ? error.message : error) });
+    console.error('Tumacord: o servidor embutido não subiu; o modo P2P fica indisponível nesta sessão.', error);
+  }
   // `clipboard-sanitized-write` é o que o Chromium exige para
   // `navigator.clipboard.writeText`. Sem ela na lista, o botão de copiar o
   // convite tinha a promessa rejeitada e não copiava nada. A leitura da área
@@ -280,13 +306,13 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('tumacord:prepare-screen-audio', () => screenAudioRouter.prepare());
   ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
-  ipcMain.handle('tumacord:discover-calls', () => discovery.list());
+  ipcMain.handle('tumacord:discover-calls', () => discovery?.list() ?? []);
   ipcMain.handle('tumacord:network-preferences', () => networkPreferences);
   ipcMain.handle('tumacord:set-network-preferences', (_event, patch) => {
     networkPreferences = writeNetworkPreferences(networkPreferencesFile, { ...networkPreferences, ...(patch && typeof patch === 'object' ? patch : {}) });
     directLink.setPreferences(networkPreferences);
     discovery?.setNetworkPreferences({ allowZeroTier: networkPreferences.zeroTierEnabled, key: directLink.key });
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('tumacord:network-preferences-changed', networkPreferences);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:network-preferences-changed', networkPreferences);
     return networkPreferences;
   });
   // A sondagem fala com STUN e com o roteador: ela pode demorar alguns
@@ -295,10 +321,13 @@ app.whenReady().then(async () => {
     try {
       return await directLink.probe({ force: Boolean(options && options.force) });
     } catch {
-      return directLink.emptyReport();
+      // Devolver um relatório vazio aqui fazia a tela de rede anunciar "sem
+      // entrada", "IPv6 ausente" e "NAT não medido" por causa de uma falha
+      // passageira. O que se sabia antes continua valendo.
+      return directLink.lastKnownReport();
     }
   });
-  ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery.setHosting(details));
+  ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery?.setHosting(details) ?? null);
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
     const next = !mainWindow.isFullScreen();
@@ -328,6 +357,12 @@ app.whenReady().then(async () => {
   await createWindow();
   createTray();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
+}).catch((error) => {
+  // Última rede: uma falha aqui deixaria o processo vivo e mudo. Registrada,
+  // ela aparece no arquivo de diagnóstico em vez de virar um aplicativo que
+  // "não abre" sem explicação nenhuma.
+  appendRuntimeEvent(runtimeLogFile, { event: 'startup-failed', message: String(error && error.message ? error.message : error) });
+  console.error('Tumacord: falha ao iniciar.', error);
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

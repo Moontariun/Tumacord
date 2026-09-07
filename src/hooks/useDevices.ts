@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface DevicePreferences {
   microphoneId: string;
@@ -62,6 +62,32 @@ export function visibleVideoInputs<T extends Pick<MediaDeviceInfo, 'kind' | 'dev
   return realDevices(devices, 'videoinput');
 }
 
+// Uma enumeração vazia não é a notícia de que todos os aparelhos sumiram: é o
+// navegador não contando. Ela acontece em série no Linux — o PipeWire sacode o
+// grafo quando outro programa abre ou solta uma captura, e o próprio Tumacord
+// carrega e descarrega módulos ao montar o barramento da live. Cada sacudida
+// dispara `devicechange`, e por um instante `enumerateDevices()` responde uma
+// lista curta ou vazia.
+//
+// Substituir a lista boa por essa lista curta é o que fazia o seletor de
+// microfone, de saída e de câmera ficar só com "Padrão do sistema" por alguns
+// segundos e depois voltar sozinho. Sem nenhum aparelho tendo sido tocado.
+//
+// A regra é conservadora de propósito: um tipo que veio vazio mantém o que já
+// se sabia; um tipo que veio com pelo menos um aparelho é aceito inteiro,
+// porque aí o navegador está mesmo respondendo e um aparelho desligado
+// precisa sumir da lista.
+const DEVICE_KINDS: readonly MediaDeviceKind[] = ['audioinput', 'audiooutput', 'videoinput'];
+
+export function preserveKnownDevices<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label' | 'groupId'>>>(previous: readonly T[], next: readonly T[]): T[] {
+  const resgatados: T[] = [];
+  for (const kind of DEVICE_KINDS) {
+    if (realDevices(next, kind).length) continue;
+    resgatados.push(...realDevices(previous, kind));
+  }
+  return resgatados.length ? [...next, ...resgatados] : [...next];
+}
+
 export function reconcileDevicePreferences<T extends Pick<MediaDeviceInfo, 'kind' | 'deviceId'> & Partial<Pick<MediaDeviceInfo, 'label'>>>(preferences: DevicePreferences, devices: readonly T[]): DevicePreferences {
   const exists = (kind: MediaDeviceKind, id: string) => {
     if (!id || devices.some((device) => device.kind === kind && device.deviceId === id)) return true;
@@ -95,14 +121,21 @@ function savedPreferences(): DevicePreferences {
 export function useDevices() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [preferences, setPreferencesState] = useState<DevicePreferences>(savedPreferences);
+  // `refresh` é chamado do `devicechange`, da troca de microfone e da troca de
+  // câmera. Duas enumerações podem estar em voo ao mesmo tempo, e a que
+  // começou antes pode terminar depois — gravando por cima da mais nova uma
+  // lista já vencida. O número da consulta resolve isso.
+  const consulta = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
+    const pedido = ++consulta.current;
     try {
-      const nextDevices = await navigator.mediaDevices.enumerateDevices();
-      setDevices(nextDevices);
+      const enumerados = await navigator.mediaDevices.enumerateDevices();
+      if (pedido !== consulta.current) return;
+      setDevices((anteriores) => preserveKnownDevices(anteriores, enumerados));
       setPreferencesState((current) => {
-        const next = reconcileDevicePreferences(current, nextDevices);
+        const next = reconcileDevicePreferences(current, enumerados);
         if (next.microphoneId === current.microphoneId && next.cameraId === current.cameraId && next.speakerId === current.speakerId) return current;
         localStorage.setItem(KEY, JSON.stringify(next));
         return next;

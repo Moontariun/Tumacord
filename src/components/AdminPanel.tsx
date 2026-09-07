@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminOverview, Channel, ChannelCategory, ServerRole } from '../../shared/types';
 import { Icon } from './Icon';
 import { Dropdown } from './Dropdown';
-import { describeMissing, readCapabilities, type ServerCapabilities } from '../lib/capabilities';
+import { describeMissing, mergeCapabilities, readCapabilities, UNKNOWN_CAPABILITIES, type ServerCapabilities } from '../lib/capabilities';
+import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from '../lib/freshness';
 
 // Painel de administração do servidor.
 //
@@ -14,8 +15,19 @@ import { describeMissing, readCapabilities, type ServerCapabilities } from '../l
 // obriga a pessoa a procurar. Cada área responde uma pergunta: o que está
 // acontecendo, como o servidor está arrumado, quem está nele, e o que foi
 // feito.
+//
+// O painel inteiro carrega de uma vez só, em uma leitura numerada. Toda ação
+// administrativa recarrega, e antes disso a recarga apagava a tela: `loading`
+// virava verdadeiro, as listas sumiam e voltavam. Com a máquina ocupada, duas
+// recargas podiam se cruzar e a mais velha, chegando por último, sobrescrevia
+// a mais nova. Agora o valor anterior fica em tela enquanto a leitura corre,
+// e uma resposta de geração antiga é descartada em silêncio.
 
 type Area = 'overview' | 'channels' | 'users' | 'logs';
+
+// Um pedido que nunca responde deixaria o painel em "carregando" para sempre.
+// Doze segundos é folgado para uma rede ruim e curto para quem está esperando.
+const REQUEST_TIMEOUT_MS = 12_000;
 
 interface AdminUser {
   id: string;
@@ -36,6 +48,16 @@ interface AuditEntry {
   result: 'ok' | 'denied' | 'error';
   detail?: string;
 }
+
+interface PainelDados {
+  overview: AdminOverview | null;
+  channels: Channel[];
+  categories: ChannelCategory[];
+  users: AdminUser[];
+  audit: AuditEntry[];
+}
+
+type Resultado<T> = { ok: true; body: T } | { ok: false; error: string };
 
 const AREAS: Array<{ id: Area; label: string }> = [
   { id: 'overview', label: 'Visão geral' },
@@ -73,107 +95,147 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
   onNotice: (message: string) => void;
 }) {
   const [area, setArea] = useState<Area>('overview');
-  const [overview, setOverview] = useState<AdminOverview | null>(null);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [categories, setCategories] = useState<ChannelCategory[]>([]);
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [audit, setAudit] = useState<AuditEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [dados, setDados] = useState<Tracked<PainelDados>>(() => untracked<PainelDados>());
   const [busy, setBusy] = useState<string | null>(null);
-  const [servidor, setServidor] = useState<ServerCapabilities | null>(null);
+  const [servidor, setServidor] = useState<ServerCapabilities>(UNKNOWN_CAPABILITIES);
   const montado = useRef(true);
+  const geracao = useRef(0);
 
   useEffect(() => { montado.current = true; return () => { montado.current = false; }; }, []);
 
-  // Um só caminho de chamada: com sessão, com erro estruturado e sem deixar a
-  // tela mentir quando a resposta chega depois de fechar o painel.
-  const chamar = useCallback(async <T,>(rota: string, metodo = 'GET', corpo?: unknown): Promise<T | null> => {
+  // Um só caminho de chamada: com sessão, com prazo, com erro estruturado e
+  // sabendo distinguir "o servidor recusou" de "não consegui falar com ele".
+  // A diferença importa: a primeira é uma resposta, a segunda é a ausência de
+  // uma — e ausência não pode virar conclusão sobre o servidor.
+  const pedir = useCallback(async <T,>(rota: string, metodo = 'GET', corpo?: unknown): Promise<Resultado<T>> => {
+    const controller = new AbortController();
+    const prazo = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       const resposta = await fetch(`${serverUrl}${rota}`, {
         method: metodo,
         headers: { authorization: `Bearer ${token}`, ...(corpo === undefined ? {} : { 'content-type': 'application/json' }) },
+        signal: controller.signal,
         ...(corpo === undefined ? {} : { body: JSON.stringify(corpo) }),
       });
       const corpoResposta = await resposta.json().catch(() => ({})) as { error?: string } & T;
       if (!resposta.ok) {
-        if (montado.current) onNotice(corpoResposta.error ?? 'O servidor recusou a operação.');
-        return null;
+        return { ok: false, error: corpoResposta.error ?? 'O servidor recusou a operação.' };
       }
-      return corpoResposta;
+      return { ok: true, body: corpoResposta };
     } catch {
-      if (montado.current) onNotice('Não consegui falar com o servidor.');
-      return null;
+      return { ok: false, error: 'Não consegui falar com o servidor agora.' };
+    } finally {
+      window.clearTimeout(prazo);
     }
-  }, [onNotice, serverUrl, token]);
+  }, [serverUrl, token]);
+
+  // As ações administrativas continuam com a forma antiga — `null` é recusa —
+  // porque quem chama só precisa saber se deu certo.
+  const chamar = useCallback(async <T,>(rota: string, metodo = 'GET', corpo?: unknown): Promise<T | null> => {
+    const resultado = await pedir<T>(rota, metodo, corpo);
+    if (resultado.ok) return resultado.body;
+    if (montado.current) onNotice(resultado.error);
+    return null;
+  }, [onNotice, pedir]);
+
+  // O que o servidor sabe fazer é lido dentro de uma função assíncrona; sem o
+  // espelho, `carregar` capturaria o valor da renderização em que nasceu.
+  const servidorRef = useRef<ServerCapabilities>(servidor);
+  servidorRef.current = servidor;
 
   const carregar = useCallback(async () => {
-    if (montado.current) { setLoading(true); setError(''); }
+    const pedido = ++geracao.current;
+    const atual = () => montado.current && pedido === geracao.current;
+    setDados((estado) => beginLoad(estado, pedido));
     // Antes de qualquer coisa, o que este servidor sabe fazer. Um servidor
     // anterior à 0.8.1 não tem estes endpoints, e a pessoa precisa ler isso em
-    // vez de receber um erro sem explicação a cada clique.
-    const saude = await fetch(`${serverUrl}/api/health`).then((r) => r.json()).catch(() => null);
-    const capacidades = readCapabilities(saude);
-    if (montado.current) setServidor(capacidades);
+    // vez de receber um erro sem explicação a cada clique. Mas só uma resposta
+    // de verdade conta: uma consulta que falhou mantém o que já se sabia.
+    const saude = await pedir<unknown>('/api/health');
+    if (!atual()) return;
+    const capacidades = mergeCapabilities(servidorRef.current, saude.ok ? readCapabilities(saude.body) : UNKNOWN_CAPABILITIES);
+    servidorRef.current = capacidades;
+    setServidor(capacidades);
     const faltando = describeMissing(capacidades, ['adminChannels', 'adminUsers', 'adminAudit']);
     if (faltando) {
-      if (montado.current) { setError(faltando); setLoading(false); }
+      setDados((estado) => failLoad(estado, pedido, faltando));
       return;
     }
-    const geral = await chamar<AdminOverview & { channels: Channel[]; categories?: ChannelCategory[] }>('/api/admin/overview');
-    if (!montado.current) return;
-    if (!geral) { setError('Não foi possível carregar o painel.'); setLoading(false); return; }
-    setOverview(geral);
-    setChannels(geral.channels ?? []);
-    setCategories(geral.categories ?? []);
-    const lista = await chamar<{ users: AdminUser[] }>('/api/admin/users');
-    if (montado.current && lista) setUsers(lista.users);
-    const registro = await chamar<{ entries: AuditEntry[] }>('/api/admin/audit');
-    if (montado.current && registro) setAudit(registro.entries);
-    if (montado.current) setLoading(false);
-  }, [chamar, serverUrl]);
+    const geral = await pedir<AdminOverview & { channels: Channel[]; categories?: ChannelCategory[] }>('/api/admin/overview');
+    if (!atual()) return;
+    if (!geral.ok) {
+      setDados((estado) => failLoad(estado, pedido, geral.error));
+      return;
+    }
+    const lista = await pedir<{ users: AdminUser[] }>('/api/admin/users');
+    if (!atual()) return;
+    const registro = await pedir<{ entries: AuditEntry[] }>('/api/admin/audit');
+    if (!atual()) return;
+    setDados((estado) => settle(estado, pedido, {
+      overview: geral.body,
+      channels: geral.body.channels ?? [],
+      categories: geral.body.categories ?? [],
+      // Uma das duas listas pode ter falhado sozinha. Manter a anterior é
+      // melhor do que mostrar uma lista vazia que não corresponde a nada.
+      users: lista.ok ? lista.body.users : estado.value?.users ?? [],
+      audit: registro.ok ? registro.body.entries : estado.value?.audit ?? [],
+    }));
+  }, [pedir]);
 
   useEffect(() => { void carregar(); }, [carregar]);
 
   const executar = async (chave: string, acao: () => Promise<unknown>, sucesso: string) => {
     setBusy(chave);
     const resultado = await acao();
-    setBusy(null);
+    if (montado.current) setBusy(null);
     if (resultado === null) return false;
-    onNotice(sucesso);
+    if (montado.current) onNotice(sucesso);
     await carregar();
     return true;
   };
+
+  const dadosVisiveis = dados.value;
+  const carregando = dadosVisiveis === null && dados.status !== 'failed';
+  // A mensagem só substitui a tela quando não há nada a mostrar. Com dados em
+  // mãos ela vira um aviso discreto, e os controles continuam onde estavam.
+  const aviso = dados.status === 'failed' || dados.status === 'stale' ? dados.error : '';
+  const overview = dadosVisiveis?.overview ?? null;
+  const channels = dadosVisiveis?.channels ?? [];
+  const categories = dadosVisiveis?.categories ?? [];
+  const users = dadosVisiveis?.users ?? [];
+  const audit = dadosVisiveis?.audit ?? [];
 
   return <div className="modal-backdrop" onMouseDown={(evento) => { if (evento.target === evento.currentTarget) onClose(); }}>
     <div className="settings-modal admin-panel">
       <aside>
         <h2>Servidor</h2>
         {AREAS.map((entrada) => <button key={entrada.id} className={area === entrada.id ? 'selected' : ''} onClick={() => setArea(entrada.id)}>{entrada.label}</button>)}
-        <span className="settings-version">{overview ? `v${overview.version}` : servidor?.version ? `v${servidor.version}` : ''}</span>
+        <span className="settings-version">{overview ? `v${overview.version}` : servidor.version ? `v${servidor.version}` : ''}</span>
       </aside>
       <section>
         <button className="modal-close" onClick={onClose}><Icon name="close" /></button>
         <h1>{AREAS.find((entrada) => entrada.id === area)?.label}</h1>
-        {loading && <p className="invite-status">Carregando…</p>}
-        {error && !loading && <p className="invite-status error">{error} <button className="ghost" onClick={() => void carregar()}>Tentar de novo</button></p>}
-        {!loading && !error && area === 'overview' && <Overview overview={overview} users={users} channels={channels} />}
-        {!loading && !error && area === 'channels' && <Channels
-          channels={channels} categories={categories} busy={busy}
-          onCreateChannel={(corpo) => executar('canal', () => chamar('/api/admin/channels', 'POST', corpo), 'Canal criado.')}
-          onRenameChannel={(id, name) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'PATCH', { name }), 'Canal renomeado.')}
-          onDeleteChannel={(id, nome) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'DELETE'), `Canal ${nome} apagado.`)}
-          onMoveChannel={(ids) => executar('ordem', () => chamar('/api/admin/channels/order', 'POST', { ids }), 'Ordem salva.')}
-          onCreateCategory={(name) => executar('categoria', () => chamar('/api/admin/categories', 'POST', { name }), 'Categoria criada.')}
-          onDeleteCategory={(id, nome) => executar(id, () => chamar(`/api/admin/categories/${encodeURIComponent(id)}`, 'DELETE'), `Categoria ${nome} apagada; os canais dela ficaram sem categoria.`)}
-        />}
-        {!loading && !error && area === 'users' && <Users
-          users={users} currentUserId={currentUserId} busy={busy}
-          onRole={(id, role, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }), `${nome} agora é ${ROLE_LABEL[role].toLowerCase()}.`)}
-          onRemove={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}`, 'DELETE'), `${nome} foi removido do servidor.`)}
-          onDisconnect={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/disconnect`, 'POST'), `${nome} foi desconectado.`)}
-        />}
-        {!loading && !error && area === 'logs' && <Logs entries={audit} />}
+        {carregando && <p className="invite-status">Carregando…</p>}
+        {aviso && <p className="invite-status error">{aviso} <button className="ghost" disabled={isBusy(dados)} onClick={() => void carregar()}>Tentar de novo</button></p>}
+        {dadosVisiveis && <>
+          {area === 'overview' && <Overview overview={overview} users={users} channels={channels} />}
+          {area === 'channels' && <Channels
+            channels={channels} categories={categories} busy={busy}
+            onCreateChannel={(corpo) => executar('canal', () => chamar('/api/admin/channels', 'POST', corpo), 'Canal criado.')}
+            onRenameChannel={(id, name) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'PATCH', { name }), 'Canal renomeado.')}
+            onDeleteChannel={(id, nome) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'DELETE'), `Canal ${nome} apagado.`)}
+            onMoveChannel={(ids) => executar('ordem', () => chamar('/api/admin/channels/order', 'POST', { ids }), 'Ordem salva.')}
+            onCreateCategory={(name) => executar('categoria', () => chamar('/api/admin/categories', 'POST', { name }), 'Categoria criada.')}
+            onDeleteCategory={(id, nome) => executar(id, () => chamar(`/api/admin/categories/${encodeURIComponent(id)}`, 'DELETE'), `Categoria ${nome} apagada; os canais dela ficaram sem categoria.`)}
+          />}
+          {area === 'users' && <Users
+            users={users} currentUserId={currentUserId} busy={busy}
+            onRole={(id, role, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }), `${nome} agora é ${ROLE_LABEL[role].toLowerCase()}.`)}
+            onRemove={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}`, 'DELETE'), `${nome} foi removido do servidor.`)}
+            onDisconnect={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/disconnect`, 'POST'), `${nome} foi desconectado.`)}
+          />}
+          {area === 'logs' && <Logs entries={audit} />}
+        </>}
       </section>
     </div>
   </div>;

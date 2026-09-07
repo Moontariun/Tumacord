@@ -1162,6 +1162,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .reachability-head button { padding: 6px 12px; border-radius: 8px; background: var(--panel-hover); color: #d6d7e2; font-size: 10px; font-weight: 800; }
 .reachability-head button:hover:not(:disabled) { background: #34364a; }
 .reachability-card > span { color: var(--muted); font-size: 11px; line-height: 1.55; }
+/* Medição que não respondeu desta vez: o dado anterior continua em tela e o
+   aviso explica por que ele pode estar velho, em vez de a lista sumir. */
+.reachability-stale { color: #e0b46a !important; font-size: 10px !important; }
 .reachability-facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 0; padding: 0; list-style: none; }
 .reachability-facts li { display: grid; gap: 2px; padding: 7px 11px; border-radius: 9px; background: #20212c; }
 .reachability-facts span { color: #7c7e90; font-size: 8px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }

@@ -2,6 +2,47 @@
 
 ## 0.8.4 — convite de 35 caracteres e build portátil de Windows
 
+### Auditoria da 0.8.4 — o que a revisão encontrou e corrigiu
+
+**O convite curto não era aceito pela própria interface**
+
+- o servidor da 0.8.4 emite `TUMA2~servidor~TOKEN`, e a interface não sabia lê-lo. **Entrar por convite** conferia o código com `readInvite`, que só entende o formato `TUMA1`, e recusava antes de tentar alcançar o servidor: *"Código inválido ou vencido. Peça um convite novo ao host."* — para um código emitido segundos antes. A tela de entrada tinha o mesmo furo, porque só chamava `resolveInvite`;
+- os dois caminhos passam agora por `inviteFormat` e `resolveAnyInvite`, que conhecem os dois formatos. Os campos deixaram de anunciar `TUMA1.…` como exemplo. O fluxo inteiro — servidor emite, interface reconhece, login entra — virou teste contra um servidor de verdade.
+
+**Interface sob carga alta: atraso deixou de significar "não existe"**
+
+O relato era de opções e botões que somem e voltam quando a máquina está ocupada. A causa é a mesma em quatro lugares: um valor que demorou, falhou por timeout ou chegou fora de ordem virava `null`, `[]` ou `false` — e a tela lia isso como ausência definitiva.
+
+- **a lista de dispositivos era substituída por completo a cada `devicechange`.** No Linux esse evento chega em rajada: o PipeWire sacode o grafo quando outro programa abre ou solta uma captura, e o próprio Tumacord carrega e descarrega módulos ao montar o barramento de áudio da live. Nessas janelas `enumerateDevices()` responde uma lista curta ou vazia, e o seletor de microfone, saída e câmera ficava só com "Padrão do sistema" antes de voltar sozinho. Agora um tipo que veio vazio mantém o que já se sabia; um tipo que veio com pelo menos um aparelho é aceito inteiro, para um aparelho desligado continuar sumindo. E duas enumerações em voo deixaram de poder gravar uma por cima da outra;
+- **o painel de administração tratava um `/api/health` que falhou como um servidor velho.** Os dois produziam o mesmo objeto — nenhuma capability —, e o painel inteiro era substituído por "este servidor ainda não tem gerenciamento de canais, gerenciamento de usuários e registro de auditoria". No meio de uma sessão em que a pessoa acabara de usar o painel. `readCapabilities` passou a distinguir "respondeu" de "não respondeu", e o que o servidor já declarou saber fazer sobrevive a uma consulta perdida;
+- **toda ação administrativa apagava a tela antes de recarregar.** `loading` virava verdadeiro, as listas sumiam e voltavam; e duas recargas cruzadas podiam terminar com a mais velha por cima da mais nova. Agora o valor anterior fica em tela enquanto a leitura corre, e resposta de geração antiga é descartada;
+- **uma sondagem de rede que não deu certo anunciava "sem entrada", "IPv6 ausente" e "NAT não medido"**, e a tela chegava a dizer que a verificação "está disponível apenas no aplicativo instalado" — dentro do aplicativo instalado. O último relatório bem-sucedido continua em tela, com o aviso de que a medição nova não respondeu;
+- a regra ficou em `src/lib/freshness.ts`, com seis estados em vez de dois — desconhecido, carregando, disponível, atualizando, envelhecido e falho — e um número por pergunta, para resposta atrasada não vencer resposta nova. Uma simulação de respostas embaralhadas com falhas no meio guarda as invariantes.
+
+**Salvar o perfil derrubava a call**
+
+- `onLogout` era criada a cada renderização e entrava nas dependências do efeito que abre o socket. Trocar o avatar muda a sessão, a sessão re-renderiza o `App`, a função muda de identidade — e o efeito derrubava o socket, o hook de voz perdia a conexão e a malha inteira era reconstruída. O mesmo valia para a troca de host e para a entrada por uma call vista na rede.
+
+**Windows**
+
+- **`file://` colado a um caminho de arquivo** só dá certo no Linux, onde o caminho já começa com `/` e completa as três barras. No Windows o resultado (`file://C:\…`) é normalizado pelo navegador para `file:///C:/…`, e a comparação de `will-navigate` — que guarda o texto original — deixa de bater e passa a recusar a navegação legítima do próprio aplicativo. Um caminho de instalação com espaço ou acento quebra igual no Linux. Agora o endereço vem de `pathToFileURL`;
+- `WebRTCPipeWireCapturer`, `WaylandWindowDecorations` e `ozone-platform-hint` são do Linux e eram ligados em todo sistema. Fora do Linux a lista sai vazia.
+
+**Falhas que deixavam o aplicativo mudo**
+
+- **o servidor embutido que não subia levava a janela junto.** A falha subia por uma promessa que ninguém tratava, e o resto da inicialização — inclusive `createWindow` — não corria: o aplicativo abria e não mostrava nada, sem uma linha explicando. Agora a falha é registrada no diagnóstico, o modo P2P fica indisponível e a janela abre, com o servidor dedicado ainda ao alcance;
+- **pedir um convite ao servidor não tinha prazo.** Um servidor que aceita a conexão e não responde deixava a janela em "Pedindo um código ao servidor…" para sempre. Oito segundos, e depois o formato longo como reserva. O painel de administração ganhou o mesmo tipo de prazo;
+- **o relatório de alcance vazio não trazia `score`**, que é o que a interface envia ao servidor na eleição de host. O servidor recusava o valor por não ser número, e uma sondagem que falhou deixava o computador sem nota de alcance nenhuma.
+
+**Coisas menores, todas medidas**
+
+- `store.touchUser` existia sem nenhum ponto de chamada: o painel mostrava "visto ⟨data⟩" desde a 0.8.1 e o campo nunca era preenchido. Agora entrar carimba, no máximo uma vez por minuto;
+- o aviso de calls descobertas era enviado a **todas** as janelas, incluindo a janela solta da live, que não tem preload nem ouvinte — trabalho de IPC gasto a cada segundo durante uma transmissão;
+- a leitura inicial de calls podia chegar depois de um aviso mais novo e devolver à tela uma lista vencida;
+- o indicador de conexão continuava dizendo "conectado" durante a troca de host, que é o momento em que não há socket nenhum;
+- o README ainda descrevia o convite que carregava os endereços do host — caminho removido na 0.8.3, e contradito pelo próprio README algumas linhas abaixo.
+
+
 **O convite encolheu 85%**
 
 - ele chegava a **240 caracteres**, e quase metade era a chave de acesso do servidor — longa, e viajando dentro de algo feito para colar em conversa;

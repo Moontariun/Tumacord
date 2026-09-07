@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { buildInvite, forgetCachedInvite, readInvite, resolveInvite } from '../src/lib/directLink';
-import { decodeInvite, encodeInvite, normalizeRendezvousUrl } from '../shared/directLink';
+import { buildInvite, forgetCachedInvite, inviteFormat, readInvite, requestShortInvite, resolveAnyInvite, resolveInvite, resolveShortInvite } from '../src/lib/directLink';
+import { decodeInvite, encodeInvite, encodeShortInvite, normalizeRendezvousUrl } from '../shared/directLink';
 
 const call = { callId: 'call-geral', callName: 'Call do grupo', hostUsername: 'Moontariun' };
 const KEY = 'chave-de-acesso-do-servidor-de-encontro';
@@ -103,4 +103,80 @@ test('o convite de encontro também é estável entre leituras', () => {
 test('convite de encontro vencido não é lido', () => {
   const code = encodeInvite({ version: 1, callId: 'c', callName: 'n', hostUsername: 'h', key: KEY, server: 'https://call.exemplo.com', issuedAt: 1_000, ttlMs: 1_000 });
   assert.equal(readInvite(code), null);
+});
+
+// Um servidor que aceita a conexão e não responde deixava a janela de convite
+// em "Pedindo um código ao servidor…" para sempre: sem erro, sem reserva, sem
+// nada além de fechar a janela. Um prazo transforma isso no que já existia
+// como caminho — cair no formato longo.
+test('pedido de convite curto que não responde termina no prazo, sem pendurar a tela', async () => {
+  let abortada = false;
+  const fetchQueNuncaResponde: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+    const signal = (init as RequestInit | undefined)?.signal;
+    signal?.addEventListener('abort', () => {
+      abortada = true;
+      reject(new DOMException('Abortado.', 'AbortError'));
+    });
+  });
+  const comecou = Date.now();
+  const codigo = await requestShortInvite('https://call.exemplo.com', 'token-de-sessao', { callId: 'call-geral', callName: 'Call' }, {
+    fetchImpl: fetchQueNuncaResponde,
+    timeoutMs: 40,
+  });
+  assert.equal(codigo, null, 'sem código, quem chama cai no formato longo');
+  assert.equal(abortada, true, 'o pedido precisa ser realmente abortado, não só ignorado');
+  assert.ok(Date.now() - comecou < 4_000, 'o prazo precisa valer');
+});
+
+test('consulta de convite curto também tem prazo', async () => {
+  const fetchQueNuncaResponde: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+    (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => reject(new DOMException('Abortado.', 'AbortError')));
+  });
+  const resolvido = await resolveShortInvite('TUMA2~call.exemplo.com~7K3P9QXM2W4V', { fetchImpl: fetchQueNuncaResponde, timeoutMs: 40 });
+  assert.equal(resolvido, null);
+});
+
+test('o caminho normal continua devolvendo o código curto', async () => {
+  const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({ token: '7K3P9QXM2W4V', expiresAt: Date.now() + 1000 }), { status: 200 });
+  const codigo = await requestShortInvite('https://call.exemplo.com', 'token-de-sessao', { callId: 'call-geral', callName: 'Call' }, { fetchImpl });
+  assert.equal(codigo, 'TUMA2~call.exemplo.com~7K3P9QXM2W4V');
+});
+
+// O defeito mais caro encontrado na auditoria da 0.8.4: a interface só sabia
+// reconhecer o formato antigo. "Entrar por convite" conferia o código com
+// `readInvite` — que só lê `TUMA1` — antes de tentar alcançar o servidor, e a
+// tela de entrada só chamava `resolveInvite`. O convite curto, que é o único
+// que o servidor da 0.8.4 emite, era recusado como "inválido ou vencido" sem
+// nunca ter sido tentado.
+test('o formato curto é reconhecido, e o longo continua sendo', () => {
+  const curto = encodeShortInvite({ server: 'https://call.exemplo.com', token: '7K3P9QXM2W4V' })!;
+  assert.equal(inviteFormat(curto), 'short');
+
+  const longo = buildInvite({ ...call, server: 'https://call.exemplo.com', key: KEY })!;
+  assert.equal(inviteFormat(longo), 'long');
+
+  assert.equal(inviteFormat('qualquer coisa'), null);
+  assert.equal(inviteFormat(''), null);
+  assert.equal(inviteFormat('TUMA2~call.exemplo.com~CURTO'), null, 'token com tamanho errado não é convite');
+});
+
+test('resolver um convite aceita os dois formatos pelo mesmo caminho', async () => {
+  const curto = encodeShortInvite({ server: 'https://call.exemplo.com', token: '7K3P9QXM2W4V' })!;
+  const consultas: string[] = [];
+  const fetchImpl: typeof fetch = async (url) => {
+    consultas.push(String(url));
+    return new Response(JSON.stringify({ callId: 'call-geral', callName: 'Call do grupo', hostUsername: 'Moontariun' }), { status: 200 });
+  };
+  const resolvido = await resolveAnyInvite(curto, { fetchImpl });
+  assert.equal(resolvido?.invite.callId, 'call-geral');
+  assert.equal(resolvido?.url, 'https://call.exemplo.com');
+  assert.equal(resolvido?.invite.key, '7K3P9QXM2W4V', 'o token do convite é a chave de acesso desta entrada');
+  assert.deepEqual(consultas, ['https://call.exemplo.com/api/invite/7K3P9QXM2W4V']);
+});
+
+test('um código que não é convite nenhum não vira consulta de rede', async () => {
+  let consultou = false;
+  const fetchImpl: typeof fetch = async () => { consultou = true; return new Response('{}', { status: 200 }); };
+  assert.equal(await resolveAnyInvite('bom dia', { fetchImpl }), null);
+  assert.equal(consultou, false);
 });

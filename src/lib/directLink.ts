@@ -18,20 +18,29 @@ export type { DirectInvite, DirectPath } from '../../shared/directLink';
 
 // Pedir ao servidor um convite curto. Quem chama já tem sessão: convidar é
 // ato de quem está dentro. O token volta uma vez só; o servidor guarda o hash.
+//
+// Com prazo, porque sem ele um servidor que aceita a conexão e não responde
+// deixa a janela de convite em "Pedindo um código ao servidor…" para sempre —
+// não há erro, não há reserva, não há nada a fazer além de fechar.
+export const SHORT_INVITE_TIMEOUT_MS = 8_000;
+
 export async function requestShortInvite(
   serverUrl: string,
   token: string,
   call: { callId: string; callName: string },
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<string | null> {
-  const { fetchImpl = fetch } = options;
+  const { fetchImpl = fetch, timeoutMs = SHORT_INVITE_TIMEOUT_MS } = options;
   const base = normalizeRendezvousUrl(serverUrl);
   if (!base) return null;
+  const controller = new AbortController();
+  const prazo = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(`${base}/api/invite`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify(call),
+      signal: controller.signal,
     });
     if (!response.ok) return null;
     const body = await response.json() as { token?: unknown };
@@ -39,18 +48,22 @@ export async function requestShortInvite(
     return encodeShortInvite({ server: base, token: body.token }) ?? null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(prazo);
   }
 }
 
 // Ler um convite curto é perguntar ao servidor de que call ele trata. Um
 // código vencido ou inventado devolve nada, e é o servidor que decide isso —
 // o prazo deixou de morar dentro do código.
-export async function resolveShortInvite(code: string, options: { fetchImpl?: typeof fetch } = {}): Promise<ResolvedInvite | null> {
-  const { fetchImpl = fetch } = options;
+export async function resolveShortInvite(code: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<ResolvedInvite | null> {
+  const { fetchImpl = fetch, timeoutMs = SHORT_INVITE_TIMEOUT_MS } = options;
   const parsed = decodeShortInvite(code);
   if (!parsed) return null;
+  const controller = new AbortController();
+  const prazo = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(`${parsed.server}/api/invite/${parsed.token}`);
+    const response = await fetchImpl(`${parsed.server}/api/invite/${parsed.token}`, { signal: controller.signal });
     if (!response.ok) return null;
     const body = await response.json() as { callId?: unknown; callName?: unknown; hostUsername?: unknown };
     if (typeof body.callId !== 'string' || !body.callId) return null;
@@ -71,6 +84,8 @@ export async function resolveShortInvite(code: string, options: { fetchImpl?: ty
     };
   } catch {
     return null;
+  } finally {
+    clearTimeout(prazo);
   }
 }
 
@@ -160,6 +175,26 @@ export function readInvite(code: string): DirectInvite | null {
   const invite = decodeInvite(code);
   if (!invite || inviteExpired(invite)) return null;
   return invite;
+}
+
+// Existem dois formatos de convite vivos: o curto `TUMA2`, que é o atual, e o
+// longo `TUMA1`, que continua sendo lido para não invalidar código que já
+// circulou. Reconhecer o formato é local e barato; alcançar o servidor é outra
+// coisa, e vem depois.
+//
+// Quem só sabia ler `TUMA1` recusava o convite da 0.8.4 antes mesmo de tentar
+// alcançar o servidor — e a mensagem dizia "código inválido ou vencido" para
+// um código recém-emitido. Era o formato novo sendo barrado pela porta.
+export function inviteFormat(code: string): 'short' | 'long' | null {
+  if (decodeShortInvite(code)) return 'short';
+  return readInvite(code) ? 'long' : null;
+}
+
+// O código curto é o formato atual; o longo é a reserva. Uma única função para
+// os dois evita que um caminho da interface conheça um formato e o outro não.
+export async function resolveAnyInvite(code: string, options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {}): Promise<ResolvedInvite | null> {
+  return (await resolveShortInvite(code, options).catch(() => null))
+    ?? (await resolveInvite(code, options).catch(() => null));
 }
 
 function randomNonce(): string {

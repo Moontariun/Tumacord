@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeMissing, missingCapabilities, readCapabilities, supports } from '../src/lib/capabilities';
+import { describeMissing, mergeCapabilities, missingCapabilities, readCapabilities, supports } from '../src/lib/capabilities';
 
 const novo = readCapabilities({ version: '0.8.1', capabilities: { turn: true, roles: true, adminChannels: true, adminUsers: true, adminAudit: true, mediaDiagnostics: true } });
 
@@ -46,4 +46,38 @@ test('servidor sem versão informada ainda produz mensagem útil', () => {
   const mensagem = describeMissing(readCapabilities({}), ['turn']);
   assert.match(mensagem, /relay TURN/);
   assert.equal(mensagem.includes('Ele está na'), false);
+});
+
+// O bug: `/api/health` que não responde produzia exatamente o mesmo objeto de
+// um servidor da 0.8.0 — nenhuma capability. O painel então trocava a tela
+// inteira por "este servidor ainda não tem gerenciamento de canais", no meio
+// de uma sessão em que a pessoa acabara de usar o painel. Sob carga alta isso
+// acontecia e se desfazia sozinho, que é a forma "some e volta".
+test('consulta que falhou não é a mesma coisa que servidor sem o recurso', () => {
+  const semResposta = readCapabilities(null);
+  assert.equal(semResposta.status, 'unknown');
+  assert.deepEqual(missingCapabilities(semResposta, ['adminChannels', 'adminUsers', 'adminAudit']), []);
+  assert.equal(describeMissing(semResposta, ['adminChannels', 'adminUsers', 'adminAudit']), '');
+});
+
+test('servidor que respondeu continua podendo ser declarado incompleto', () => {
+  const respondeu = readCapabilities({ version: '0.8.0' });
+  assert.equal(respondeu.status, 'known');
+  assert.match(describeMissing(respondeu, ['adminChannels']), /gerenciamento de canais/);
+});
+
+test('o que o servidor já disse saber fazer sobrevive a uma consulta perdida', () => {
+  const conhecido = readCapabilities({ version: '0.8.4', capabilities: { adminChannels: true, adminUsers: true, adminAudit: true } });
+  const depoisDaFalha = mergeCapabilities(conhecido, readCapabilities(null));
+  assert.equal(supports(depoisDaFalha, 'adminChannels'), true);
+  assert.equal(depoisDaFalha.version, '0.8.4');
+  // E uma resposta de verdade continua mandando, inclusive para tirar algo.
+  const rebaixado = mergeCapabilities(conhecido, readCapabilities({ version: '0.8.0' }));
+  assert.equal(supports(rebaixado, 'adminChannels'), false);
+});
+
+test('sem nunca ter respondido, a falha não inventa conhecimento', () => {
+  const nada = mergeCapabilities(null, readCapabilities(undefined));
+  assert.equal(nada.status, 'unknown');
+  assert.equal(supports(nada, 'turn'), false);
 });

@@ -120,8 +120,18 @@ class DirectLink {
     return this.probing;
   }
 
+  // Faltava `score`, que é o que a interface envia ao servidor na eleição de
+  // host. Sem ele o servidor recusava o valor por não ser número, e uma
+  // sondagem que falhou deixava este computador sem nota de alcance nenhuma.
   emptyReport() {
-    return { grade: 'blocked', paths: [], ipv6: false, cgnat: false, natMapping: 'unknown', key: this.key, port: this.port, checkedAt: Date.now(), zeroTier: [] };
+    return { grade: 'blocked', score: 0, paths: [], ipv6: false, cgnat: false, natMapping: 'unknown', key: this.key, port: this.port, checkedAt: Date.now(), zeroTier: [] };
+  }
+
+  // O que se sabia até agora. Uma sondagem que não deu certo não apaga a
+  // medição anterior: os caminhos de entrada desta máquina não deixam de
+  // existir porque o STUN demorou a responder uma vez.
+  lastKnownReport() {
+    return this.report ?? this.emptyReport();
   }
 
   async runProbe() {

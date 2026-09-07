@@ -13,6 +13,7 @@ const { DirectLink, classifyIpv4, isGlobalIpv6, isZeroTierInterface, stunServers
     releaseMapping: () => Promise<boolean>;
     close: () => Promise<void>;
     emptyReport: () => Record<string, unknown>;
+    lastKnownReport: () => Record<string, unknown>;
   };
   classifyIpv4: (address: string) => string | null;
   isGlobalIpv6: (address: string) => boolean;
@@ -269,4 +270,44 @@ test('depois de fechado, a sondagem devolve o relatório vazio em vez de tocar n
   const report = await link.probe();
   assert.equal(report.grade, 'blocked');
   assert.deepEqual(report.paths, []);
+});
+
+// A nota de alcance é o que a interface envia ao servidor na eleição de host,
+// e o servidor recusa qualquer coisa que não seja um número de 0 a 100. O
+// relatório vazio não trazia `score`: uma sondagem que não deu certo deixava
+// este computador sem nota nenhuma na hora de escolher quem assume a call.
+test('o relatório vazio traz uma nota de alcance válida', () => {
+  const link = new DirectLink({ key: 'chave-de-teste-com-tamanho-suficiente' });
+  const vazio = link.emptyReport();
+  assert.equal(typeof vazio.score, 'number');
+  assert.equal(vazio.score, 0);
+  assert.equal(vazio.grade, 'blocked');
+});
+
+// Uma sondagem que falhou não pode apagar a medição anterior: a tela de rede
+// anunciava "sem entrada", "IPv6 ausente" e "NAT não medido" por causa de um
+// tropeço passageiro, e os fatos voltavam sozinhos alguns segundos depois.
+test('o que já se sabia sobrevive a uma sondagem que não deu certo', async () => {
+  const link = new DirectLink({
+    key: 'chave-de-teste-com-tamanho-suficiente',
+    preferences: { zeroTierEnabled: false, portMapping: true, stunEnabled: true, stunServers: [] },
+    networkInterfaces: interfacesOf({ eth0: [{ address: '189.40.12.7', family: 'IPv4' }] }),
+    createSocket: () => new FakeStunSocket('189.40.12.7'),
+    readRouteTable: () => '',
+    send: silentRouter,
+    describeGateway: async () => null,
+  });
+  const bom = await link.probe();
+  assert.equal(bom.grade, 'open');
+  const guardado = link.lastKnownReport();
+  assert.equal(guardado.grade, 'open');
+  assert.equal(guardado.score, 100);
+  assert.deepEqual(guardado.paths, bom.paths);
+  await link.close();
+});
+
+test('sem nenhuma sondagem anterior, o último conhecido é o relatório vazio', () => {
+  const link = new DirectLink({ key: 'chave-de-teste-com-tamanho-suficiente' });
+  assert.equal(link.lastKnownReport().grade, 'blocked');
+  assert.equal(link.lastKnownReport().score, 0);
 });

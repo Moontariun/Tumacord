@@ -15,8 +15,8 @@ import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hashToken, normalizeInviteToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter } from './rateLimit.js';
-import { canManageChannels, canManageUsers, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
-import { applyOrder, buildChannelTree, canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
+import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
+import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
@@ -899,6 +899,11 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   const user = socket.data.user as PublicUser;
   connectedUsers.set(socket.id, user);
+  // O painel de administração mostra "visto <data>" desde a 0.8.1, e o campo
+  // nunca era preenchido: `touchUser` existia sem nenhum ponto de chamada.
+  // Entrar é o evento certo, e o próprio método já limita a gravação a um
+  // carimbo por minuto.
+  void store.touchUser(user.id).catch(() => undefined);
   socket.emit('server:snapshot', snapshot());
   broadcastSnapshot();
 

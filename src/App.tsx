@@ -12,7 +12,8 @@ import { clearSession, defaultServerUrl, loadSession, login, register, saveSessi
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
-import { adoptDirectKey, buildInvite, describeGrade, readDirectReport, readInvite, requestShortInvite, resolveInvite, resolveShortInvite, type DirectReport } from './lib/directLink';
+import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectReport, requestShortInvite, resolveAnyInvite, type DirectReport } from './lib/directLink';
+import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
 import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict } from './lib/mediaDiagnostics';
@@ -57,8 +58,14 @@ function App() {
       window.removeEventListener('keydown', unlock);
     };
   }, []);
+  // Esta função entra nas dependências do efeito que abre o socket. Criada a
+  // cada renderização, ela mudava de identidade toda vez que a sessão mudava —
+  // e mudar a sessão é o que acontece ao salvar o perfil. O efeito então
+  // derrubava o socket, o hook de voz perdia a conexão e a call inteira era
+  // refeita porque alguém trocou o próprio avatar.
+  const logout = useCallback(() => { clearSession(); forgetTurnServers(); setSession(null); }, []);
   if (!session) return <Login onLogin={setSession} />;
-  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={() => { clearSession(); forgetTurnServers(); setSession(null); }} /></Boundary>;
+  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={logout} /></Boundary>;
 }
 
 function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
@@ -97,10 +104,14 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     let inviteKey = '';
     let resumeCall: string | undefined;
     if (inviteCode.trim()) {
-      const resolved = await resolveInvite(inviteCode).catch(() => null);
+      // Os dois formatos entram por aqui. Antes só o longo era tentado, e o
+      // código curto da 0.8.4 — o que o servidor emite hoje — era recusado na
+      // porta como "inválido ou vencido".
+      const resolved = await resolveAnyInvite(inviteCode);
       if (!resolved) {
-        setError(readInvite(inviteCode) ? 'O convite é válido, mas não consegui alcançar a call. Peça um código novo a quem convidou.' : 'Código de convite inválido ou vencido.');
+        setError(inviteFormat(inviteCode) ? 'O convite é válido, mas não consegui alcançar a call. Peça um código novo a quem convidou.' : 'Código de convite inválido ou vencido.');
         setLoading(false);
+        playSound('error');
         return;
       }
       target = resolved.url;
@@ -131,7 +142,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
         <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'Enlace direto, rede local e convite' : 'Disponível no aplicativo'}</small></span></button>
         <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
       </div>
-      <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call: ele leva você ao lugar certo, seja P2P ou servidor.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA1.…" /></label>
+      <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call: ele leva você ao lugar certo, seja P2P ou servidor.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA2~…" /></label>
       {connectionMode === 'server' && <div className="server-login-fields">
         <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
         <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
@@ -266,8 +277,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       setDiscoveredCalls([]);
       return;
     }
-    void window.tumacordDesktop.discoverCalls().then(setDiscoveredCalls);
-    return window.tumacordDesktop.onCallsChanged(setDiscoveredCalls);
+    // A leitura inicial e os avisos do processo principal correm juntos. Sem
+    // esta guarda, uma leitura que demorou chegava depois de um aviso mais
+    // novo e devolvia à tela uma lista de calls já vencida — ou vazia.
+    let ativo = true;
+    void window.tumacordDesktop.discoverCalls().then((calls) => { if (ativo) setDiscoveredCalls(calls); });
+    const parar = window.tumacordDesktop.onCallsChanged((calls) => { if (ativo) setDiscoveredCalls(calls); });
+    return () => { ativo = false; parar(); };
   }, [session.connectionMode]);
 
   useEffect(() => {
@@ -322,8 +338,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     }
     // O código curto (TUMA2) é o formato atual; o TUMA1 continua sendo lido
     // para não invalidar convite que já circulou.
-    const resolved = (await resolveShortInvite(code).catch(() => null))
-      ?? (await resolveInvite(code).catch(() => null));
+    const resolved = await resolveAnyInvite(code);
     if (!resolved) return false;
     try {
       const migrated = await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, resolved.mode, session.rememberMe ?? true, resolved.invite.key);
@@ -447,7 +462,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       next.emit('chat:file:offer', payload);
     });
     setSocket(next);
-    return () => { next.disconnect(); setSocket(null); };
+    return () => {
+      next.disconnect();
+      setSocket(null);
+      // Sem isto o indicador continuava dizendo "conectado" durante a troca de
+      // host, que é justamente o momento em que não há socket nenhum.
+      setConnected(false);
+    };
   }, [onLogout, onSessionChange, session.connectionMode, session.password, session.rememberMe, session.resumeChannelId, session.serverUrl, session.token, session.user.id, session.user.username, showToast]);
 
   useEffect(() => {
@@ -1293,20 +1314,40 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
   </div></div>;
 }
 
+// A sondagem fala com STUN e com o roteador: ela demora, e sob carga pode
+// falhar. Quando isso acontecia, o relatório virava `null` e a tela dizia que
+// a verificação "está disponível apenas no aplicativo instalado" — dentro do
+// aplicativo instalado. Os fatos medidos sumiam e voltavam junto.
+//
+// Agora o último relatório bem-sucedido continua em tela enquanto o novo não
+// chega, e uma falha aparece como o que é: uma medição que não deu certo.
 function NetworkSettings({ preferences, onChange, onClose }: { preferences: NetworkPreferences; onChange: (patch: Partial<NetworkPreferences>) => void; onClose: () => void }) {
-  const [report, setReport] = useState<DirectReport | null>(null);
-  const [checking, setChecking] = useState(true);
+  const [alcance, setAlcance] = useState<Tracked<DirectReport>>(() => untracked<DirectReport>());
+  const montado = useRef(true);
+  const geracao = useRef(0);
+  useEffect(() => { montado.current = true; return () => { montado.current = false; }; }, []);
+  const semDesktop = !window.tumacordDesktop;
   const check = useCallback(async (force: boolean) => {
-    setChecking(true);
-    setReport(await readDirectReport({ force }));
-    setChecking(false);
+    const pedido = ++geracao.current;
+    setAlcance((estado) => beginLoad(estado, pedido));
+    const relatorio = await readDirectReport({ force });
+    if (!montado.current || pedido !== geracao.current) return;
+    if (relatorio) setAlcance((estado) => settle(estado, pedido, relatorio));
+    else setAlcance((estado) => failLoad(estado, pedido, window.tumacordDesktop
+      ? 'A verificação não respondeu desta vez. Os dados abaixo são da última medição.'
+      : 'A verificação de rede está disponível apenas no aplicativo instalado.'));
   }, []);
   useEffect(() => { void check(false); }, [check]);
+  const report = alcance.value;
+  const checking = isBusy(alcance);
   return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Rede e conexão</h1>
     <p className="settings-intro">A call vai direto de computador para computador. O Tumacord procura sozinho o melhor caminho: rede local, IPv6 e, quando o roteador deixa, uma porta aberta para o IPv4. A mídia continua cifrada de ponta a ponta por DTLS-SRTP.</p>
     <div className="reachability-card">
-      <div className="reachability-head"><strong>{checking ? 'Verificando os caminhos…' : `Alcance: ${describeGrade(report?.grade ?? 'blocked')}`}</strong><button disabled={checking} onClick={() => void check(true)}>Testar de novo</button></div>
-      <span>{checking ? 'Consultando STUN e o roteador; leva alguns segundos.' : report ? describeReachability({ grade: report.grade, paths: report.paths, ipv6: report.ipv6, cgnat: report.cgnat, natMapping: report.natMapping, mappedVia: report.mappedVia }) : 'A verificação de rede está disponível apenas no aplicativo instalado.'}</span>
+      <div className="reachability-head"><strong>{report ? `Alcance: ${describeGrade(report.grade)}` : checking ? 'Verificando os caminhos…' : semDesktop ? 'Verificação indisponível' : 'Alcance ainda não medido'}</strong><button disabled={checking} onClick={() => void check(true)}>{checking ? 'Verificando…' : 'Testar de novo'}</button></div>
+      <span>{report
+        ? describeReachability({ grade: report.grade, paths: report.paths, ipv6: report.ipv6, cgnat: report.cgnat, natMapping: report.natMapping, mappedVia: report.mappedVia })
+        : checking ? 'Consultando STUN e o roteador; leva alguns segundos.' : alcance.error}</span>
+      {report && alcance.status === 'stale' && <span className="reachability-stale">{alcance.error}</span>}
       {report && <ul className="reachability-facts">
         <li><span>IPv6</span><strong>{report.ipv6 ? 'disponível' : 'ausente'}</strong></li>
         <li><span>CGNAT</span><strong>{report.cgnat ? 'sim' : 'não'}</strong></li>
@@ -1414,7 +1455,10 @@ function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string)
   const submit = async () => {
     setBusy(true);
     setError('');
-    if (!readInvite(code)) {
+    // A conferência local só olha o formato. Reconhecer apenas o `TUMA1` aqui
+    // era o que fazia o convite curto da 0.8.4 — o único que o servidor emite —
+    // ser recusado sem nunca chegar a ser tentado.
+    if (!inviteFormat(code)) {
       setError('Código inválido ou vencido. Peça um convite novo ao host.');
       setBusy(false);
       return;
@@ -1430,7 +1474,7 @@ function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string)
     <span className="modal-eyebrow">Enlace direto</span>
     <h2>Entrar por convite</h2>
     <p>Cole o código que você recebeu. Os caminhos são tentados em paralelo e o primeiro que responder é usado.</p>
-    <textarea className="invite-code" value={code} rows={4} spellCheck={false} placeholder="TUMA1.…" onChange={(event) => setCode(event.target.value)} />
+    <textarea className="invite-code" value={code} rows={4} spellCheck={false} placeholder="TUMA2~…" onChange={(event) => setCode(event.target.value)} />
     {error && <p className="invite-status error">{error}</p>}
     <button className="primary-button" disabled={busy || !code.trim()} onClick={() => void submit()}>{busy ? 'Procurando o host…' : 'Entrar na call'}</button>
   </div></div>;

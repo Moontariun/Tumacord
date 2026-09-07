@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { io } from 'socket.io-client';
 import { freePort } from './freePort';
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
@@ -178,4 +179,37 @@ test('o registro de auditoria guarda as ações, inclusive as negadas, sem segre
   const texto = JSON.stringify(registro);
   assert.equal(texto.includes(dono.token), false, 'nenhum token no registro');
   assert.equal(texto.includes(comum.token), false);
+});
+
+// O painel mostra "visto <data>" desde a 0.8.1, e o campo nunca era
+// preenchido: `store.touchUser` existia sem nenhum ponto de chamada, então
+// `lastSeenAt` era sempre indefinido e a coluna simplesmente não aparecia.
+test('a lista de usuários registra quando cada pessoa esteve online', { timeout: 30_000 }, async (context) => {
+  const { url, dono, comum } = await servidor(context);
+
+  const antes = await (await fetch(`${url}/api/admin/users`, comoAdmin(dono.token))).json() as { users: Array<{ id: string; lastSeenAt?: string; online: boolean }> };
+  assert.equal(antes.users.find((u) => u.id === comum.user.id)?.lastSeenAt, undefined, 'sem nunca ter conectado, não há o que mostrar');
+
+  const socket = io(url, { auth: { token: comum.token }, transports: ['websocket'], reconnection: false, forceNew: true });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('o socket não conectou.')), 5_000);
+      socket.on('connect', () => { clearTimeout(timer); resolve(); });
+      socket.on('connect_error', (erro) => { clearTimeout(timer); reject(erro); });
+    });
+    // A gravação do arquivo é assíncrona; a leitura seguinte precisa dela.
+    for (let tentativa = 0; tentativa < 40; tentativa += 1) {
+      const agora = await (await fetch(`${url}/api/admin/users`, comoAdmin(dono.token))).json() as { users: Array<{ id: string; lastSeenAt?: string; online: boolean }> };
+      const visto = agora.users.find((u) => u.id === comum.user.id);
+      if (visto?.lastSeenAt) {
+        assert.ok(!Number.isNaN(new Date(visto.lastSeenAt).getTime()), 'a data precisa ser legível');
+        assert.equal(visto.online, true);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.fail('lastSeenAt continuou vazio depois de a pessoa entrar');
+  } finally {
+    socket.disconnect();
+  }
 });

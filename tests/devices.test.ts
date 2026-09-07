@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cleanDeviceLabel, normalizeSpeakerId, reconcileDevicePreferences, visibleAudioInputs, visibleAudioOutputs } from '../src/hooks/useDevices.js';
+import { cleanDeviceLabel, normalizeSpeakerId, preserveKnownDevices, reconcileDevicePreferences, visibleAudioInputs, visibleAudioOutputs, visibleVideoInputs } from '../src/hooks/useDevices.js';
 
 test('saídas pseudo do Chromium usam o padrão real do sistema', () => {
   assert.equal(normalizeSpeakerId(''), '');
@@ -71,4 +71,51 @@ test('microfone virtual salvo volta a ser o padrão do sistema', () => {
     { microphoneId: 'default', cameraId: '', speakerId: '', noiseSuppression: true },
     [{ kind: 'audioinput', deviceId: 'default', label: 'Padrão - Microfone' }] as Pick<MediaDeviceInfo, 'kind' | 'deviceId' | 'label'>[],
   ).microphoneId, '');
+});
+
+// A lista de dispositivos era substituída por completo a cada `devicechange`.
+// No Linux esse evento chega em rajada: o PipeWire sacode o grafo quando outro
+// programa abre ou solta uma captura, e o próprio Tumacord carrega e descarrega
+// módulos ao montar o barramento de áudio da live. Nessas janelas
+// `enumerateDevices()` responde uma lista curta — às vezes vazia —, e o
+// seletor de microfone ficava só com "Padrão do sistema" antes de voltar
+// sozinho. Nenhum aparelho tinha sido tocado.
+test('enumeração vazia não apaga os dispositivos que já eram conhecidos', () => {
+  const conhecidos = [
+    { kind: 'audioinput', deviceId: 'mic-1', label: 'USB PnP Sound Device' },
+    { kind: 'audiooutput', deviceId: 'saida-1', label: 'Fone' },
+    { kind: 'videoinput', deviceId: 'cam-1', label: 'Webcam' },
+  ] as MediaDeviceInfo[];
+  const preservados = preserveKnownDevices(conhecidos, []);
+  assert.deepEqual(visibleAudioInputs(preservados).map((device) => device.deviceId), ['mic-1']);
+  assert.deepEqual(visibleAudioOutputs(preservados).map((device) => device.deviceId), ['saida-1']);
+  assert.deepEqual(visibleVideoInputs(preservados).map((device) => device.deviceId), ['cam-1']);
+});
+
+test('cada tipo é julgado sozinho: só o que veio vazio é preservado', () => {
+  const conhecidos = [
+    { kind: 'audioinput', deviceId: 'mic-1', label: 'USB PnP Sound Device' },
+    { kind: 'audioinput', deviceId: 'mic-2', label: 'Microfone da webcam' },
+    { kind: 'videoinput', deviceId: 'cam-1', label: 'Webcam' },
+  ] as MediaDeviceInfo[];
+  // O navegador respondeu sobre microfones — e agora só existe um. Isso é uma
+  // resposta de verdade e precisa valer: o aparelho desligado some da lista.
+  const proximos = [{ kind: 'audioinput', deviceId: 'mic-1', label: 'USB PnP Sound Device' }] as MediaDeviceInfo[];
+  const resultado = preserveKnownDevices(conhecidos, proximos);
+  assert.deepEqual(visibleAudioInputs(resultado).map((device) => device.deviceId), ['mic-1']);
+  // Sobre câmeras ele não disse nada, então a que se conhecia continua lá.
+  assert.deepEqual(visibleVideoInputs(resultado).map((device) => device.deviceId), ['cam-1']);
+});
+
+test('uma lista só com as entradas virtuais do Chromium conta como vazia', () => {
+  const conhecidos = [{ kind: 'audioinput', deviceId: 'mic-1', label: 'USB PnP Sound Device' }] as MediaDeviceInfo[];
+  const soVirtuais = [
+    { kind: 'audioinput', deviceId: 'default', label: '' },
+    { kind: 'audioinput', deviceId: 'communications', label: '' },
+  ] as MediaDeviceInfo[];
+  assert.deepEqual(visibleAudioInputs(preserveKnownDevices(conhecidos, soVirtuais)).map((device) => device.deviceId), ['mic-1']);
+});
+
+test('sem nada conhecido antes, a lista vazia continua vazia', () => {
+  assert.deepEqual(preserveKnownDevices([], []), []);
 });

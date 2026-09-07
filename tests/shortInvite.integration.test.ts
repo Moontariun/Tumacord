@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { decodeShortInvite, encodeShortInvite } from '../shared/directLink';
+import { inviteFormat, resolveAnyInvite } from '../src/lib/directLink';
 import { freePort } from './freePort';
 
 const CHAVE = 'turma-secreta';
@@ -96,4 +97,17 @@ test('o servidor emite um convite curto que serve de chave de acesso', async (co
   const inventado = await entrar({ username: 'Intruso', password: 'senha-do-intruso', allowCreate: true, serverKey: 'ZZZZZZZZZZZZ' });
   assert.equal(inventado.status, 403, 'um código inventado não vale');
   assert.equal((await fetch(`${url}/api/invite/ZZZZZZZZZZZZ`)).status, 404);
+
+  // E o caminho que a interface usa de verdade: reconhecer o formato e chegar
+  // à call. Era aqui que o convite curto morria — a interface só reconhecia o
+  // formato antigo e recusava este código antes de sequer tentar.
+  assert.equal(inviteFormat(codigo), 'short');
+  const alcancado = await resolveAnyInvite(codigo);
+  assert.equal(alcancado?.invite.callId, 'call-geral');
+  assert.equal(alcancado?.invite.callName, 'Call do grupo');
+  assert.equal(alcancado?.url, url);
+
+  // Com o que o convite resolveu, o login precisa passar sem mais nada.
+  const entrada = await entrar({ username: 'Amiga', password: 'senha-da-amiga', allowCreate: true, serverKey: alcancado!.invite.key });
+  assert.equal(entrada.status, 200, 'o que o convite resolveu abre a porta');
 });

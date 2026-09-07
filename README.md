@@ -108,16 +108,20 @@ Nada muda e nada precisa ser configurado. Abra o Tumacord: se ninguém estiver e
 
 1. Quem já está na call abre **Enlace direto › Convidar pela internet** e copia o código.
 2. Quem vai entrar cola o código em **Entrar por convite**, ou no campo de convite da tela de entrada.
-3. Pronto. O código carrega os endereços por onde aquele computador aceita entrada e a chave que protege a porta; ele vale por 12 horas.
+3. Pronto. O código aponta o servidor daquela call e leva o segredo que dá direito de entrar; ele vale por 12 horas.
 
-O Tumacord tenta os caminhos em paralelo, nesta ordem:
+O convite não carrega endereço de máquina nenhuma. Ele diz onde a call se
+encontra, e os dois lados chegam lá por conexão *de saída* — que é o que
+atravessa CGNAT sem ninguém precisar abrir porta. A descrição antiga, de um
+código que trazia os endereços do host para quem recebia correr atrás deles,
+saiu na 0.8.3 junto com aquele caminho.
 
 | Caminho | Como funciona | Quando entra |
 | --- | --- | --- |
-| Rede local | descoberta por broadcast/multicast, como sempre | mesma rede |
-| IPv6 | endereço IPv6 global do host, sem NAT no meio | ambos com IPv6 — o caso típico de quem está em CGNAT |
-| IPv4 mapeado | porta pedida ao roteador por PCP, NAT-PMP ou UPnP | roteador que atende algum desses protocolos |
-| Mídia por ICE/STUN | voz, câmera e tela furam o NAT diretamente | sempre que a sinalização estiver de pé |
+| Rede local | descoberta por broadcast/multicast, como sempre | mesma rede, sem convite nenhum |
+| Servidor de encontro | o convite aponta o servidor; os dois lados ligam para fora | fora da rede local |
+| Mídia por ICE/STUN | voz, câmera e tela furam o NAT diretamente entre os dois | sempre que a sinalização estiver de pé |
+| Relay TURN | último recurso, ligado por quem precisa | nenhum caminho direto se forma |
 
 A parte pesada — voz, câmera e tela — atravessa CGNAT por conta própria com ICE/STUN, que é a mesma travessia que jogos e chamadas usam. Os servidores STUN só informam qual é o seu endereço público: eles não veem nem transportam a conversa, que continua cifrada de ponta a ponta por DTLS-SRTP.
 
