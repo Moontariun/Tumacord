@@ -1277,10 +1277,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setShowSourcePicker(false);
       screenAudioEnabled.current = stream.getAudioTracks().some((track) => track.readyState === 'live');
       publishState({ screen: true, screenAudio: screenAudioEnabled.current });
+      // A captura já nasceu com o teto do perfil, mas o portal pode ter
+      // entregado outra coisa. Esta passagem lê o que veio de verdade, corrige
+      // se der, e é ela que enche a frase honesta da tela de configurações.
+      void applyCaptureBudget(screenQuality, qualityChangeGeneration.current).catch(() => undefined);
     }
     playSound(kind === 'screen' ? 'streamStart' : 'notification');
     return true;
-  }, [negotiate, onError, preferences.cameraId, publishState, quality, sendStreamMeta, stopStream]);
+  }, [applyCaptureBudget, applyCodecPreference, negotiate, onError, preferences.cameraId, publishState, quality, sendStreamMeta, stopStream]);
 
   const ensureMicrophone = useCallback(async ({ force = false } = {}) => {
     const current = localStreams.current.get('microphone');
