@@ -2,6 +2,14 @@
 
 ## 0.8.9 — a qualidade escolhida passa a valer para a captura
 
+> **Leia antes de instalar.** Esta versão corrige um defeito medido e reproduzido,
+> mas **a validação final está pendente**: o Enshrouded não foi medido com a live
+> aberta, não houve teste com um segundo participante, e **nada foi executado em
+> uma máquina Windows real** — os artefatos do Windows saem do CI, que compila e
+> roda os testes, mas não abre uma chamada. Se você depende do Tumacord agora,
+> guarde a 0.8.8 para voltar. O que ficou pendente está detalhado ao final desta
+> seção e em `docs/RELATORIO-0.8.9.md`.
+
 No CachyOS/KDE, abrir o Enshrouded com uma live sendo enviada e outra sendo
 assistida corrompia a interface e derrubava o jogo para algo perto de 8 FPS. Sem
 o Tumacord aberto, o mesmo jogo rodava liso.
