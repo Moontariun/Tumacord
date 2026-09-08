@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -21,7 +21,9 @@
     "package:dir": "npm run build && electron-builder --linux dir --publish never",
     "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --publish never",
     "preview": "vite preview --host 0.0.0.0",
-    "package:windows": "npm run build && electron-builder --win portable --publish never"
+    "build:native:win": "powershell -NoProfile -ExecutionPolicy Bypass -File native/windows/audio-helper/build.ps1",
+    "build:icon:win": "node scripts/build-windows-icon.cjs",
+    "package:windows": "npm run build && npm run build:native:win && electron-builder --win nsis portable --publish never"
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",
@@ -52,6 +54,7 @@
   "build": {
     "appId": "br.com.tumacord.app",
     "productName": "Tumacord",
+    "copyright": "Copyright © 2026 Tumacord",
     "asar": true,
     "asarUnpack": [
       "dist-server/**/*",
@@ -81,14 +84,48 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
           ]
         }
       ],
-      "icon": "assets/tumacord-logo.png",
-      "artifactName": "Tumacord-${version}-portable.exe"
+      "icon": "assets/tumacord.ico",
+      "legalTrademarks": "Tumacord",
+      "signtoolOptions": {
+        "publisherName": "Tumacord"
+      },
+      "extraResources": [
+        {
+          "from": "native/windows/audio-helper/build/tumacord-audio-helper.exe",
+          "to": "audio-helper/tumacord-audio-helper.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Tumacord",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Tumacord-${version}-Setup.${ext}",
+      "uninstallDisplayName": "Tumacord ${version}",
+      "installerIcon": "assets/tumacord.ico",
+      "uninstallerIcon": "assets/tumacord.ico",
+      "installerHeaderIcon": "assets/tumacord.ico"
+    },
+    "portable": {
+      "artifactName": "Tumacord-${version}-portable.${ext}"
     }
   },
   "allowScripts": {

@@ -56,8 +56,25 @@ interface Window {
     platform: string;
     isDesktop: true;
     getSources: () => Promise<DesktopSource[]>;
-    prepareScreenAudio: () => Promise<{ ok: boolean; deviceId?: string; deviceName?: string; error?: string }>;
+    // `mode` diz de que jeito a faixa vai nascer: `device` significa que há
+    // uma entrada de áudio para abrir por `deviceName` (o barramento do
+    // PipeWire, no Linux); `stream` significa que o PCM chega pela porta de
+    // mensagens que o processo principal envia (Windows).
+    prepareScreenAudio: (request?: { sourceId?: string }) => Promise<{
+      ok: boolean;
+      mode?: 'device' | 'stream';
+      isolation?: 'process' | 'system' | 'bus';
+      deviceId?: string;
+      deviceName?: string;
+      sources?: number;
+      excluded?: number;
+      code?: string;
+      error?: string;
+    }>;
     stopScreenAudio: () => Promise<{ ok: boolean }>;
+    requestScreenAudioPort?: () => Promise<boolean>;
+    screenAudioCapabilities?: () => Promise<{ mode: string; supported: boolean | null; build?: number; reason?: string; isolation?: string }>;
+    screenAudioDiagnostics?: () => Promise<Record<string, unknown>>;
     discoverCalls: () => Promise<DiscoveredCall[]>;
     onCallsChanged: (listener: (calls: DiscoveredCall[]) => void) => () => void;
     setHosting: (details: null | { hostUserId: string; hostUsername: string; callId: string; callName: string; participants: number }) => Promise<void>;

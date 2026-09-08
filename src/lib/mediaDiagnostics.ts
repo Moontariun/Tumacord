@@ -167,6 +167,65 @@ export interface DiagnosticContext {
   stunConfigured: boolean;
   turnConfigured: boolean;
   paths: readonly DiagnosticPath[];
+  screenAudio?: ScreenAudioDiagnostics | null;
+}
+
+// O que o áudio da transmissão está fazendo, sem dizer o que está tocando.
+//
+// "A live está sem som" também não é um estado: pode ser um sistema que não
+// isola, um componente que caiu, um amortecedor faminto ou uma lista de
+// bloqueio que engoliu a fonte errada. Números resolvem cada um desses casos,
+// e nenhum deles precisa do nome de um aplicativo ou do título de uma janela —
+// que é justamente o que não pode ir para um relatório colado numa conversa.
+export interface ScreenAudioDiagnostics {
+  platform?: string;
+  mechanism?: string;
+  active?: boolean;
+  isolation?: string;
+  sources?: number;
+  excluded?: number;
+  excludedReasons?: Record<string, number>;
+  underruns?: number;
+  overruns?: number;
+  restarts?: number;
+  processLoopback?: boolean | null;
+  windowsBuild?: number;
+  links?: number;
+  lastError?: string;
+}
+
+const MECHANISM_LABEL: Record<string, string> = {
+  'wasapi-process-loopback': 'captura por aplicação (Windows)',
+  'pipewire-bus': 'barramento do PipeWire (Linux)',
+  none: 'indisponível neste sistema',
+};
+
+const ISOLATION_LABEL: Record<string, string> = {
+  process: 'somente a aplicação escolhida',
+  system: 'sistema, sem apps de chamada',
+  bus: 'barramento, sem apps de chamada',
+};
+
+export function formatScreenAudioSection(details: ScreenAudioDiagnostics | null | undefined): string[] {
+  if (!details) return [];
+  const linhas = ['', 'Áudio da transmissão:'];
+  linhas.push(`  mecanismo: ${MECHANISM_LABEL[details.mechanism ?? ''] ?? details.mechanism ?? 'desconhecido'}`);
+  linhas.push(`  captura: ${details.active ? 'ativa' : 'inativa'}${details.isolation ? ` · ${ISOLATION_LABEL[details.isolation] ?? details.isolation}` : ''}`);
+  if (details.processLoopback !== undefined) {
+    linhas.push(`  isolamento por aplicação: ${details.processLoopback === null ? 'não medido' : details.processLoopback ? 'disponível' : 'indisponível'}${details.windowsBuild ? ` · build ${details.windowsBuild}` : ''}`);
+  }
+  if (details.sources !== undefined) linhas.push(`  aplicações incluídas: ${details.sources}`);
+  if (details.excluded !== undefined) {
+    const motivos = Object.entries(details.excludedReasons ?? {}).map(([motivo, total]) => `${motivo}=${total}`).join(' ');
+    linhas.push(`  aplicações excluídas: ${details.excluded}${motivos ? ` (${motivos})` : ''}`);
+  }
+  if (details.links !== undefined) linhas.push(`  enlaces no barramento: ${details.links}`);
+  if (details.underruns !== undefined || details.overruns !== undefined) {
+    linhas.push(`  amortecedor: ${details.underruns ?? 0} faltas · ${details.overruns ?? 0} descartes`);
+  }
+  if (details.restarts) linhas.push(`  componente reiniciado: ${details.restarts}x`);
+  if (details.lastError) linhas.push(`  última falha: ${details.lastError}`);
+  return linhas;
 }
 
 // Identificadores viram um prefixo curto: bastam para casar duas linhas do
@@ -208,6 +267,7 @@ export function formatDiagnosticReport(snapshot: MicrophonePipelineSnapshot, con
     linhas.push(`  ${shortId(peer.peerId)} ${peer.connectionState.padEnd(12)} sender=${peer.hasAudioSender ? (peer.senderHasTrack ? 'com faixa' : 'sem faixa') : 'ausente'} · ${rota}`);
   }
   if (!snapshot.peers.length) linhas.push('  ninguém mais na call');
+  linhas.push(...formatScreenAudioSection(context.screenAudio));
   linhas.push('', describeMicrophonePipeline(snapshot));
   return linhas.join('\n');
 }

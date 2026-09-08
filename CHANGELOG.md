@@ -1,5 +1,150 @@
 # Histórico de versões
 
+## 0.8.8 — o Windows para de devolver a call pela live
+
+Até aqui, o áudio da transmissão no Windows saía do loopback do Chromium: uma
+cópia do dispositivo de saída inteiro. Ele funcionava — e carregava junto o
+Discord, o próprio Tumacord e a voz de quem estava na call. Quem transmitia com
+áudio devolvia a chamada para dentro da live, e a única defesa era pedir para
+todo mundo usar fone.
+
+Agora o Windows captura por **aplicação**, não por dispositivo. E ganhou um
+instalador de verdade.
+
+**O que entra no áudio da live**
+
+- **transmitindo uma janela**: só o som daquela aplicação. Um jogo compartilhado
+  leva o som do jogo, e nada além dele — nem o navegador atrás, nem a
+  notificação de outro programa;
+- **transmitindo um monitor inteiro**: o som do sistema, menos o Tumacord, o
+  Discord (com Canary e PTB) e os processos de áudio deles;
+- nos dois casos, a voz da call — a do Tumacord e a do Discord — nunca é
+  capturada. Não é cancelamento de eco: essas aplicações simplesmente não
+  entram na captura. O laço é cortado na origem, que é o único lugar onde ele
+  some de verdade;
+- os sons de interface do próprio Tumacord também ficam de fora.
+
+**O que o Tumacord não faz para conseguir isso**
+
+- não muta o Discord, não mexe no volume dele e não o fecha;
+- não troca o dispositivo de áudio padrão do Windows;
+- não instala driver de áudio virtual. Nada de VB-Cable, VoiceMeeter ou
+  equivalente;
+- não pede para ninguém configurar o Mixer de Volume à mão.
+
+A captura é feita com a API oficial de loopback por processo do Windows
+(`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`), por um processo auxiliar de
+14 KB que vem dentro do pacote, sobe junto com a live e morre com ela.
+
+**Quando o Windows não sabe isolar**
+
+Loopback por processo existe a partir do Windows 10 build 19041. Em versões
+anteriores, o aplicativo detecta isso — tentando uma ativação de verdade, não
+comparando número de build — e diz:
+
+> Nesta versão do Windows, o áudio da aplicação não pode ser isolado com
+> segurança. A transmissão continuará sem áudio.
+
+O vídeo continua funcionando. **Não existe reserva**, e é de propósito: a única
+alternativa técnica seria voltar a capturar o dispositivo inteiro, que é
+exatamente o defeito que esta versão corrige. Transmitir sem áudio é honesto;
+transmitir devolvendo a call não é.
+
+**A lista acompanha o que acontece durante a live**
+
+- um jogo aberto no meio da transmissão entra no som sozinho;
+- o Discord aberto no meio da transmissão **não** entra;
+- um programa que fecha sai sem engasgar a live;
+- um programa que reinicia é capturado de novo com o processo novo;
+- pai e filho da mesma aplicação viram uma captura só — antes disso seria o
+  mesmo som somado consigo mesmo;
+- a identificação é por processo e árvore de processos, nunca por título de
+  janela.
+
+**Instalador de verdade no Windows**
+
+- `Tumacord-0.8.8-Setup.exe`, instalador NSIS assistido: escolha de pasta,
+  atalhos no Menu Iniciar e na área de trabalho, registro em **Aplicativos
+  instalados** e desinstalador próprio;
+- `Tumacord-0.8.8-portable.exe` continua existindo como alternativa;
+- ícone `.ico` com sete tamanhos, em vez de uma imagem esticada;
+- instalar por cima preserva conta, mensagens, anexos, perfis e preferências.
+  Com o aplicativo aberto, o instalador avisa e o encerra antes de continuar;
+- uma única confirmação do Windows, durante a instalação. Nenhuma ao abrir;
+- **nada precisa estar instalado na máquina**: nem Node, nem npm, nem
+  redistribuível do Visual C++.
+
+**Firewall**
+
+Duas regras criadas pelo instalador, presas ao executável do Tumacord e
+limitadas aos perfis Privado e de Domínio: TCP 3927 para a sinalização e
+UDP 3928 para a descoberta na rede local, esta restrita à própria sub-rede. O
+perfil Público nunca é liberado, o firewall nunca é desligado, e as regras são
+removidas na desinstalação — mas não na atualização.
+
+**Assinatura**
+
+A pipeline aceita certificado Authenticode tradicional ou Azure Trusted
+Signing, assina executável principal, instalador, portátil e o componente
+nativo, usa carimbo de tempo e depois **verifica** com `Get-AuthenticodeSignature`.
+Com a variável `TUMACORD_REQUIRE_SIGNING`, uma release sem assinatura falha em
+vez de sair torta. Nenhum certificado, senha ou token entra no repositório.
+
+Sobre o SmartScreen, sem promessa vazia: assinar não faz o aviso sumir de
+imediato. A reputação se constrói por downloads ao longo do tempo, na mesma
+identidade de publisher. O que o projeto não faz, em hipótese alguma, é sugerir
+desligar SmartScreen, Defender, Smart App Control ou UAC.
+
+**Windows e Linux continuam a mesma call**
+
+Nada de protocolo paralelo. SDP, ICE, STUN, TURN, Socket.IO, sinalização,
+eventos, metadados de transmissão, telestração, reconexão, migração de host e
+chat são exatamente os mesmos. Para quem está do outro lado chega uma faixa de
+áudio WebRTC comum — não há como saber se ela nasceu de um barramento do
+PipeWire ou de uma captura WASAPI.
+
+A implementação do Linux **não foi tocada**. Ela continua montando o barramento
+temporário no PipeWire, continua deixando Tumacord e Discord de fora, continua
+não virando microfone padrão do sistema, e todos os testes dela continuam
+passando. O que mudou foi a existência de uma camada por plataforma
+(`LinuxScreenAudioBridge` e `WindowsScreenAudioRouter`) atrás da mesma API.
+
+**Diagnóstico**
+
+Configurações › Diagnóstico agora mostra também o áudio da transmissão:
+mecanismo em uso, captura ativa ou não, se o isolamento por aplicação está
+disponível, quantas aplicações entraram, quantas ficaram de fora e por quê,
+faltas e descartes do amortecedor, e reinícios do componente. Sem nome de
+aplicativo, sem título de janela, sem endereço — o relatório continua colável
+em qualquer conversa.
+
+**Dois defeitos do desenho, corrigidos**
+
+- **não dava para sair do modo de desenho.** A camada de desenho cobre o quadro
+  inteiro e ficava *acima* dos botões do quadro: o lápis que liga o modo era o
+  único jeito de desligá-lo, e ele estava embaixo da própria camada que tinha
+  acabado de ligar. Os botões passaram para cima, e **Esc** virou uma segunda
+  saída — a que não depende de acertar um alvo pequeno;
+- **no Linux/Wayland o traço não aparecia para quem estava transmitindo.** A
+  janela sobreposta ao desktop recebia os traços por IPC no mesmo instante em
+  que era criada, antes de a página terminar de carregar. `webContents.send`
+  para uma página que ainda não carregou não enfileira nada: a mensagem se
+  perdia, e a sobreposição ficava em branco. No Windows o carregamento é rápido
+  o bastante para a maioria dos traços chegar; no Wayland, onde mapear a janela
+  demora mais, ela nunca chegava a pintar. Agora o traço mais recente fica
+  guardado e é pintado assim que a página existe;
+- ainda no Wayland: alguns compositores ignoram `showInactive` numa janela não
+  focável, e a sobreposição existia sem ninguém a ver. Quando isso acontece, um
+  `show` normal é tentado em seguida.
+
+**Compatibilidade**
+
+- nenhuma mudança em convite, sinalização, banco de dados, API ou portas;
+- um cliente 0.8.7 e um 0.8.8 conversam normalmente na mesma call;
+- o servidor dedicado não precisa ser atualizado para esta versão;
+- a build do Windows passou a sair de um runner Windows de verdade, porque
+  agora há código nativo para compilar. O pipeline do Linux não mudou.
+
 ## 0.8.7 — desenhar na tela de quem está transmitindo
 
 Quem assiste a uma transmissão pode rabiscar em cima dela para apontar alguma

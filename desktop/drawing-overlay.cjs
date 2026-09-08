@@ -41,6 +41,13 @@ class DrawingOverlay {
     this.preload = options.preload ?? path.join(__dirname, 'overlay-preload.cjs');
     this.window = null;
     this.sourceId = '';
+    // O traço mais recente fica guardado até a página existir para recebê-lo.
+    // `webContents.send` para uma janela que ainda está carregando não enfileira
+    // nada: a mensagem simplesmente se perde, porque o ouvinte do preload ainda
+    // não foi registrado. Era isso que deixava a sobreposição em branco — e no
+    // Wayland, onde mapear a janela demora mais, ela nunca chegava a pintar.
+    this.pending = null;
+    this.loaded = false;
   }
 
   // Só monitor inteiro tem geometria conhecida. Janela, não.
@@ -80,11 +87,24 @@ class DrawingOverlay {
       try { janela.setBounds(display.bounds); } catch { /* Wayland ignora posição */ }
       janela.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       janela.webContents.on('will-navigate', (event) => event.preventDefault());
-      janela.on('closed', () => { if (this.window === janela) { this.window = null; this.sourceId = ''; } });
-      void janela.loadFile(this.file).catch(() => undefined);
+      janela.on('closed', () => { if (this.window === janela) { this.window = null; this.sourceId = ''; this.loaded = false; } });
       this.window = janela;
       this.sourceId = sourceId;
+      this.loaded = false;
+      // O ouvinte precisa existir antes do carregamento começar: uma página
+      // que carrega rápido terminaria antes de alguém estar escutando.
+      try {
+        janela.webContents.on('did-finish-load', () => {
+          if (this.window !== janela) return;
+          this.loaded = true;
+          this.flush();
+        });
+      } catch { /* stub sem eventos */ }
+      void janela.loadFile(this.file).catch(() => undefined);
       try { janela.showInactive(); } catch { /* alguns compositores só têm show() */ }
+      // No Wayland, `showInactive` de uma janela não focável às vezes não
+      // chega a mapear nada. Sem isto, a sobreposição existia e ninguém a via.
+      try { if (!janela.isVisible?.()) janela.show(); } catch { /* idem */ }
     }
     this.push(strokes, lifetime);
     return true;
@@ -92,13 +112,22 @@ class DrawingOverlay {
 
   push(strokes, lifetime) {
     if (!this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send('tumacord:overlay-strokes', { strokes, lifetime });
+    this.pending = { strokes, lifetime };
+    this.flush();
+  }
+
+  flush() {
+    if (!this.loaded || !this.pending) return;
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send('tumacord:overlay-strokes', this.pending);
   }
 
   close() {
     const janela = this.window;
     this.window = null;
     this.sourceId = '';
+    this.pending = null;
+    this.loaded = false;
     if (janela && !janela.isDestroyed()) {
       try { janela.close(); } catch { /* já estava indo embora */ }
     }

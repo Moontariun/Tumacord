@@ -68,6 +68,20 @@ O roteador de áudio da live guarda os dispositivos padrão do sistema antes de 
 
 No CachyOS/KDE Wayland, o Electron usa o portal de captura e o PipeWire tanto no P2P quanto ao se conectar ao servidor dedicado. O modo escolhido altera sinalização e persistência, não o pipeline local de tela e áudio. O roteador de áudio tolera portas que desaparecem entre o snapshot e a criação do link: mantém o barramento vivo e tenta somente o enlace afetado novamente, sem encerrar a track nativa de captura.
 
+## Áudio da transmissão: dois mecanismos, uma faixa
+
+O que impede a voz da call de voltar pela live não é cancelamento de eco — é o roteamento. A aplicação que reproduz a call nunca é capturada, então o laço não chega a existir. Os dois sistemas resolvem isso de formas diferentes, e `desktop/screen-audio.cjs` esconde a diferença atrás de uma API única. O campo `mode` do resultado de `prepare` é o que a distingue: `device` significa que há uma entrada de áudio para abrir por nome, `stream` significa que o PCM chega por um canal do processo principal.
+
+No **Linux**, `desktop/audio-router.cjs` monta um `module-null-sink` e uma `module-remap-source` no PipeWire e liga nele os fluxos de saída que não são de call. O renderer abre essa fonte com `getUserMedia`.
+
+No **Windows**, `desktop/windows-audio-router.cjs` conversa com um processo auxiliar em C++ (`native/windows/audio-helper/`) que usa `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` — a API oficial de loopback por processo, disponível a partir do Windows 10 build 19041. Uma captura por árvore de processo; janela compartilhada captura a árvore daquele processo, monitor inteiro captura as árvores de todas as sessões de áudio permitidas. A decisão de quais entram mora em `desktop/windows-audio-policy.cjs`, em JavaScript, porque é a parte que precisa de teste. O helper só executa a lista — e recusa, sempre, a própria árvore de quem o iniciou.
+
+O PCM sai do helper em quadros binários, atravessa um `MessageChannelMain` dedicado (cem mensagens por segundo não passam por `ipcRenderer.invoke`) e vira faixa em `src/lib/screenAudioBridge.ts`: um `AudioWorklet` com anel de tamanho fechado, correção de deriva de relógio e limitador, ligado a um `MediaStreamAudioDestinationNode`. Esse contexto nunca se conecta a `destination` — reproduzir localmente o áudio da própria live criaria um caminho de retorno pelo cancelamento de eco do microfone.
+
+Os dois caminhos terminam em uma `MediaStreamTrack` de áudio comum dentro do mesmo `MediaStream` da tela. Para o outro lado da call não há diferença alguma: chega uma faixa WebRTC normal, e a mesma SDP, os mesmos metadados de transmissão e a mesma telestração valem nos dois sistemas.
+
+Quando o Windows não oferece loopback por processo, a preparação falha com um código conhecido e a transmissão segue **sem áudio**. Não há reserva de propósito: a alternativa seria capturar o dispositivo inteiro, que é exatamente o defeito que este caminho existe para evitar.
+
 ## Servidor dedicado e segurança
 
 O contêiner serve `dist-web`, API e Socket.IO na porta `4600`; o servidor embutido do desktop define `TUMACORD_SERVE_WEB=0`. O modo dedicado exige a chave configurada pelo operador, armazena somente o hash dos tokens de sessão e deriva senhas com `scrypt`. HTTPS/WSS é ativado quando certificado e chave TLS são fornecidos. A mídia nunca é retransmitida pelo servidor e continua cifrada com DTLS-SRTP.

@@ -118,24 +118,119 @@ test('fechar é idempotente e some com a janela', () => {
   assert.equal(overlay.visible, false);
 });
 
-function janelaFalsa(enviados: unknown[]) {
+// A janela de mentira imita o que importa do ciclo de vida real: uma página
+// que só passa a escutar quando termina de carregar, e uma visibilidade que o
+// compositor pode recusar.
+function janelaFalsa(enviados: unknown[], opcoes: { carregarNaHora?: boolean; mapearNoShowInactive?: boolean } = {}) {
+  const carregarNaHora = opcoes.carregarNaHora ?? true;
+  const mapearNoShowInactive = opcoes.mapearNoShowInactive ?? true;
   let destruida = false;
+  let visivel = false;
+  let mostradaAtiva = false;
   const ouvintes: Record<string, Array<() => void>> = {};
-  return {
+  const ouvintesConteudo: Record<string, Array<() => void>> = {};
+  const carregar = () => { for (const fn of ouvintesConteudo['did-finish-load'] ?? []) fn(); };
+  const janela = {
     setIgnoreMouseEvents: () => undefined,
     setAlwaysOnTop: () => undefined,
     setVisibleOnAllWorkspaces: () => undefined,
     setContentProtection: () => undefined,
     setBounds: () => undefined,
-    showInactive: () => undefined,
-    loadFile: () => Promise.resolve(),
+    showInactive: () => { if (mapearNoShowInactive) visivel = true; },
+    show: () => { visivel = true; mostradaAtiva = true; },
+    isVisible: () => visivel,
+    loadFile: () => { if (carregarNaHora) carregar(); return Promise.resolve(); },
     isDestroyed: () => destruida,
     close: () => { destruida = true; for (const fn of ouvintes.closed ?? []) fn(); },
     on: (evento: string, fn: () => void) => { (ouvintes[evento] ??= []).push(fn); },
     webContents: {
       send: (_canal: string, payload: unknown) => enviados.push(payload),
       setWindowOpenHandler: () => undefined,
-      on: () => undefined,
+      on: (evento: string, fn: () => void) => { (ouvintesConteudo[evento] ??= []).push(fn); },
     },
-  } as Record<string, unknown> as never;
+    terminarCarregamento: carregar,
+    foiMostradaAtiva: () => mostradaAtiva,
+  };
+  return janela as Record<string, unknown> as never;
 }
+
+// O defeito que este teste tranca: `webContents.send` para uma janela que ainda
+// está carregando não enfileira nada. O ouvinte do preload não existe, a
+// mensagem se perde, e a sobreposição fica em branco. No Wayland, onde mapear a
+// janela demora mais, ela nunca chegava a pintar.
+test('o traço desenhado antes de a página carregar não se perde', () => {
+  const enviados: unknown[] = [];
+  let janela: ReturnType<typeof janelaFalsa> | null = null;
+  const overlay = new DrawingOverlay({
+    readDisplays: () => MONITORES,
+    readPrimary: () => MONITORES[0],
+    createWindow: () => {
+      janela = janelaFalsa(enviados, { carregarNaHora: false });
+      return janela;
+    },
+  });
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [{ x: 0.2, y: 0.2 }] }], lifetime: 6_000 });
+  assert.equal(enviados.length, 0, 'nada pode ser enviado antes de existir quem escute');
+
+  // Mais pontos chegam enquanto a página ainda carrega.
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [{ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }] }], lifetime: 6_000 });
+  assert.equal(enviados.length, 0);
+
+  (janela as unknown as { terminarCarregamento: () => void }).terminarCarregamento();
+  assert.equal(enviados.length, 1, 'ao carregar, o traço mais recente é pintado');
+  assert.deepEqual((enviados[0] as { strokes: Array<{ points: unknown[] }> }).strokes[0].points, [{ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }]);
+
+  // Depois de carregada, cada atualização segue direto.
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 2, points: [{ x: 0.5, y: 0.5 }] }], lifetime: 6_000 });
+  assert.equal(enviados.length, 2);
+});
+
+// `showInactive` de uma janela não focável é ignorado por alguns compositores
+// Wayland. A janela existia e ninguém a via.
+test('compositor que ignora showInactive ainda recebe um show', () => {
+  const enviados: unknown[] = [];
+  let janela: ReturnType<typeof janelaFalsa> | null = null;
+  const overlay = new DrawingOverlay({
+    readDisplays: () => MONITORES,
+    readPrimary: () => MONITORES[0],
+    createWindow: () => {
+      janela = janelaFalsa(enviados, { mapearNoShowInactive: false });
+      return janela;
+    },
+  });
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [{ x: 0.2, y: 0.2 }] }], lifetime: 6_000 });
+  assert.equal((janela as unknown as { foiMostradaAtiva: () => boolean }).foiMostradaAtiva(), true);
+  assert.equal(enviados.length, 1);
+});
+
+test('um compositor que aceita showInactive não recebe show por cima', () => {
+  const enviados: unknown[] = [];
+  let janela: ReturnType<typeof janelaFalsa> | null = null;
+  const overlay = new DrawingOverlay({
+    readDisplays: () => MONITORES,
+    readPrimary: () => MONITORES[0],
+    createWindow: () => {
+      janela = janelaFalsa(enviados);
+      return janela;
+    },
+  });
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [{ x: 0.2, y: 0.2 }] }], lifetime: 6_000 });
+  assert.equal((janela as unknown as { foiMostradaAtiva: () => boolean }).foiMostradaAtiva(), false, 'a janela não pode roubar foco quando showInactive bastou');
+});
+
+test('fechar solta o traço guardado, para a live seguinte não herdar o anterior', () => {
+  const enviados: unknown[] = [];
+  let janela: ReturnType<typeof janelaFalsa> | null = null;
+  const overlay = new DrawingOverlay({
+    readDisplays: () => MONITORES,
+    readPrimary: () => MONITORES[0],
+    createWindow: () => {
+      janela = janelaFalsa(enviados, { carregarNaHora: false });
+      return janela;
+    },
+  });
+  overlay.show({ sourceId: 'screen:11:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [{ x: 0.2, y: 0.2 }] }], lifetime: 6_000 });
+  overlay.close();
+  (janela as unknown as { terminarCarregamento: () => void }).terminarCarregamento();
+  assert.equal(enviados.length, 0, 'uma janela já fechada não recebe traço nenhum');
+});

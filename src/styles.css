@@ -243,7 +243,7 @@ svg { width: 20px; height: 20px; }
 .video-tile > span .live-dot { margin-right: 6px; width: 6px; height: 6px; }
 .video-tile:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; }
 .video-tile:fullscreen video { object-fit: contain; }
-.video-actions { position: absolute; right: 9px; top: 9px; z-index: 2; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }
+.video-actions { position: absolute; right: 9px; top: 9px; z-index: 4; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }
 .video-tile:hover .video-actions { opacity: 1; }
 .video-actions button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(8,9,13,.78); color: white; backdrop-filter: blur(8px); }
 .video-actions button:hover { background: rgba(125,92,255,.94); transform: translateY(-1px); }
@@ -331,6 +331,7 @@ svg { width: 20px; height: 20px; }
 .source-grid button { min-width: 0; display: grid; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: #242631; text-align: left; }
 .source-grid button:hover { border-color: var(--violet); background: #2b2d3a; }
 .source-grid img { width: 100%; aspect-ratio: 16/10; object-fit: cover; border-radius: 7px; background: #090a0e; }
+.source-grid .source-audio { display: block; padding: 0 2px 2px; color: #8d8fa0; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-grid span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px 2px; color: #d0d1da; font-size: 11px; }
 .toast { position: fixed; z-index: 200; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 30px)); padding: 11px 16px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: #292a35; color: #f0f0f5; box-shadow: 0 16px 50px rgba(0,0,0,.4); font-size: 12px; animation: toast-in .2s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
@@ -1228,6 +1229,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .drawing-layer.is-armed { cursor: crosshair; }
 .drawing-layer canvas { display: block; width: 100%; height: 100%; }
 .video-tile.is-drawing { outline: 2px solid var(--violet); outline-offset: -2px; }
+/* Enquanto se desenha, o quadro inteiro usa a mira. Os botões continuam
+   sendo botões: eles ficam acima da camada e mantêm o cursor de clique —
+   sem isso, o lápis some por baixo do próprio modo que ele liga. */
+.video-tile.is-drawing .video-actions button, .video-tile.is-drawing .drawing-clear { cursor: pointer; }
 .drawing-clear { position: absolute; left: 10px; bottom: 10px; padding: 6px 12px; border-radius: 9px; background: rgba(7,8,12,.8); color: #e6e7ef; font-size: 10px; font-weight: 800; backdrop-filter: blur(8px); }
 .drawing-clear:hover { background: rgba(7,8,12,.94); }
 .video-actions button.is-on { background: var(--violet); color: white; }

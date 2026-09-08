@@ -1,10 +1,10 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, session, Tray } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, session, Tray } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { TumacordDiscovery } = require('./discovery.cjs');
 const { DirectLink } = require('./direct-link.cjs');
 const { readNetworkPreferences, writeNetworkPreferences } = require('./network-preferences.cjs');
-const { ScreenAudioRouter } = require('./audio-router.cjs');
+const { createScreenAudioRouter } = require('./screen-audio.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
 const { DrawingOverlay } = require('./drawing-overlay.cjs');
@@ -49,8 +49,32 @@ let mainWindow;
 let tray;
 let mediaFullscreenActive = false;
 let mediaFullscreenWasActive = false;
-const screenAudioRouter = new ScreenAudioRouter();
+// O PCM da transmissão viaja por um canal próprio, não pelo IPC comum: são
+// cem mensagens por segundo durante a live inteira, e o caminho de `invoke`
+// serializa cada uma junto com o resto do tráfego da interface.
+let screenAudioChannel = null;
+const screenAudioRouter = createScreenAudioRouter({
+  onPcm: (payload) => {
+    const port = screenAudioChannel?.port1;
+    if (!port) return;
+    // O quadro é uma fatia do buffer de leitura do processo filho; ele será
+    // reaproveitado na próxima leitura. A cópia é de 3840 bytes.
+    const block = new Uint8Array(payload.byteLength);
+    block.set(payload);
+    try { port.postMessage(block); } catch { /* o renderer fechou a porta */ }
+  },
+  onDiagnostic: (details) => appendRuntimeEvent(runtimeLogFile, details),
+});
 const drawingOverlay = new DrawingOverlay();
+// O renderer só pode pedir captura de uma fonte que o próprio Tumacord
+// ofereceu. Sem esta lista, um renderer comprometido poderia mandar um
+// identificador arbitrário e pedir o áudio de qualquer processo da máquina.
+let offeredSources = new Map();
+// A fonte de uma transmissão em andamento continua válida mesmo depois de uma
+// nova listagem: a verificação periódica de saúde e a reconstrução do
+// componente usam o mesmo identificador, e recusá-lo deixaria a live sem
+// caminho de volta se o helper caísse.
+let activeScreenAudioSource = '';
 let quittingAfterAudioCleanup = false;
 let safeGpuRelaunching = false;
 const liveWindows = new Set();
@@ -99,6 +123,24 @@ app.on('child-process-gone', (_event, details) => {
 
 function blockedCaptureSource(name) {
   return /\b(?:tumacord|discord)\b/i.test(name);
+}
+
+// Uma porta nova a cada transmissão. Reaproveitar a anterior deixaria o áudio
+// de uma live encerrada chegando na seguinte se o renderer demorasse a soltar
+// a referência.
+function openScreenAudioChannel() {
+  closeScreenAudioChannel();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const channel = new MessageChannelMain();
+  screenAudioChannel = channel;
+  channel.port1.start();
+  mainWindow.webContents.postMessage('tumacord:screen-audio-port', null, [channel.port2]);
+}
+
+function closeScreenAudioChannel() {
+  if (!screenAudioChannel) return;
+  try { screenAudioChannel.port1.close(); } catch { /* já fechada */ }
+  screenAudioChannel = null;
 }
 
 async function startEmbeddedServer() {
@@ -207,6 +249,7 @@ async function createWindow() {
   });
   window.on('closed', () => {
     drawingOverlay.close();
+    closeScreenAudioChannel();
     for (const child of liveWindows) {
       if (!child.isDestroyed()) child.close();
     }
@@ -299,16 +342,52 @@ app.whenReady().then(async () => {
       thumbnailSize: { width: 480, height: 300 },
       fetchWindowIcons: true,
     });
-    return sources.filter((source) => !blockedCaptureSource(source.name)).map((source) => ({
+    const offered = sources.filter((source) => !blockedCaptureSource(source.name)).map((source) => ({
       id: source.id,
       name: source.name,
       kind: source.id.startsWith('window:') ? 'window' : 'screen',
       thumbnail: source.thumbnail.toDataURL(),
       appIcon: source.appIcon?.toDataURL(),
     }));
+    offeredSources = new Map(offered.map((source) => [source.id, source.kind]));
+    return offered;
   });
-  ipcMain.handle('tumacord:prepare-screen-audio', () => screenAudioRouter.prepare());
-  ipcMain.handle('tumacord:stop-screen-audio', () => screenAudioRouter.stop());
+  ipcMain.handle('tumacord:screen-audio-capabilities', async () => {
+    // A sondagem é o que dá a resposta honesta no Windows: ela tenta uma
+    // ativação real de loopback por processo em vez de comparar número de
+    // build. O resultado fica em cache no roteador.
+    await screenAudioRouter.available().catch(() => undefined);
+    return screenAudioRouter.capabilities();
+  });
+  ipcMain.handle('tumacord:screen-audio-diagnostics', () => screenAudioRouter.diagnostics());
+  ipcMain.handle('tumacord:prepare-screen-audio', async (event, request) => {
+    const sourceId = request && typeof request === 'object' && typeof request.sourceId === 'string' ? request.sourceId : '';
+    // O Linux monta o mesmo barramento para qualquer fonte e não precisa do
+    // identificador. No Windows ele decide qual árvore de processo capturar, e
+    // por isso precisa ter saído desta lista — nunca do renderer direto.
+    if (sourceId && sourceId !== activeScreenAudioSource && !offeredSources.has(sourceId)) {
+      return { ok: false, code: 'unknown-source', error: 'Esta fonte não está mais disponível para captura.' };
+    }
+    const result = await screenAudioRouter.prepare({ sourceId, kind: offeredSources.get(sourceId) ?? '' });
+    if (result.ok) activeScreenAudioSource = sourceId;
+    return result;
+  });
+  // A porta é pedida pelo renderer, e não entregue junto da preparação. A
+  // verificação periódica de saúde chama `prepare` com a mesma fonte a cada
+  // dez segundos; entregar uma porta nova ali fecharia a que está tocando e a
+  // live ficaria muda depois do primeiro minuto.
+  ipcMain.handle('tumacord:request-screen-audio-port', (event) => {
+    if (event.sender !== mainWindow?.webContents) return false;
+    if (!activeScreenAudioSource) return false;
+    openScreenAudioChannel();
+    return true;
+  });
+  ipcMain.handle('tumacord:stop-screen-audio', async () => {
+    activeScreenAudioSource = '';
+    const result = await screenAudioRouter.stop();
+    closeScreenAudioChannel();
+    return result;
+  });
   ipcMain.handle('tumacord:discover-calls', () => discovery?.list() ?? []);
   ipcMain.handle('tumacord:network-preferences', () => networkPreferences);
   ipcMain.handle('tumacord:set-network-preferences', (_event, patch) => {
@@ -390,6 +469,7 @@ app.on('before-quit', (event) => {
   if (quittingAfterAudioCleanup) return;
   quittingAfterAudioCleanup = true;
   drawingOverlay.close();
+  closeScreenAudioChannel();
   discovery?.close();
   event.preventDefault();
   // Fechar o app sem devolver a regra de porta deixaria o roteador aceitando

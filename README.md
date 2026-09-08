@@ -24,7 +24,8 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - detecção e seleção de microfone, saída de áudio e câmera;
 - câmera e compartilhamento de tela;
 - ao clicar em **Transmitir tela**, o Tumacord primeiro pede qualidade e áudio e abre o seletor de tela/janela uma única vez;
-- captura de áudio opcional por um barramento temporário do PipeWire: jogos, navegador e outros aplicativos entram na live, enquanto Tumacord, Discord e seus mecanismos de voz ficam de fora para não devolver a call pela transmissão;
+- captura de áudio opcional na transmissão, com Tumacord, Discord e a voz da call sempre de fora para não devolver a chamada pela live — no Linux por um barramento temporário do PipeWire, no Windows por captura WASAPI por aplicação: transmitindo uma janela vai só o som daquela aplicação, transmitindo um monitor vai o som do sistema menos os aplicativos de chamada;
+- aplicativo Windows com instalador NSIS e alternativa portátil, sem exigir Node, npm nem redistribuível do Visual C++ na máquina de quem instala;
 - perfis 1080p60, 1440p60, 1440p30, 1080p30, 720p30 e 480p15, com preferência persistente e troca dinâmica durante a live sem recapturar nem selecionar a tela novamente;
 - volume individual por participante e pela live, de 0 a 200%, com ganho real de até +18 dB e limitador contra estouro;
 - dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**;
@@ -56,19 +57,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/telestration-v0.8.7/scripts/install-v0.8.7.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/windows-audio-v0.8.8/scripts/install-v0.8.8.sh | bash
 ```
 
-Este comando instala a v0.8.7 a partir da branch separada `release/telestration-v0.8.7`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.8.8 a partir da branch separada `release/windows-audio-v0.8.8`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.7, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-telestration-v0.8.7`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.8, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-windows-audio-v0.8.8`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/telestration-v0.8.7/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/windows-audio-v0.8.8/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
@@ -98,6 +99,147 @@ Também é possível decidir diretamente:
 ```
 
 `--purge-data` remove também contas locais, histórico, anexos, perfis, sessão e preferências em `~/.config/tumacord` e `~/.cache/tumacord`. O clone na pasta de Downloads é preservado para não apagar código sem confirmação separada.
+
+## Instalação no Windows
+
+Duas formas, e as duas contêm tudo: **não é preciso instalar Node, npm nem
+nenhum redistribuível do Visual C++**.
+
+### Instalador (recomendado)
+
+Baixe `Tumacord-0.8.8-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
+escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
+Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
+
+Instalar uma versão nova por cima da anterior preserva conta, mensagens,
+anexos, perfis e preferências. Se o aplicativo estiver aberto, o instalador
+avisa e o encerra antes de continuar.
+
+### Portátil
+
+`Tumacord-0.8.8-portable.exe` roda sem instalar nada. É a opção para pendrive
+ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
+atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
+na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
+privadas** e permitir para a descoberta de calls na rede local funcionar.
+
+### Requisitos
+
+- Windows 10 versão 2004 (build 19041) ou mais novo, **64 bits**;
+- Windows 11 é a plataforma testada e recomendada;
+- para transmitir com áudio isolado por aplicação, build 19041 é o mínimo
+  absoluto. Abaixo disso a transmissão funciona **sem áudio**, e o aplicativo
+  diz isso na tela.
+
+### Como funciona o áudio da transmissão
+
+Ao clicar em **Transmitir tela**, você escolhe a qualidade e se quer áudio, e
+só então escolhe a janela ou o monitor. O que entra na live depende dessa
+escolha:
+
+- **uma janela** → só o som daquela aplicação. Você transmite um jogo e quem
+  assiste ouve o jogo, e nada além dele;
+- **um monitor inteiro** → o som do sistema, **menos** o Tumacord, o Discord
+  (incluindo Canary e PTB) e os processos de áudio deles.
+
+Em qualquer um dos dois casos, a voz das pessoas da call — a do Tumacord e a do
+Discord — nunca entra na transmissão. Isso não é cancelamento de eco: essas
+aplicações simplesmente nunca são capturadas. Quem está na sua call não vai
+ouvir a própria voz voltando, e a pessoa com quem você fala no Discord não é
+retransmitida para quem assiste.
+
+O Tumacord **não** mexe no volume do Discord, não muta nada globalmente, não
+troca o dispositivo de áudio padrão do Windows e não instala driver de áudio
+virtual. Nada de VB-Cable, VoiceMeeter ou parecidos.
+
+Se a sua versão do Windows não oferecer esse isolamento, você verá:
+
+> Nesta versão do Windows, o áudio da aplicação não pode ser isolado com
+> segurança. A transmissão continuará sem áudio.
+
+Não há reserva nesse caso, e é de propósito: a única alternativa técnica seria
+capturar o dispositivo inteiro, e é exatamente isso que devolveria a call para
+dentro da transmissão.
+
+### Firewall
+
+O instalador cria duas regras no Windows Defender Firewall, presas ao
+executável do Tumacord e válidas apenas nos perfis **Privado** e **Domínio**:
+
+- `Tumacord - sinalizacao (TCP 3927)`;
+- `Tumacord - descoberta na rede local (UDP 3928)`, limitada à sua sub-rede.
+
+O perfil **Público** nunca é liberado, o firewall nunca é desligado, e nenhuma
+porta é aberta para "qualquer programa". As regras são removidas quando você
+desinstala. Para conferir ou remover à mão, em um PowerShell como
+administrador:
+
+```powershell
+netsh advfirewall firewall show rule name="Tumacord - sinalizacao (TCP 3927)"
+netsh advfirewall firewall delete rule name="Tumacord - sinalizacao (TCP 3927)"
+```
+
+### Assinatura e o aviso do SmartScreen
+
+A build oficial é assinada com Authenticode quando o mantenedor tem um
+certificado configurado — o instalador, o portátil, o executável principal e o
+componente de áudio, todos com carimbo de tempo. Você pode conferir:
+
+```powershell
+Get-AuthenticodeSignature .\Tumacord-0.8.8-Setup.exe | Format-List Status, SignerCertificate
+```
+
+`Status` precisa ser `Valid`.
+
+Sendo honesto sobre o SmartScreen: **assinar não faz o aviso desaparecer de
+imediato.** O SmartScreen decide por reputação, que se acumula com downloads e
+instalações ao longo do tempo, por identidade de publisher. Um aplicativo novo,
+de um publisher novo, pode ver o aviso mesmo assinado corretamente. A cada
+versão publicada com a mesma identidade, isso melhora.
+
+O que este projeto **não** faz e você não deve fazer: desligar o SmartScreen,
+o Defender, o Smart App Control ou o UAC. Se você não confia no arquivo,
+confira o SHA-256 publicado em `SHA256SUMS-windows.txt` na Release antes de
+executar.
+
+### Onde ficam os arquivos
+
+| O quê | Onde |
+| --- | --- |
+| aplicativo instalado | `C:\Program Files\Tumacord` |
+| conta, mensagens, anexos e preferências | `%APPDATA%\Tumacord` |
+| dados do servidor embutido | `%APPDATA%\Tumacord\server-data` |
+| registro de falhas | `%APPDATA%\Tumacord\logs\runtime-health.log` |
+
+O diagnóstico completo está em **Configurações › Diagnóstico**, com um botão
+para copiar. O texto copiado não carrega token, chave, credencial, endereço IP
+nem nome de aplicativo ou título de janela — pode ser colado numa conversa.
+
+### Desinstalar
+
+Por **Configurações do Windows › Aplicativos › Aplicativos instalados ›
+Tumacord › Desinstalar**, ou pelo atalho do Menu Iniciar. As regras de firewall
+saem junto.
+
+A pasta `%APPDATA%\Tumacord` é preservada de propósito: apagar conta, histórico
+e anexos é uma decisão sua, e você pode remover essa pasta à mão depois.
+
+### Limites conhecidos no Windows
+
+- o isolamento de áudio por aplicação exige Windows 10 build 19041 ou mais
+  novo. Em versões anteriores a transmissão vai sem áudio, com aviso na tela;
+- não há build para ARM64 nem para 32 bits;
+- ao transmitir **uma janela**, o desenho de quem assiste aparece dentro do
+  aplicativo, e não sobreposto ao desktop. Isso vale para os dois sistemas: com
+  uma janela não dá para saber onde ela está na tela. Transmitindo o **monitor
+  inteiro**, o traço aparece sobre o desktop de verdade;
+- o portátil não configura o firewall — a permissão é dada no aviso do próprio
+  Windows, na primeira execução.
+
+Para compilar, assinar e publicar, veja
+[`docs/windows-build.md`](docs/windows-build.md). A matriz de teste manual está
+em [`docs/windows-testing.md`](docs/windows-testing.md).
 
 ## Enlace direto: a call sem ZeroTier
 

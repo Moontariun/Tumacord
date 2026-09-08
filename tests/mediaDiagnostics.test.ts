@@ -185,3 +185,56 @@ test('sem TURN configurado o relatório não sugere que ele existe', () => {
   const texto = formatDiagnosticReport(retrato(), { ...contexto, turnConfigured: false, stunConfigured: false });
   assert.match(texto, /STUN desligado · TURN indisponível/);
 });
+
+// O áudio da transmissão entra no mesmo relatório colável. Ele precisa dizer o
+// que está acontecendo sem dizer o que está tocando: número de aplicações,
+// motivo da exclusão e contadores, nunca um nome ou um título de janela.
+test('o relatório descreve o áudio da live sem citar aplicativo nenhum', () => {
+  const texto = formatDiagnosticReport(retrato(), {
+    ...contexto,
+    screenAudio: {
+      platform: 'win32',
+      mechanism: 'wasapi-process-loopback',
+      active: true,
+      isolation: 'system',
+      sources: 3,
+      excluded: 2,
+      excludedReasons: { 'blocked-executable': 1, 'covered-by-ancestor': 1 },
+      underruns: 0,
+      overruns: 4,
+      restarts: 0,
+      processLoopback: true,
+      windowsBuild: 26100,
+    },
+  });
+  assert.match(texto, /Áudio da transmissão:/);
+  assert.match(texto, /captura por aplicação \(Windows\)/);
+  assert.match(texto, /aplicações incluídas: 3/);
+  assert.match(texto, /aplicações excluídas: 2 \(blocked-executable=1 covered-by-ancestor=1\)/);
+  assert.match(texto, /amortecedor: 0 faltas · 4 descartes/);
+  assert.equal(/discord|chrome|steam|\.exe/i.test(texto), false, 'nenhum nome de processo no relatório');
+});
+
+test('um Windows sem isolamento aparece como indisponível, não como falha silenciosa', () => {
+  const texto = formatDiagnosticReport(retrato(), {
+    ...contexto,
+    screenAudio: { platform: 'win32', mechanism: 'wasapi-process-loopback', active: false, processLoopback: false, windowsBuild: 18363 },
+  });
+  assert.match(texto, /isolamento por aplicação: indisponível · build 18363/);
+  assert.match(texto, /captura: inativa/);
+});
+
+test('no Linux o relatório fala do barramento, e nada do Windows aparece', () => {
+  const texto = formatDiagnosticReport(retrato(), {
+    ...contexto,
+    screenAudio: { platform: 'linux', mechanism: 'pipewire-bus', active: true, isolation: 'bus', links: 4 },
+  });
+  assert.match(texto, /barramento do PipeWire \(Linux\)/);
+  assert.match(texto, /enlaces no barramento: 4/);
+  assert.equal(texto.includes('isolamento por aplicação'), false);
+});
+
+test('sem informação de áudio da live a seção nem aparece', () => {
+  const texto = formatDiagnosticReport(retrato(), contexto);
+  assert.equal(texto.includes('Áudio da transmissão:'), false);
+});

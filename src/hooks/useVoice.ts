@@ -19,6 +19,7 @@ import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/media
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
+import { discardPendingScreenAudioPort, openScreenAudioStream, primeScreenAudioBridge, type ScreenAudioStream } from '../lib/screenAudioBridge';
 import { STROKE_LIFETIME_MS, applyDrawMessage, dropAuthor, expireStrokes, type DrawMessage, type DrawStroke } from '../../shared/telestration';
 import type { DrawPreferences } from '../lib/drawPreferences';
 
@@ -357,6 +358,59 @@ async function captureIsolatedScreenAudio(deviceName: string): Promise<MediaStre
   });
 }
 
+interface ScreenAudioRecovery {
+  enabled: boolean;
+  deviceName: string;
+  sourceId: string;
+  attempts: number;
+  notified?: boolean;
+  timer?: number;
+}
+
+const IDLE_SCREEN_AUDIO: ScreenAudioRecovery = { enabled: false, deviceName: '', sourceId: '', attempts: 0 };
+
+// Falhas em que o sistema simplesmente não sabe isolar o áudio. Nesses casos a
+// transmissão continua, sem som — a alternativa seria capturar o dispositivo
+// inteiro, que devolve Tumacord e Discord para dentro da live. Qualquer outra
+// falha continua interrompendo a captura, como sempre interrompeu.
+const SCREEN_AUDIO_UNAVAILABLE = new Set(['unsupported', 'process-loopback-unavailable', 'helper-missing', 'helper-timeout', 'helper-failed', 'helper-exited']);
+
+interface AcquiredScreenAudio {
+  stream: MediaStream;
+  bridge: ScreenAudioStream | null;
+  deviceName: string;
+  isolation: string;
+}
+
+class ScreenAudioUnavailable extends Error {}
+
+export interface ScreenAudioSupport {
+  /** `device` no Linux, `stream` no Windows, `none` fora do aplicativo. */
+  mode: 'device' | 'stream' | 'none' | 'unknown';
+  /** `null` enquanto o sistema ainda não respondeu. */
+  supported: boolean | null;
+}
+
+// O mesmo pedido nos dois sistemas; o que muda é como a faixa nasce. No Linux
+// o processo principal monta um barramento no PipeWire e devolve o nome de uma
+// entrada; no Windows ele liga a captura por processo e o PCM chega por uma
+// porta. Depois daqui, os dois viram a mesma `MediaStream`.
+async function acquireScreenAudio(sourceId: string): Promise<AcquiredScreenAudio> {
+  const desktop = window.tumacordDesktop;
+  if (!desktop) throw new Error('A captura de áudio da transmissão exige o aplicativo instalado.');
+  const prepared = await desktop.prepareScreenAudio({ sourceId });
+  if (!prepared.ok) {
+    const message = prepared.error ?? 'Não consegui preparar o áudio da transmissão.';
+    throw prepared.code && SCREEN_AUDIO_UNAVAILABLE.has(prepared.code) ? new ScreenAudioUnavailable(message) : new Error(message);
+  }
+  if (prepared.mode === 'stream') {
+    const bridge = await openScreenAudioStream();
+    return { stream: bridge.stream, bridge, deviceName: '', isolation: prepared.isolation ?? 'process' };
+  }
+  const deviceName = prepared.deviceName || 'Tumacord Stream Audio';
+  return { stream: await captureIsolatedScreenAudio(deviceName), bridge: null, deviceName, isolation: prepared.isolation ?? 'bus' };
+}
+
 export function useVoice({ socket, user, preferences, onError, onDevicesChanged, onHostHandoff, dynamicHosting, drawing }: UseVoiceOptions) {
   const [channelId, setChannelId] = useState<string | null>(null);
   const channelRef = useRef<string | null>(null);
@@ -373,6 +427,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   qualityRef.current = quality;
   const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[]>([]);
   const [desktopSources, setDesktopSources] = useState<DesktopSource[]>([]);
+  // O que este sistema sabe isolar. A interface usa isso para dizer, antes de
+  // a pessoa escolher, o que vai e o que não vai entrar no som da live.
+  const [screenAudioSupport, setScreenAudioSupport] = useState<ScreenAudioSupport>(
+    () => (window.tumacordDesktop ? { mode: 'unknown', supported: null } : { mode: 'none', supported: false }),
+  );
   const [showShareSetup, setShowShareSetup] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   // Qual fonte está no ar. A janela sobreposta ao desktop só sabe onde pintar
@@ -409,7 +468,11 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const recoveryAttemptCount = useRef(new Map<string, number>());
   const missingScreenSince = useRef(new Map<string, number>());
   const missingVoiceSince = useRef(new Map<string, number>());
-  const screenAudioRecovery = useRef<{ enabled: boolean; deviceName: string; attempts: number; notified?: boolean; timer?: number }>({ enabled: false, deviceName: '', attempts: 0 });
+  const screenAudioRecovery = useRef<ScreenAudioRecovery>({ ...IDLE_SCREEN_AUDIO });
+  // A ponte do Windows precisa ser fechada explicitamente: ela carrega um
+  // AudioContext e uma porta de mensagens que não somem só porque a faixa
+  // parou.
+  const screenAudioBridge = useRef<ScreenAudioStream | null>(null);
   const pendingShareOptions = useRef<{ includeAudio: boolean; quality: StreamQuality }>({ includeAudio: true, quality: 'balanced' });
   const shareListing = useRef(false);
   const shareCapture = useRef(false);
@@ -932,16 +995,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     recovery.timer = window.setTimeout(async () => {
       if (!recovery.enabled || localStreams.current.get('screen') !== screen) return;
       try {
-        const prepared = await window.tumacordDesktop?.prepareScreenAudio();
-        if (window.tumacordDesktop && !prepared?.ok) throw new Error(prepared?.error ?? 'O PipeWire não recriou o barramento da live.');
-        if (prepared?.deviceName) recovery.deviceName = prepared.deviceName;
-        const replacement = await captureIsolatedScreenAudio(recovery.deviceName);
+        const acquired = await acquireScreenAudio(recovery.sourceId);
+        if (acquired.deviceName) recovery.deviceName = acquired.deviceName;
+        const replacement = acquired.stream;
         const newTrack = replacement.getAudioTracks()[0];
-        if (!newTrack) throw new Error('Faixa de áudio não apareceu.');
-        if (!recovery.enabled || localStreams.current.get('screen') !== screen) {
+        if (!newTrack || !recovery.enabled || localStreams.current.get('screen') !== screen) {
           replacement.getTracks().forEach((track) => track.stop());
+          void acquired.bridge?.close();
+          if (!newTrack) throw new Error('Faixa de áudio não apareceu.');
           return;
         }
+        // A ponte anterior só sai depois que a nova está de pé: fechá-la antes
+        // deixaria a live muda durante a troca.
+        const retiredBridge = screenAudioBridge.current;
+        screenAudioBridge.current = acquired.bridge;
+        if (retiredBridge) void retiredBridge.close();
         screen.addTrack(newTrack);
         newTrack.onended = () => screenAudioEndedRef.current(newTrack);
         for (const [peerId, state] of peers.current) {
@@ -990,11 +1058,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       setCameraOn(false);
       publishState({ camera: false });
     } else {
-      screenAudioRecovery.current.enabled = false;
-      screenAudioEnabled.current = false;
-      screenAudioRecovery.current.attempts = 0;
       if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
-      screenAudioRecovery.current.timer = undefined;
+      screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
+      screenAudioEnabled.current = false;
+      const bridge = screenAudioBridge.current;
+      screenAudioBridge.current = null;
+      if (bridge) await bridge.close().catch(() => undefined);
+      discardPendingScreenAudioPort();
       setScreenOn(false);
       setScreenSource(null);
       setShowShareSetup(false);
@@ -1343,6 +1413,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const processing = microphoneProcessing.current;
     microphoneProcessing.current = null;
     void disposeMicrophoneProcessing(processing);
+    const retiredBridge = screenAudioBridge.current;
+    screenAudioBridge.current = null;
+    if (retiredBridge) void retiredBridge.close().catch(() => undefined);
+    discardPendingScreenAudioPort();
     void window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
     channelRef.current = null;
     handoffStarted.current = false;
@@ -1378,10 +1452,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     recoveryAttemptCount.current.clear();
     missingScreenSince.current.clear();
     missingVoiceSince.current.clear();
-    screenAudioRecovery.current.enabled = false;
-    screenAudioRecovery.current.attempts = 0;
     if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
-    screenAudioRecovery.current.timer = undefined;
+    screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
     if (microphoneRecoveryTimer.current) window.clearTimeout(microphoneRecoveryTimer.current);
     microphoneRecoveryTimer.current = undefined;
     screenAudioEnabled.current = false;
@@ -2072,19 +2144,38 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (screenAudioHealthCheck.current || !screenAudioRecovery.current.enabled) return;
       screenAudioHealthCheck.current = true;
       try {
-        const prepared = await window.tumacordDesktop?.prepareScreenAudio();
+        const prepared = await window.tumacordDesktop?.prepareScreenAudio({ sourceId: screenAudioRecovery.current.sourceId });
         if (prepared?.ok && prepared.deviceName) screenAudioRecovery.current.deviceName = prepared.deviceName;
       } finally {
         screenAudioHealthCheck.current = false;
       }
     };
     void keepScreenAudioHealthy();
-    // O roteador principal já observa mudanças do grafo a cada 2 s. Esta
-    // verificação mais espaçada serve apenas para reconstruir módulos após um
-    // reinício completo do PipeWire, evitando dois loops de pw-dump agressivos.
+    // No Linux o roteador já observa o grafo a cada 2 s e esta verificação
+    // espaçada só reconstrói os módulos depois de um reinício do PipeWire. No
+    // Windows a preparação com a mesma fonte é reconhecida e não recaptura
+    // nada: ela serve para religar o helper se ele tiver caído.
     const timer = window.setInterval(() => void keepScreenAudioHealthy(), 10_000);
     return () => window.clearInterval(timer);
   }, [screenOn]);
+
+  useEffect(() => {
+    // A escuta da porta precisa existir antes do primeiro `prepare`: o
+    // processo principal envia a porta assim que a captura fica de pé, e uma
+    // porta enviada sem ouvinte se perderia.
+    primeScreenAudioBridge();
+    let cancelled = false;
+    void window.tumacordDesktop?.screenAudioCapabilities?.()
+      .then((capabilities) => {
+        if (cancelled || !capabilities) return;
+        setScreenAudioSupport({
+          mode: capabilities.mode === 'stream' || capabilities.mode === 'device' || capabilities.mode === 'none' ? capabilities.mode : 'unknown',
+          supported: typeof capabilities.supported === 'boolean' ? capabilities.supported : null,
+        });
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   const toggleMute = async () => {
     const next = !mutedRef.current;
@@ -2251,41 +2342,46 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     let routedScreenAudio = false;
     let capturedAudio: MediaStream | null = null;
     let capturedDisplay: MediaStream | null = null;
-    // No Windows o áudio do sistema vem do próprio Chromium, no mesmo
-    // `getUserMedia` que traz o vídeo: `chromeMediaSource: 'desktop'` no ramo
-    // de áudio devolve o loopback. Não há barramento a montar, e por isso não
-    // há o que preparar nem o que desmontar depois.
-    //
-    // No Linux não existe esse loopback: o áudio precisa passar por um
-    // barramento montado no PipeWire, que é o que `prepareScreenAudio` faz.
-    const loopbackDoSistema = window.tumacordDesktop?.platform === 'win32';
+    let acquiredBridge: ScreenAudioStream | null = null;
+    // O áudio da live nunca sai do `getUserMedia` que traz o vídeo. Pedir
+    // `chromeMediaSource: 'desktop'` no ramo de áudio devolveria o loopback do
+    // dispositivo inteiro — com Tumacord, Discord e a voz da call dentro. Os
+    // dois sistemas passam pelo processo principal, que isola de verdade: um
+    // barramento no PipeWire no Linux, captura por árvore de processo no
+    // Windows.
     try {
-      if (window.tumacordDesktop && includeAudio && !loopbackDoSistema) {
-        const prepared = await window.tumacordDesktop.prepareScreenAudio();
-        if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) {
-          await window.tumacordDesktop.stopScreenAudio().catch(() => undefined);
-          return;
-        }
-        if (prepared.ok && prepared.deviceId) {
+      if (window.tumacordDesktop && includeAudio) {
+        try {
+          const acquired = await acquireScreenAudio(sourceId);
+          if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) {
+            acquired.stream.getTracks().forEach((track) => track.stop());
+            await acquired.bridge?.close().catch(() => undefined);
+            await window.tumacordDesktop.stopScreenAudio().catch(() => undefined);
+            return;
+          }
           routedScreenAudio = true;
+          capturedAudio = acquired.stream;
+          acquiredBridge = acquired.bridge;
           screenAudioRecovery.current = {
             enabled: true,
-            deviceName: prepared.deviceName || 'Tumacord Stream Audio',
+            deviceName: acquired.deviceName,
+            sourceId,
             attempts: 0,
           };
-          capturedAudio = await captureIsolatedScreenAudio(prepared.deviceName || 'Tumacord Stream Audio');
-          if (captureGeneration !== mediaCaptureGeneration.current.screen || !channelRef.current) throw new DOMException('Captura de tela cancelada.', 'AbortError');
-        } else {
-          throw new Error(prepared.error ?? 'PipeWire indisponível');
+        } catch (error) {
+          // Sem isolamento seguro, a transmissão segue sem áudio. A reserva
+          // que existiria — o loopback do dispositivo — é justamente o que
+          // devolve a call para dentro da live, e por isso não é usada.
+          if (!(error instanceof ScreenAudioUnavailable)) throw error;
+          await window.tumacordDesktop.stopScreenAudio().catch(() => undefined);
+          screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
+          onError(error.message);
         }
       }
       // A fonte já foi escolhida pelo usuário. chromeMediaSourceId captura
       // diretamente essa escolha e não abre outro portal do PipeWire.
-      const pedirLoopback = includeAudio && loopbackDoSistema;
       capturedDisplay = await navigator.mediaDevices.getUserMedia({
-        audio: pedirLoopback
-          ? ({ mandatory: { chromeMediaSource: 'desktop' } } as unknown as MediaTrackConstraints)
-          : false,
+        audio: false,
         video: {
           mandatory: {
             chromeMediaSourceId: sourceId,
@@ -2293,22 +2389,26 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           },
         } as unknown as MediaTrackConstraints,
       });
-      // No Windows a faixa de áudio já veio junto do vídeo; no Linux ela vem
-      // do barramento, capturada em separado. Os dois casos terminam no mesmo
-      // stream, que é o que o resto do código espera.
       const stream = new MediaStream([
         ...capturedDisplay.getVideoTracks(),
-        ...(capturedAudio?.getAudioTracks() ?? capturedDisplay.getAudioTracks()),
+        ...(capturedAudio?.getAudioTracks() ?? []),
       ]);
-      if (!includeAudio) screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
+      if (!includeAudio) screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
+      screenAudioBridge.current = acquiredBridge;
       const attached = await attachStream('screen', stream, selectedQuality, captureGeneration);
       setScreenSource(attached ? { id: sourceId, kind: sourceKind } : null);
-      if (!attached && routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
+      if (!attached) {
+        screenAudioBridge.current = null;
+        await acquiredBridge?.close().catch(() => undefined);
+        if (routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
+      }
     } catch (error) {
       capturedDisplay?.getTracks().forEach((track) => track.stop());
       capturedAudio?.getTracks().forEach((track) => track.stop());
+      screenAudioBridge.current = null;
+      await acquiredBridge?.close().catch(() => undefined);
       if (routedScreenAudio) await window.tumacordDesktop?.stopScreenAudio().catch(() => undefined);
-      screenAudioRecovery.current = { enabled: false, deviceName: '', attempts: 0 };
+      screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
       if (!isAbortError(error)) {
         onError(`Não consegui iniciar a transmissão${includeAudio ? ' com áudio isolado' : ''}: ${error instanceof Error ? error.message : 'captura indisponível'}`);
         if (channelRef.current) {
@@ -2373,7 +2473,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     drawings, sendDraw, screenSource,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
-    showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource,
+    showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource, screenAudioSupport,
     localCamera: localStreams.current.get('camera'),
     localScreen: localStreams.current.get('screen'),
     user,

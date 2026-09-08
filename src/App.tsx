@@ -6,7 +6,7 @@ import { Icon } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
 import { AdminPanel } from './components/AdminPanel';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
-import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type StreamQuality } from './hooks/useVoice';
+import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
@@ -18,7 +18,7 @@ import { DRAW_COLORS, DRAW_LIFETIMES, fitFrame, isPersistent, pointFromViewport,
 import { readDrawPreferences, writeDrawPreferences, type DrawPreferences } from './lib/drawPreferences';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
-import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict } from './lib/mediaDiagnostics';
+import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict, type ScreenAudioDiagnostics } from './lib/mediaDiagnostics';
 import { currentNetworkPreferences, loadNetworkPreferences, subscribeNetworkPreferences, updateNetworkPreferences, type NetworkPreferences } from './lib/networkPreferences';
 import { describeReachability } from '../shared/directLink';
 import { resumeSharedAudio, setSharedAudioSink, sharedAudioContext, sharedAudioOutput } from './lib/audioBus';
@@ -190,6 +190,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     return Number.isFinite(saved) ? Math.max(0, Math.min(2, saved)) : 1;
   });
   const [streamMuted, setStreamMutedState] = useState(() => localStorage.getItem('tumacord.stream-muted') === 'true');
+  // A escolha de áudio é feita na primeira etapa e precisa sobreviver até a
+  // segunda: é ela que decide o que o seletor de tela promete em cada cartão.
+  const [shareAudio, setShareAudio] = useState(true);
   const [miniLiveHidden, setMiniLiveHidden] = useState(false);
   const [voiceMenuUserId, setVoiceMenuUserId] = useState<string | null>(null);
   const [userVolumes, setUserVolumes] = useState<Record<string, number>>(() => {
@@ -702,12 +705,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(media.user?.id && mutedUsers[media.user.id])} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
-    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
-    {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} onContinue={(includeAudio, selectedQuality) => void voice.prepareScreenShare(includeAudio, selectedQuality)} onClose={() => voice.setShowShareSetup(false)} />}
-    {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
+    {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
+    {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} withAudio={shareAudio && voice.screenAudioSupport.supported !== false} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
     {profileUser && <ProfileModal user={snapshot.onlineUsers.find((candidate) => candidate.id === profileUser.id) ?? (profileUser.id === session.user.id ? session.user : profileUser)} own={profileUser.id === session.user.id} serverUrl={session.serverUrl} token={session.token} onClose={() => setProfileUser(null)} onSaved={(updated) => { const nextSession = { ...session, user: updated }; saveSession(nextSession); onSessionChange(nextSession); setProfileUser(updated); showToast('Perfil atualizado.'); }} />}
     {toast && <div className="toast">{toast}</div>}
   </div>;
@@ -1289,12 +1292,22 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
   // Desarmar sozinho quando a permissão sai do ar: o botão some, e com ele o
   // modo de desenho, sem deixar a camada capturando clique à toa.
   useEffect(() => { if (!drawing?.allowed) setDrawArmed(false); }, [drawing?.allowed]);
+  // Uma segunda saída do modo de desenho, além do lápis. O botão vive num
+  // canto de uma camada que cobre o quadro inteiro; qualquer coisa que o
+  // esconda — um compositor, uma janela flutuante, um tema — deixaria a pessoa
+  // presa desenhando. Esc é a saída que não depende de acertar um alvo.
+  useEffect(() => {
+    if (!drawArmed) return;
+    const aoTeclar = (event: KeyboardEvent) => { if (event.key === 'Escape') setDrawArmed(false); };
+    window.addEventListener('keydown', aoTeclar);
+    return () => window.removeEventListener('keydown', aoTeclar);
+  }, [drawArmed]);
   const onTileDoubleClick = (event: React.MouseEvent) => {
     if ((event.target as HTMLElement).closest('.video-actions')) return;
     toggleTheater();
   };
   const podeRabiscar = Boolean(drawing?.allowed && drawArmed);
-  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${podeRabiscar ? 'is-drawing' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{drawing && <DrawingLayer videoRef={mediaRef} strokes={drawing.strokes} lifetime={drawing.lifetime} canDraw={podeRabiscar} color={drawing.color} onStroke={drawing.onStroke} onClear={drawing.onClear} />}{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{drawing?.allowed && <button className={podeRabiscar ? 'is-on' : ''} aria-pressed={podeRabiscar} onClick={() => setDrawArmed((atual) => !atual)} title={podeRabiscar ? 'Parar de desenhar' : 'Desenhar sobre esta transmissão'}><Icon name="pencil" /></button>}{drawing?.canClearAll && drawing.strokes.length > 0 && <button onClick={() => drawing.onClearAll?.()} title="Apagar tudo o que desenharam na minha tela"><Icon name="eraser" /></button>}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${podeRabiscar ? 'is-drawing' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{drawing && <DrawingLayer videoRef={mediaRef} strokes={drawing.strokes} lifetime={drawing.lifetime} canDraw={podeRabiscar} color={drawing.color} onStroke={drawing.onStroke} onClear={drawing.onClear} />}{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{drawing?.allowed && <button className={podeRabiscar ? 'is-on' : ''} aria-pressed={podeRabiscar} onClick={() => setDrawArmed((atual) => !atual)} title={podeRabiscar ? 'Parar de desenhar (Esc)' : 'Desenhar sobre esta transmissão'}><Icon name="pencil" /></button>}{drawing?.canClearAll && drawing.strokes.length > 0 && <button onClick={() => drawing.onClearAll?.()} title="Apagar tudo o que desenharam na minha tela"><Icon name="eraser" /></button>}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {
@@ -1524,7 +1537,19 @@ function ProfileModal({ user, own, serverUrl, token, onClose, onSaved }: { user:
   </div></div>;
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
+// O texto muda com o mecanismo real do sistema, mas nunca cita o mecanismo: o
+// que interessa a quem lê é o que entra e o que fica de fora.
+function screenAudioExplanation(support: ScreenAudioSupport): string {
+  if (support.mode === 'stream' && support.supported === false) {
+    return 'Nesta versão do Windows, o áudio da aplicação não pode ser isolado com segurança. As transmissões continuam sem áudio, e nada da call vaza para quem assiste.';
+  }
+  if (support.mode === 'stream') {
+    return 'Ao transmitir uma janela, só o som daquela aplicação entra na live. Ao transmitir um monitor inteiro, entra o som do sistema — menos o Tumacord, o Discord e os processos de áudio deles, que ficam sempre de fora para a call não voltar pela transmissão.';
+  }
+  return 'Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.';
+}
+
+function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
   const [tab, setTab] = useState<'media' | 'drawing' | 'network' | 'diagnostics'>('media');
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
@@ -1542,7 +1567,7 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
       <div className="setting-label"><span className="setting-title">Qualidade da transmissão<small>Vale para a próxima live e para a que já estiver no ar.</small></span><Dropdown label="Qualidade da transmissão" value={quality} options={qualityDropdownOptions} onChange={(next) => { void setQuality(next as StreamQuality); }} /></div>
       <label className="sound-toggle"><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong><small>Entrada, saída, mensagens, microfone e troca de host.</small></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
-      <div className="quality-note"><strong>Áudio da transmissão</strong><span>Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.</span></div>
+      <div className="quality-note"><strong>Áudio da transmissão</strong><span>{screenAudioExplanation(audioSupport)}</span></div>
     </section>}
   </div></div>;
 }
@@ -1643,6 +1668,7 @@ const STATUS_LABEL: Record<string, string> = { ok: 'ok', broken: 'falha', unknow
 
 function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onClose }: { snapshot: ReturnType<typeof useVoice>['mediaSnapshot']; preferences: NetworkPreferences; connectionMode: 'p2p' | 'server'; onNotice: (message: string) => void; onClose: () => void }) {
   const [estado, setEstado] = useState(() => snapshot());
+  const [audioDaLive, setAudioDaLive] = useState<ScreenAudioDiagnostics | null>(null);
   const relatorio = useRef<HTMLTextAreaElement>(null);
   // Uma leitura por segundo: o suficiente para acompanhar uma falha aparecer,
   // sem transformar o painel em custo de CPU durante a call.
@@ -1650,6 +1676,20 @@ function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onC
     const timer = window.setInterval(() => setEstado(snapshot()), 1_000);
     return () => window.clearInterval(timer);
   }, [snapshot]);
+  // O áudio da transmissão vive no processo principal, e o relatório dele muda
+  // devagar: contadores de amortecedor e lista de aplicações. Três segundos
+  // bastam e evitam uma ida ao IPC por segundo com o painel aberto.
+  useEffect(() => {
+    let cancelado = false;
+    const ler = () => {
+      void window.tumacordDesktop?.screenAudioDiagnostics?.()
+        .then((detalhes) => { if (!cancelado) setAudioDaLive((detalhes ?? null) as ScreenAudioDiagnostics | null); })
+        .catch(() => undefined);
+    };
+    ler();
+    const timer = window.setInterval(ler, 3_000);
+    return () => { cancelado = true; window.clearInterval(timer); };
+  }, []);
   const camadas: LayerVerdict[] = diagnoseMicrophone(estado);
   const contexto = {
     version: APP_VERSION,
@@ -1657,6 +1697,7 @@ function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onC
     stunConfigured: preferences.stunEnabled && preferences.stunServers.length > 0,
     turnConfigured: preferences.turnEnabled && cachedTurnServers().length > 0,
     paths: estado.paths,
+    screenAudio: audioDaLive,
   };
   const texto = formatDiagnosticReport(estado, contexto);
   return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Diagnóstico</h1>
@@ -1758,14 +1799,42 @@ function DeviceSelect({ label, hint, value, devices, onChange }: { label: string
   return <div className="setting-label"><span className="setting-title">{label}{hint && <small>{hint}</small>}</span><Dropdown label={label} value={value} options={options} onChange={onChange} /></div>;
 }
 
-function ShareSetupModal({ initialQuality, busy, onContinue, onClose }: { initialQuality: StreamQuality; busy: boolean; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {
-  const [includeAudio, setIncludeAudio] = useState(true);
-  const [selectedQuality, setSelectedQuality] = useState<StreamQuality>(initialQuality);
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="share-setup"><button className="modal-close" disabled={busy} onClick={onClose}><Icon name="close" /></button><span className="modal-eyebrow">Nova transmissão</span><h2>Como você quer transmitir?</h2><p>Defina a qualidade e o áudio primeiro. A tela ou janela será escolhida uma única vez na próxima etapa.</p><div className="quality-cards">{qualityOptions.map(([value, option]) => <button key={value} disabled={busy} className={selectedQuality === value ? 'selected' : ''} onClick={() => setSelectedQuality(value)}><Icon name="screen" /><span><strong>{option.label.split(' · ')[0]}</strong><small>{option.label.split(' · ')[1] ?? 'Qualidade original'}</small></span></button>)}</div><label className="share-audio-card"><input type="checkbox" disabled={busy} checked={includeAudio} onChange={(event) => setIncludeAudio(event.target.checked)} /><span><strong>Compartilhar áudio</strong><small>Inclui o som do sistema, mantendo Tumacord e Discord fora da live.</small></span></label><button className="primary-button share-continue" disabled={busy} onClick={() => onContinue(includeAudio, selectedQuality)}>{busy ? 'Abrindo o seletor…' : 'Continuar para escolher a tela'} {!busy && <Icon name="chevron" />}</button></div></div>;
+// O que a pessoa precisa saber antes de marcar a caixa: o que entra na live e
+// o que fica de fora. Nada de WASAPI ou PipeWire aqui — o mecanismo é problema
+// do aplicativo, não de quem vai transmitir.
+function shareAudioSummary(support: ScreenAudioSupport): { title: string; detail: string; blocked: boolean } {
+  if (support.supported === false && support.mode === 'stream') {
+    return {
+      title: 'Áudio indisponível nesta versão do Windows',
+      detail: 'Nesta versão do Windows, o áudio da aplicação não pode ser isolado com segurança. A transmissão continuará sem áudio.',
+      blocked: true,
+    };
+  }
+  if (support.mode === 'stream') {
+    return {
+      title: 'Compartilhar áudio',
+      detail: 'Uma janela leva só o som da própria aplicação; a tela inteira leva o som do sistema, sem Tumacord nem apps de chamada.',
+      blocked: false,
+    };
+  }
+  return {
+    title: 'Compartilhar áudio',
+    detail: 'Inclui o som do sistema, mantendo Tumacord e Discord fora da live.',
+    blocked: false,
+  };
 }
 
-function SourcePicker({ sources, busy, onSelect, onBack, onClose }: { sources: DesktopSource[]; busy: boolean; onSelect: (id: string, kind: DesktopSource['kind']) => void; onBack: () => void; onClose: () => void }) {
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="source-picker"><header><div><span className="modal-eyebrow">Nova transmissão</span><h2>Escolha uma tela ou janela</h2><p>Um clique inicia a transmissão; os demais cartões ficam bloqueados enquanto a captura abre.</p></div><div className="source-header-actions"><button disabled={busy} onClick={onBack}>Voltar</button><button className="icon-button" disabled={busy} onClick={onClose}><Icon name="close" /></button></div></header><div className="source-grid">{sources.map((source) => <button key={source.id} disabled={busy} onClick={() => onSelect(source.id, source.kind)}><span className="source-thumbnail"><img src={source.thumbnail} alt="" />{source.kind === 'screen' && <small>TELA INTEIRA</small>}</span><strong>{source.name}</strong></button>)}</div></div></div>;
+function ShareSetupModal({ initialQuality, busy, audioSupport, onContinue, onClose }: { initialQuality: StreamQuality; busy: boolean; audioSupport: ScreenAudioSupport; onContinue: (includeAudio: boolean, quality: StreamQuality) => void; onClose: () => void }) {
+  const audio = shareAudioSummary(audioSupport);
+  const [includeAudio, setIncludeAudio] = useState(!audio.blocked);
+  const [selectedQuality, setSelectedQuality] = useState<StreamQuality>(initialQuality);
+  const wantsAudio = includeAudio && !audio.blocked;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="share-setup"><button className="modal-close" disabled={busy} onClick={onClose}><Icon name="close" /></button><span className="modal-eyebrow">Nova transmissão</span><h2>Como você quer transmitir?</h2><p>Defina a qualidade e o áudio primeiro. A tela ou janela será escolhida uma única vez na próxima etapa.</p><div className="quality-cards">{qualityOptions.map(([value, option]) => <button key={value} disabled={busy} className={selectedQuality === value ? 'selected' : ''} onClick={() => setSelectedQuality(value)}><Icon name="screen" /><span><strong>{option.label.split(' · ')[0]}</strong><small>{option.label.split(' · ')[1] ?? 'Qualidade original'}</small></span></button>)}</div><label className="share-audio-card"><input type="checkbox" disabled={busy || audio.blocked} checked={wantsAudio} onChange={(event) => setIncludeAudio(event.target.checked)} /><span><strong>{audio.title}</strong><small>{audio.detail}</small></span></label><button className="primary-button share-continue" disabled={busy} onClick={() => onContinue(wantsAudio, selectedQuality)}>{busy ? 'Abrindo o seletor…' : 'Continuar para escolher a tela'} {!busy && <Icon name="chevron" />}</button></div></div>;
+}
+
+function SourcePicker({ sources, busy, withAudio, onSelect, onBack, onClose }: { sources: DesktopSource[]; busy: boolean; withAudio: boolean; onSelect: (id: string, kind: DesktopSource['kind']) => void; onBack: () => void; onClose: () => void }) {
+  const audioNote = (kind: DesktopSource['kind']) => (kind === 'window' ? 'Áudio: somente desta aplicação' : 'Áudio: sistema, excluindo apps de chamada');
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><div className="source-picker"><header><div><span className="modal-eyebrow">Nova transmissão</span><h2>Escolha uma tela ou janela</h2><p>Um clique inicia a transmissão; os demais cartões ficam bloqueados enquanto a captura abre.</p></div><div className="source-header-actions"><button disabled={busy} onClick={onBack}>Voltar</button><button className="icon-button" disabled={busy} onClick={onClose}><Icon name="close" /></button></div></header><div className="source-grid">{sources.map((source) => <button key={source.id} disabled={busy} onClick={() => onSelect(source.id, source.kind)}><span className="source-thumbnail"><img src={source.thumbnail} alt="" />{source.kind === 'screen' && <small>TELA INTEIRA</small>}</span><strong>{source.name}</strong>{withAudio && <small className="source-audio">{audioNote(source.kind)}</small>}</button>)}</div></div></div>;
 }
 
 function Avatar({ name, profile, serverUrl = '', small, large, online, imageOverride }: { name: string; profile?: UserProfile; serverUrl?: string; small?: boolean; large?: boolean; online?: boolean; imageOverride?: string }) {

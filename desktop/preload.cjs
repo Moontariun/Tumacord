@@ -1,15 +1,35 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Uma `MessagePort` não atravessa a ponte de contexto: ela não é serializável.
+// O caminho previsto pelo Electron é reenviá-la ao mundo principal por
+// `window.postMessage`, onde ela continua sendo um objeto vivo com o mesmo
+// isolamento de sempre.
+const SCREEN_AUDIO_PORT = 'tumacord:screen-audio-port';
+ipcRenderer.on(SCREEN_AUDIO_PORT, (event) => {
+  const port = event.ports?.[0];
+  if (port) window.postMessage(SCREEN_AUDIO_PORT, '*', [port]);
+});
+
 contextBridge.exposeInMainWorld('tumacordDesktop', {
   // A captura de áudio da live não tem um caminho só. No Linux é preciso
-  // montar um barramento no PipeWire; no Windows o próprio Chromium entrega o
-  // loopback do sistema junto com o vídeo. Quem decide é o renderer, e para
-  // isso ele precisa saber onde está rodando.
+  // montar um barramento no PipeWire; no Windows a captura é por árvore de
+  // processo e o PCM chega por uma porta dedicada. Quem decide é o renderer, e
+  // para isso ele precisa saber onde está rodando.
   platform: process.platform,
   isDesktop: true,
   getSources: () => ipcRenderer.invoke('tumacord:desktop-sources'),
-  prepareScreenAudio: () => ipcRenderer.invoke('tumacord:prepare-screen-audio'),
+  // O identificador da fonte é o único parâmetro aceito, e o processo
+  // principal só o aceita se ele tiver saído da lista que ele mesmo ofereceu.
+  prepareScreenAudio: (request) => ipcRenderer.invoke('tumacord:prepare-screen-audio', {
+    sourceId: typeof request?.sourceId === 'string' ? request.sourceId : '',
+  }),
   stopScreenAudio: () => ipcRenderer.invoke('tumacord:stop-screen-audio'),
+  // Pede uma porta nova para o PCM da transmissão. A anterior é fechada, o que
+  // é o comportamento certo: duas portas vivas entregariam o áudio de duas
+  // capturas ao mesmo destino.
+  requestScreenAudioPort: () => ipcRenderer.invoke('tumacord:request-screen-audio-port'),
+  screenAudioCapabilities: () => ipcRenderer.invoke('tumacord:screen-audio-capabilities'),
+  screenAudioDiagnostics: () => ipcRenderer.invoke('tumacord:screen-audio-diagnostics'),
   discoverCalls: () => ipcRenderer.invoke('tumacord:discover-calls'),
   onCallsChanged: (listener) => {
     const handler = (_event, calls) => listener(calls);

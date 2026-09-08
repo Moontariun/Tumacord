@@ -8,3 +8,6 @@ node_modules/
 release/
 *.tar.gz
 work/
+
+# O componente nativo do Windows é compilado, não versionado.
+native/windows/audio-helper/build/

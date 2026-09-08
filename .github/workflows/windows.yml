@@ -1,0 +1,206 @@
+name: Windows
+
+# A build do Windows sai de uma máquina Windows.
+#
+# Até a 0.8.7 o portable era gerado no runner Linux por cruzamento: dava certo
+# porque não havia nada nativo para compilar. A partir da 0.8.8 existe — o
+# componente de captura de áudio por aplicação usa WASAPI, e cruzar isso do
+# Linux ou seria impossível ou seria frágil de um jeito que só apareceria na
+# máquina de quem baixou. O runner `windows-latest` já traz MSVC e o Windows
+# SDK, então compilar aqui não custa nada além de um job.
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tumacord-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  # A assinatura por Azure Trusted Signing troca um token OIDC por credencial;
+  # nenhum certificado precisa existir no repositório para isso funcionar.
+  id-token: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    # No nível do job porque o `if` de um passo não enxerga o `env` do próprio
+    # passo. Os valores continuam mascarados no log pelo Actions.
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v7
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Validar projeto
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Compilar interface e servidor
+        run: npm run build
+
+      - name: Compilar o componente nativo de áudio
+        run: npm run build:native:win
+
+      # A sondagem prova, no próprio runner, que o binário roda e que ele sabe
+      # dizer se o Windows daquela máquina oferece loopback por processo. Um
+      # helper que não executa reprovaria aqui, e não na máquina de quem baixou.
+      - name: Conferir o componente nativo
+        shell: pwsh
+        run: |
+          $helper = "native/windows/audio-helper/build/tumacord-audio-helper.exe"
+          if (-not (Test-Path $helper)) { throw "O componente nativo não foi gerado." }
+          $saida = [System.IO.Path]::GetTempFileName()
+          $processo = Start-Process -FilePath $helper -ArgumentList "--probe" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $saida
+          if ($processo.ExitCode -ne 0) { throw "A sondagem do componente saiu com $($processo.ExitCode)." }
+          $bytes = [System.IO.File]::ReadAllBytes($saida)
+          if ($bytes.Length -lt 8 -or $bytes[0] -ne 84 -or $bytes[1] -ne 65) { throw "O componente não respondeu no protocolo esperado." }
+          $json = [System.Text.Encoding]::UTF8.GetString($bytes, 8, $bytes.Length - 8)
+          Write-Host "Sondagem: $json"
+          if ($json -notmatch '"event"\s*:\s*"probe"') { throw "Resposta de sondagem inesperada." }
+
+      # Assinar o helper ANTES de empacotar. O electron-builder assina o
+      # executável principal e o instalador, mas copia os recursos extras como
+      # estão — e um binário assinado depois de empacotado teria de ser trocado
+      # dentro do instalador já assinado, que é exatamente o que não se faz.
+      - name: Assinar o componente nativo (certificado Authenticode)
+        if: env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "tumacord-signing.pfx"
+          [System.IO.File]::WriteAllBytes($pfx, [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like "*\x64\*" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe não encontrado no runner." }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+            /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+            native/windows/audio-helper/build/tumacord-audio-helper.exe
+          if ($LASTEXITCODE -ne 0) { throw "A assinatura do componente nativo falhou." }
+          Remove-Item $pfx -Force
+
+      - name: Assinar o componente nativo (Azure Trusted Signing)
+        if: env.AZURE_CLIENT_ID != '' && env.WINDOWS_CERTIFICATE == ''
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: native/windows/audio-helper/build
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # `CSC_LINK` e `CSC_KEY_PASSWORD` são lidos direto pelo electron-builder.
+      # Sem eles a build sai sem assinatura, que é o certo para PR e para branch
+      # de desenvolvimento.
+      - name: Gerar instalador e portable
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $argumentos = @('--win', 'nsis', 'portable', '--publish', 'never')
+          if (-not $env:CSC_LINK -and $env:AZURE_CLIENT_ID) {
+            # Os dados da conta de assinatura são configuração, não segredo, e
+            # por isso vêm de `vars`. O que é segredo continua em `secrets` e
+            # nunca entra na linha de comando.
+            $argumentos += @(
+              "--config.win.azureSignOptions.endpoint=${{ vars.AZURE_SIGNING_ENDPOINT }}",
+              "--config.win.azureSignOptions.codeSigningAccountName=${{ vars.AZURE_SIGNING_ACCOUNT }}",
+              "--config.win.azureSignOptions.certificateProfileName=${{ vars.AZURE_SIGNING_PROFILE }}"
+            )
+          }
+          & npx electron-builder @argumentos
+          if ($LASTEXITCODE -ne 0) { throw "O electron-builder falhou com código $LASTEXITCODE." }
+
+      - name: Verificar assinatura Authenticode
+        shell: pwsh
+        env:
+          ASSINATURA_OBRIGATORIA: ${{ vars.TUMACORD_REQUIRE_SIGNING }}
+        run: |
+          $artefatos = @(
+            (Get-ChildItem release -Filter 'Tumacord-*-Setup.exe' -File),
+            (Get-ChildItem release -Filter 'Tumacord-*-portable.exe' -File),
+            (Get-Item 'release/win-unpacked/Tumacord.exe'),
+            (Get-Item 'release/win-unpacked/resources/audio-helper/tumacord-audio-helper.exe')
+          ) | ForEach-Object { $_ }
+          $exigir = ($env:ASSINATURA_OBRIGATORIA -eq '1') -or ($env:ASSINATURA_OBRIGATORIA -eq 'true')
+          $lancamento = "${{ github.ref }}".StartsWith('refs/tags/v')
+          $invalidos = @()
+          foreach ($artefato in $artefatos) {
+            $assinatura = Get-AuthenticodeSignature $artefato.FullName
+            $publisher = if ($assinatura.SignerCertificate) { $assinatura.SignerCertificate.Subject } else { '(sem assinatura)' }
+            Write-Host "$($artefato.Name): $($assinatura.Status) $publisher"
+            if ($assinatura.Status -ne 'Valid') { $invalidos += $artefato.Name }
+          }
+          if ($invalidos.Count -eq 0) { Write-Host 'Todos os artefatos estão assinados e a assinatura é válida.'; exit 0 }
+          if ($exigir -and $lancamento) {
+            throw "Assinatura obrigatória (TUMACORD_REQUIRE_SIGNING=1) e estes artefatos não estão assinados: $($invalidos -join ', '). Configure os segredos de assinatura descritos em docs/windows-build.md."
+          }
+          if ($lancamento) {
+            Write-Host "::warning::Release sem assinatura Authenticode. Quem baixar verá o aviso do SmartScreen. Configure os segredos e a variável TUMACORD_REQUIRE_SIGNING para exigir assinatura."
+          } else {
+            Write-Host "::notice::Build de desenvolvimento sem assinatura, como esperado."
+          }
+
+      - name: Calcular SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem release -Filter 'Tumacord-*.exe' -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Tee-Object -FilePath release/SHA256SUMS-windows.txt
+
+      - name: Guardar os artefatos do Windows
+        uses: actions/upload-artifact@v7
+        with:
+          name: tumacord-windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            release/Tumacord-*-Setup.exe
+            release/Tumacord-*-portable.exe
+            release/SHA256SUMS-windows.txt
+
+      # A Release é criada pelo job do Linux, que é quem lê o CHANGELOG. Aqui
+      # só se anexam os arquivos do Windows à mesma tag.
+      - name: Publicar os arquivos do Windows na versão
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          for tentativa in 1 2 3 4 5 6 7 8 9 10; do
+            if gh release view "$tag" >/dev/null 2>&1; then break; fi
+            echo "Aguardando a Release $tag ser criada pelo job do Linux (tentativa $tentativa)."
+            sleep 20
+          done
+          gh release upload "$tag" --clobber \
+            release/Tumacord-*-Setup.exe \
+            release/Tumacord-*-portable.exe \
+            release/SHA256SUMS-windows.txt
