@@ -170,7 +170,7 @@ Em Configurações › Diagnóstico, durante 4.9, o relatório precisa mostrar
 | 9.3 | idem para `Tumacord.exe` e `resources\audio-helper\tumacord-audio-helper.exe` da pasta instalada | `Status = Valid` nos dois | ☐ |
 | 9.4 | conferir o publisher em todos | é o mesmo, e o mesmo da versão anterior | ☐ |
 | 9.5 | conferir o carimbo de tempo | presente e válido | ☐ |
-| 9.6 | conferir o SHA-256 do arquivo baixado contra `SHA256SUMS-windows.txt` | confere | ☐ |
+| 9.6 | `Get-FileHash .\Tumacord-0.8.8-Setup.exe -Algorithm SHA256` contra o SHA-256 que o GitHub mostra ao lado do arquivo na Release | confere | ☐ |
 
 Enquanto não houver certificado configurado, 9.1 a 9.5 falham por projeto —
 o workflow avisa em vez de fingir. Veja `docs/windows-build.md`.

@@ -168,14 +168,11 @@ jobs:
             Write-Host "::notice::Build de desenvolvimento sem assinatura, como esperado."
           }
 
-      - name: Calcular SHA-256
-        shell: pwsh
-        run: |
-          Get-ChildItem release -Filter 'Tumacord-*.exe' -File | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)"
-          } | Tee-Object -FilePath release/SHA256SUMS-windows.txt
-
+      # Sem arquivo de somas de propósito. O GitHub já publica o SHA-256 de
+      # cada arquivo ao lado dele na Release, e um `SHA256SUMS` hospedado na
+      # mesma página que os binários fica atrás da mesma fronteira de
+      # confiança: quem trocasse o instalador trocaria o arquivo de somas
+      # junto. Ele só teria valor assinado, ou hospedado em outro lugar.
       - name: Guardar os artefatos do Windows
         uses: actions/upload-artifact@v7
         with:
@@ -184,7 +181,6 @@ jobs:
           path: |
             release/Tumacord-*-Setup.exe
             release/Tumacord-*-portable.exe
-            release/SHA256SUMS-windows.txt
 
       # A Release é criada pelo job do Linux, que é quem lê o CHANGELOG. Aqui
       # só se anexam os arquivos do Windows à mesma tag.
@@ -202,5 +198,4 @@ jobs:
           done
           gh release upload "$tag" --clobber \
             release/Tumacord-*-Setup.exe \
-            release/Tumacord-*-portable.exe \
-            release/SHA256SUMS-windows.txt
+            release/Tumacord-*-portable.exe

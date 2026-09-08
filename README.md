@@ -199,9 +199,13 @@ de um publisher novo, pode ver o aviso mesmo assinado corretamente. A cada
 versão publicada com a mesma identidade, isso melhora.
 
 O que este projeto **não** faz e você não deve fazer: desligar o SmartScreen,
-o Defender, o Smart App Control ou o UAC. Se você não confia no arquivo,
-confira o SHA-256 publicado em `SHA256SUMS-windows.txt` na Release antes de
-executar.
+o Defender, o Smart App Control ou o UAC. Se você quiser conferir que o arquivo
+baixado é o que a Release publicou, o próprio GitHub mostra o SHA-256 ao lado
+de cada arquivo na página da Release:
+
+```powershell
+Get-FileHash .\Tumacord-0.8.8-Setup.exe -Algorithm SHA256
+```
 
 ### Onde ficam os arquivos
 

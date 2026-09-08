@@ -230,8 +230,14 @@ git push origin v0.8.8
 ```
 
 O job `appimage` (Linux) cria a Release lendo as notas do `CHANGELOG.md` e
-anexa AppImage e tar.gz. O job `windows` anexa `Setup.exe`, `portable.exe` e
-`SHA256SUMS-windows.txt` na mesma tag.
+anexa AppImage e tar.gz. O job `windows` anexa `Setup.exe` e `portable.exe` na
+mesma tag.
+
+Nenhum arquivo de somas é publicado, de propósito: o GitHub já mostra o SHA-256
+de cada arquivo ao lado dele na Release, e um `SHA256SUMS` hospedado na mesma
+página que os binários fica atrás da mesma fronteira de confiança — quem
+trocasse o instalador trocaria as somas junto. Um arquivo de somas só passa a
+valer alguma coisa assinado, ou hospedado fora dali.
 
 ## Microsoft Store
 
