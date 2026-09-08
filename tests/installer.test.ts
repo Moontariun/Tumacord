@@ -13,6 +13,13 @@ const scripts = path.join(projectRoot, 'scripts');
 const BASH = ['/usr/bin/bash', '/bin/bash', '/usr/local/bin/bash'].find((candidate) => existsSync(candidate)) ?? 'bash';
 const DIRNAME = ['/usr/bin/dirname', '/bin/dirname'].find((candidate) => existsSync(candidate)) ?? '';
 
+// Estes casos executam o instalador com um PATH montado à mão, contendo só um
+// gerenciador de pacotes de mentira. Isso exige um shell POSIX e um bit de
+// execução — nada disso existe no Windows, e fingir que existe testaria outra
+// coisa. O que vale em toda plataforma é a checagem de sintaxe acima e a
+// conferência de versão mais abaixo.
+const SO_POSIX = process.platform === 'win32' ? 'o instalador do Linux precisa de um shell POSIX' : false;
+
 const SHELL_SCRIPTS = [
   'install-linux.sh',
   'install-cachyos.sh',
@@ -30,7 +37,7 @@ const SHELL_SCRIPTS = [
   'uninstall-cachyos.sh',
 ];
 
-test('todo script de instalação passa na checagem de sintaxe do bash', () => {
+test('todo script de instalação passa na checagem de sintaxe do bash', { skip: process.platform === 'win32' ? 'precisa de bash' : false }, () => {
   for (const script of SHELL_SCRIPTS) {
     assert.doesNotThrow(() => execFileSync(BASH, ['-n', path.join(scripts, script)]), `sintaxe inválida em ${script}`);
   }
@@ -61,30 +68,30 @@ function packagesFor(manager: string, requirements: string[]): string[] {
   }
 }
 
-test('no Fedora o instalador escolhe dnf e os pacotes de lá', () => {
+test('no Fedora o instalador escolhe dnf e os pacotes de lá', { skip: SO_POSIX }, () => {
   const [manager, ...packages] = packagesFor('dnf', ['node', 'npm', 'pactl', 'pipewire-tools', 'git', 'xdg-user-dir']);
   assert.equal(manager, 'dnf');
   assert.deepEqual(packages, ['nodejs', 'npm', 'pulseaudio-utils', 'pipewire-utils', 'git', 'xdg-user-dirs']);
 });
 
-test('o dnf5 é preferido quando existe, sem mudar os nomes dos pacotes', () => {
+test('o dnf5 é preferido quando existe, sem mudar os nomes dos pacotes', { skip: SO_POSIX }, () => {
   const [manager, ...packages] = packagesFor('dnf5', ['node', 'pactl', 'pipewire-tools']);
   assert.equal(manager, 'dnf5');
   assert.deepEqual(packages, ['nodejs', 'pulseaudio-utils', 'pipewire-utils']);
 });
 
-test('CachyOS/Arch continua com os nomes que a 0.7.8 já usava', () => {
+test('CachyOS/Arch continua com os nomes que a 0.7.8 já usava', { skip: SO_POSIX }, () => {
   const [manager, ...packages] = packagesFor('pacman', ['node', 'npm', 'pactl', 'pipewire-tools']);
   assert.equal(manager, 'pacman');
   assert.deepEqual(packages, ['nodejs', 'npm', 'libpulse', 'pipewire-audio']);
 });
 
-test('Debian/Ubuntu e openSUSE têm o pw-link no pacote certo de cada um', () => {
+test('Debian/Ubuntu e openSUSE têm o pw-link no pacote certo de cada um', { skip: SO_POSIX }, () => {
   assert.deepEqual(packagesFor('apt-get', ['pactl', 'pipewire-tools']), ['apt-get', 'pulseaudio-utils', 'pipewire-bin']);
   assert.deepEqual(packagesFor('zypper', ['pactl', 'pipewire-tools']), ['zypper', 'pulseaudio-utils', 'pipewire-tools']);
 });
 
-test('sem nenhum gerenciador conhecido o instalador explica o que instalar à mão', () => {
+test('sem nenhum gerenciador conhecido o instalador explica o que instalar à mão', { skip: SO_POSIX }, () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'tumacord-installer-'));
   try {
     // O PATH leva só o `dirname`, que o script usa para se localizar: nenhum

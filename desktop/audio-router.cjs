@@ -94,6 +94,9 @@ function screenAudioRoutePlan(graph) {
 class ScreenAudioRouter {
   constructor(options = {}) {
     this.runPactl = options.pactl ?? pactl;
+    // Injetável para que o raciocínio do roteador possa ser testado em
+    // qualquer sistema. Em produção continua sendo o sistema de verdade.
+    this.platform = options.platform ?? process.platform;
     this.readGraph = options.pipewireGraph ?? pipewireGraph;
     this.runFile = options.execFile ?? execFileAsync;
     // O grafo muda por eventos (abrir/fechar/pausar aplicativos), não a cada
@@ -118,7 +121,7 @@ class ScreenAudioRouter {
   }
 
   async available() {
-    if (process.platform !== 'linux') return false;
+    if (this.platform !== 'linux') return false;
     try {
       await Promise.all([
         this.runFile('pactl', ['info'], { encoding: 'utf8', timeout: 3_000 }),
@@ -179,7 +182,7 @@ class ScreenAudioRouter {
     // existe, e nem precisa: no Windows o Chromium entrega o loopback do
     // sistema junto com o vídeo. Sair aqui evita procurar `pactl` em uma
     // máquina onde ele nunca esteve.
-    if (process.platform !== 'linux') return { ok: false, error: 'O barramento de áudio da live é específico do PipeWire, no Linux.' };
+    if (this.platform !== 'linux') return { ok: false, error: 'O barramento de áudio da live é específico do PipeWire, no Linux.' };
     if (!(await this.available())) return { ok: false, error: 'pactl/PipeWire não está disponível.' };
     // A fonte virtual da live entra no grafo como qualquer outra e, em vários
     // sistemas, o gerenciador de sessão a promove a padrão. O microfone
@@ -310,7 +313,7 @@ class ScreenAudioRouter {
   async stopInternal() {
     // Fora do Linux nunca houve barramento para desmontar, e `pw-link` não
     // existe. Sair cedo evita erros de processo ausente no encerramento.
-    if (process.platform !== 'linux') return { ok: true };
+    if (this.platform !== 'linux') return { ok: true };
     this.active = false;
     this.generation += 1;
     if (this.timer) clearInterval(this.timer);

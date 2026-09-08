@@ -7,6 +7,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const main = readFileSync(path.join(raiz, 'desktop/main.cjs'), 'utf8');
 
+// `pathToFileURL` responde no formato do sistema em que roda: no Windows,
+// `/home/eu/x` vira `file:///C:/home/eu/x`. Os casos abaixo perguntam pelo
+// caminho POSIX de volta, então só têm resposta em um sistema POSIX. Pular é
+// honesto; adaptá-los ao Windows seria testar outra coisa.
+const SO_POSIX = process.platform === 'win32' ? 'este caso descreve caminhos POSIX' : false;
+
 // O processo principal monta o endereço da interface e depois compara esse
 // mesmo texto com o destino de cada navegação, para recusar qualquer outro.
 // Montar o endereço concatenando `file://` a um caminho de arquivo funciona no
@@ -26,7 +32,7 @@ test('o caminho do Windows não sobrevive à concatenação; por pathToFileURL, 
   assert.notEqual(new URL(concatenado).href, concatenado, 'o texto guardado não bate com o destino real');
 });
 
-test('caminho com espaço quebra a comparação também no Linux', () => {
+test('caminho com espaço quebra a comparação também no Linux', { skip: SO_POSIX }, () => {
   const comEspaco = '/home/eu/Meus Documentos/Tumacord/dist-web/index.html';
   const concatenado = `file://${comEspaco}`;
   assert.notEqual(new URL(concatenado).href, concatenado, 'o navegador percent-encoda e a comparação deixa de bater');
@@ -40,7 +46,7 @@ test('caminho com espaço quebra a comparação também no Linux', () => {
 // vira outra coisa quando o navegador normaliza, e é a comparação de
 // `will-navigate` que paga: ela guarda o texto original e passa a recusar a
 // navegação do próprio aplicativo.
-test('caminhos difíceis sobrevivem à ida e à volta por pathToFileURL', () => {
+test('caminhos difíceis sobrevivem à ida e à volta por pathToFileURL', { skip: SO_POSIX }, () => {
   const casos = [
     'C:\\Program Files\\Tumacord\\dist-web\\index.html',
     'C:\\Users\\João Antônio\\AppData\\Local\\Tumacord\\index.html',
@@ -69,7 +75,7 @@ test('caminhos difíceis sobrevivem à ida e à volta por pathToFileURL', () => 
 // vira fragmento, e o endereço passa a apontar para OUTRO arquivo. O aplicativo
 // simplesmente não carregaria. É por isso que o teste pergunta para qual
 // arquivo o endereço aponta, e não se as duas strings são iguais.
-test('a concatenação erra o arquivo ou erra a comparação; pathToFileURL não erra nenhum', () => {
+test('a concatenação erra o arquivo ou erra a comparação; pathToFileURL não erra nenhum', { skip: SO_POSIX }, () => {
   for (const caminho of [
     '/home/eu/Meus Documentos/x/index.html',
     '/home/eu/pasta#1/index.html',
@@ -93,7 +99,7 @@ test('a concatenação erra o arquivo ou erra a comparação; pathToFileURL não
 
 // O `#` merece o seu próprio caso: é o único em que a concatenação parece
 // certa e não é.
-test('um # no caminho fazia a concatenação apontar para outro arquivo', () => {
+test('um # no caminho fazia a concatenação apontar para outro arquivo', { skip: SO_POSIX }, () => {
   const caminho = '/home/eu/pasta#1/index.html';
   const concatenado = `file://${caminho}`;
   assert.equal(new URL(concatenado).href, concatenado, 'as strings batem…');
