@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { formatInboundVideo, formatOutboundVideo, readInboundVideo, readOutboundVideo } from '../src/lib/videoStats.js';
 import { planVideoCodecPreference, preferSoftwareFriendlyCodecs, softwareEncodeHeadroom } from '../src/lib/codecPolicy.js';
-import { classifyPaint, observePaint, initialPresentationState, paintFps, FAULT_THRESHOLD } from '../src/lib/presentationHealth.js';
+import { classifyPaint, observePaint, initialPresentationState, paintFps, PaintMonitor, FAULT_THRESHOLD } from '../src/lib/presentationHealth.js';
 import { describeFrameSample } from '../src/lib/frameProbe.js';
 
 const require = createRequire(import.meta.url);
@@ -176,4 +176,45 @@ test('quadro preto e quadro não medido não podem virar a mesma frase', () => {
 
   const quaseTodoPreto = describeFrameSample('quadro recebido', { mean: 3, nonBlack: 4, total: 576, width: 1280, height: 720 });
   assert.match(quaseTodoPreto, /quase todo preto/);
+});
+
+// Um vigia que continua agendando quadros depois de parar é exatamente o tipo
+// de vazamento que a versão anterior tinha na sobreposição de desenho.
+test('o medidor de cadência solta o agendamento ao parar', () => {
+  let proximo = 1;
+  const agendados = new Set<number>();
+  let relogio = 0;
+  const monitor = new PaintMonitor(
+    (callback) => {
+      const id = proximo++;
+      agendados.add(id);
+      // Um quadro imediato, como o navegador faria.
+      queueMicrotask(() => { if (agendados.has(id)) { agendados.delete(id); relogio += 16; callback(relogio); } });
+      return id;
+    },
+    (id) => { agendados.delete(id); },
+    () => relogio,
+  );
+  monitor.start();
+  monitor.stop();
+  assert.equal(agendados.size, 0, 'nenhum quadro continua agendado depois de parar');
+  // Parar duas vezes é seguro, e a amostra depois de parar não inventa quadros.
+  monitor.stop();
+  const amostra = monitor.take();
+  assert.equal(amostra.frames, 0);
+  assert.ok(amostra.elapsedMs >= 1);
+});
+
+// Uma janela de medição sem nenhum quadro precisa denunciar o silêncio inteiro,
+// não um intervalo de zero. Era assim que uma pintura PARADA ficava invisível.
+test('pintura parada aparece como intervalo grande, não como ausência de dados', () => {
+  let relogio = 1_000;
+  const monitor = new PaintMonitor(() => 1, () => undefined, () => relogio);
+  monitor.start();
+  relogio = 4_000;
+  const amostra = monitor.take();
+  assert.equal(amostra.frames, 0);
+  assert.equal(amostra.longestGapMs, 3_000, 'o silêncio desde o início da janela é o intervalo');
+  assert.equal(classifyPaint(amostra, true), 'stalled');
+  monitor.stop();
 });
