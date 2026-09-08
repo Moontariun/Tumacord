@@ -14,6 +14,7 @@ import { classifyCaptureOutcome, describeCaptureBudget, initialCaptureSession, o
 import { adaptLocalPressure, initialPressureState, type PressureSample, type PressureState } from '../lib/localPressure';
 import { planVideoCodecPreference, softwareEncodeHeadroom } from '../lib/codecPolicy';
 import { formatInboundVideo, formatOutboundVideo, readInboundVideo, readOutboundVideo, type InboundVideoCounters, type OutboundVideoCounters } from '../lib/videoStats';
+import { describeFrameSample, sampleTrackFrame } from '../lib/frameProbe';
 import { applyTuneOutcome, commandIsStale, degradationFor, initialTuneApplied, screenContentHint, screenEncoding, shouldRetry, tuneIsNeeded, type TuneApplied, type TuneCommand } from '../lib/senderTuning';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
@@ -2685,6 +2686,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       linhas.push(`  fonte observada: ${sessao.sourceWidth || '?'}×${sessao.sourceHeight || '?'} · ${sessao.sourceFrameRate ? `${Math.round(sessao.sourceFrameRate)} FPS` : 'FPS desconhecido'}`);
       linhas.push(`  applyConstraints: ${sessao.supported ? 'disponível' : 'indisponível ou recusado'}${sessao.ignored.length ? ` · pedidos ignorados: ${sessao.ignored.length}` : ''}`);
     }
+    // A pergunta que os dois relatos de "tela preta" não conseguiam separar: o
+    // preto nasce na MINHA captura ou no vídeo que EU recebo?
+    const faixaLocal = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
+    if (faixaLocal) linhas.push(describeFrameSample('quadro da minha captura', await sampleTrackFrame(faixaLocal)));
     linhas.push('');
     linhas.push(`Enlaces (${peers.current.size}):`);
     for (const [peerId, state] of peers.current) {
@@ -2704,6 +2709,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         state.inboundCounters = entrada.counters;
         linhas.push('  recepção:');
         linhas.push(...formatInboundVideo(entrada).map((linha) => `  ${linha}`));
+        const faixaRemota = [...state.remoteStreams.values()]
+          .flatMap((stream) => stream.getVideoTracks())
+          .find((track) => track.readyState === 'live' && !track.muted);
+        if (faixaRemota) linhas.push(`  ${describeFrameSample('quadro recebido', await sampleTrackFrame(faixaRemota)).trimStart()}`);
       } else linhas.push('  recepção: sem vídeo entrando neste enlace');
     }
     if (!peers.current.size) linhas.push('  ninguém mais na call');

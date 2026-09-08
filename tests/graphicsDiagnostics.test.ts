@@ -4,6 +4,7 @@ import test from 'node:test';
 import { formatInboundVideo, formatOutboundVideo, readInboundVideo, readOutboundVideo } from '../src/lib/videoStats.js';
 import { planVideoCodecPreference, preferSoftwareFriendlyCodecs, softwareEncodeHeadroom } from '../src/lib/codecPolicy.js';
 import { classifyPaint, observePaint, initialPresentationState, paintFps, FAULT_THRESHOLD } from '../src/lib/presentationHealth.js';
+import { describeFrameSample } from '../src/lib/frameProbe.js';
 
 const require = createRequire(import.meta.url);
 const { effectiveOzoneBackend, readAccelerationSummary, sanitizeSwitches, summarizeMetrics, describeWindow } = require('../desktop/graphics-report.cjs') as {
@@ -155,4 +156,24 @@ test('processos e janelas entram no relatório sem inventar número', () => {
   const janela = describeWindow({ id: 3, isMinimized: () => true, isVisible: () => true, isFocused: () => false, isFullScreen: () => false, isDestroyed: () => false });
   assert.equal(janela.minimized, true);
   assert.equal(janela.focused, false);
+});
+
+// Os dois relatos de "tela preta" — Windows portable assistindo por servidor, e
+// Linux/Wayland — produziam o mesmo texto e nenhuma pista. Preto medido e
+// ausência de medida precisam ser distinguíveis.
+test('quadro preto e quadro não medido não podem virar a mesma frase', () => {
+  const semMedida = describeFrameSample('quadro da minha captura', null);
+  assert.match(semMedida, /desconhecido/);
+  assert.equal(semMedida.includes('PRETO'), false);
+
+  const preto = describeFrameSample('quadro da minha captura', { mean: 0, nonBlack: 0, total: 576, width: 1920, height: 1080 });
+  assert.match(preto, /PRETO/);
+  assert.match(preto, /1920×1080/, 'a faixa entrega quadro de tamanho conhecido, e o quadro é preto');
+
+  const comImagem = describeFrameSample('quadro recebido', { mean: 118, nonBlack: 570, total: 576, width: 1280, height: 720 });
+  assert.match(comImagem, /com imagem/);
+  assert.equal(comImagem.includes('PRETO'), false);
+
+  const quaseTodoPreto = describeFrameSample('quadro recebido', { mean: 3, nonBlack: 4, total: 576, width: 1280, height: 720 });
+  assert.match(quaseTodoPreto, /quase todo preto/);
 });
