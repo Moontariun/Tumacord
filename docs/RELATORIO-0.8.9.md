@@ -188,6 +188,21 @@ O aplicativo nasce com `disable-backgrounding-occluded-windows`,
 existem por um bom motivo, e continuam. O preço é que `document.hidden` **não
 funciona** aqui: uma janela minimizada continua se dizendo visível.
 
+Medido nesta máquina, com as três bandeiras ligadas como o aplicativo as usa:
+
+| Fase | `isVisible()` | `isMinimized()` | `document.hidden` | `visibilityState` | Estado calculado |
+| --- | --- | --- | --- | --- | --- |
+| mostrada e em foco | true | false | **false** | **visible** | `active` |
+| **minimizada** | false | true | **false** | **visible** | `hidden` |
+| restaurada | true | false | **false** | **visible** | `background` → `active` |
+| **escondida** | false | false | **false** | **visible** | `hidden` |
+| mostrada de novo | true | false | **false** | **visible** | `active` |
+
+`document.hidden` é `false` e `visibilityState` é `"visible"` em **todas** as
+fases, inclusive minimizada e escondida. Uma correção baseada neles não faria
+absolutamente nada neste aplicativo — isso está medido, não suposto. O processo
+principal, por outro lado, acerta os três casos.
+
 Quem sabe agora é o processo principal (`desktop/window-activity.cjs`), que
 pergunta ao compositor e manda três estados ao renderer: `active`,
 `background`, `hidden` — mais `detachedVisible`, que é o que garante que
