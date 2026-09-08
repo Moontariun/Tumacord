@@ -9,7 +9,12 @@ import { playSound } from '../lib/sound';
 import { resumeSharedAudio, sharedAudioContext } from '../lib/audioBus';
 import { isPolitePeer, planPeerRecovery, shouldClearIgnoredOffer, shouldInitiateRecovery, shouldQueueIceCandidate, shouldRecoverMutedAudio, stallSignalIsTrustworthy, RECOVERY_GRACE_MS, type RecoverySeverity } from '../lib/rtcPolicy';
 import { activePathMetrics, adaptEncoderScale, adaptScreenBitrate, inboundAudioMetrics, inboundVideoMetrics, median, outboundVideoMetrics, shouldApplyBitrateChange, shouldApplyScaleChange, type RtcStatLike } from '../lib/networkQuality';
-import { desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
+import { captureEnvelopeFor, desktopScreenCaptureConstraints, maximumAdaptiveScreenScale, parseStreamQuality, SCREEN_QUALITIES, screenBitrateHints, screenCaptureConstraints, screenQualityOptions, screenScaleForQuality, type ScreenQualityConfig, type StreamQuality } from '../lib/screenQuality';
+import { classifyCaptureOutcome, describeCaptureBudget, initialCaptureSession, observeCaptureSettings, planCaptureConstraints, recordCaptureAttempt, type CaptureSession } from '../lib/captureBudget';
+import { adaptLocalPressure, initialPressureState, type PressureSample, type PressureState } from '../lib/localPressure';
+import { planVideoCodecPreference, softwareEncodeHeadroom } from '../lib/codecPolicy';
+import { formatInboundVideo, formatOutboundVideo, readInboundVideo, readOutboundVideo, type InboundVideoCounters, type OutboundVideoCounters } from '../lib/videoStats';
+import { applyTuneOutcome, commandIsStale, degradationFor, initialTuneApplied, screenContentHint, screenEncoding, shouldRetry, tuneIsNeeded, type TuneApplied, type TuneCommand } from '../lib/senderTuning';
 import { applyVideoBitrateHints } from '../lib/sdp';
 import { classifyRemoteStream, prunePeerStreamMetadata, streamMetadataKey } from '../lib/streamMeta';
 import { currentNetworkPreferences } from '../lib/networkPreferences';
@@ -43,10 +48,21 @@ interface PeerConnectionState {
   escalationTimer?: number;
   negotiationRecoveryTimer?: number;
   mutedAudioTimers: Map<string, number>;
-  screenBitrate?: number;
+  // O que o encoder REALMENTE tem, e o que se quer que ele tenha. Até a 0.8.8
+  // os dois eram o mesmo campo: uma rejeição de `setParameters` deixava o
+  // estado dizendo que a mudança valeu, e a decisão seguinte partia de um
+  // número que nunca existiu. Agora `desired*` é intenção e o resto é fato,
+  // atualizado só depois do sucesso.
+  desiredScreenBitrate?: number;
+  desiredScreenScale: number;
+  desiredScreenFps: number;
+  /** O que o encoder REALMENTE tem, escrito só depois de `setParameters` dar
+   *  certo. `desired*` acima é intenção. */
+  screenApplied: TuneApplied;
   healthyScreenSamples: number;
   screenBaseScale: number;
-  screenScale: number;
+  outboundCounters?: OutboundVideoCounters;
+  inboundCounters?: InboundVideoCounters;
   healthyEncoderSamples: number;
   encoderPressureSamples: number;
   lastFramesEncoded?: number;
@@ -56,7 +72,6 @@ interface PeerConnectionState {
   lastScreenPackets?: number;
   rateBytes?: number;
   rateAt?: number;
-  lastScaleChangeAt: number;
   stalledScreenSamples: number;
   lastScreenRecoveryAt: number;
   inboundVoice: Map<string, { packets?: number; stalled: number }>;
@@ -125,18 +140,6 @@ async function tuneVoiceSender(sender: RTCRtpSender): Promise<void> {
   await sender.setParameters(parameters).catch(() => undefined);
 }
 
-// Perfis de 60 FPS existem para jogo e movimento; os de 30 FPS ou menos são
-// escolhidos para ler tela, código e planilha, onde nitidez vale mais que
-// fluidez. O par contentHint/degradationPreference precisa contar a mesma
-// história, senão o encoder derruba a resolução e a live fica borrada.
-function screenContentHint(config: ScreenQualityConfig): 'motion' | 'detail' {
-  return config.frameRate >= 60 ? 'motion' : 'detail';
-}
-
-function screenDegradationPreference(config: ScreenQualityConfig): 'maintain-framerate' | 'maintain-resolution' {
-  return config.frameRate >= 60 ? 'maintain-framerate' : 'maintain-resolution';
-}
-
 // A dica de bitrate viaja na seção de vídeo inteira. Sem um teto próprio a
 // câmera passaria a disputar a banda reservada para a transmissão.
 async function tuneCameraSender(sender: RTCRtpSender): Promise<void> {
@@ -165,21 +168,17 @@ function currentScreenHints(active: boolean, quality: StreamQuality): ReturnType
   return active ? screenBitrateHints(QUALITY[quality]) : undefined;
 }
 
-async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1, holdResolution = false): Promise<boolean> {
+async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfig, command: TuneCommand): Promise<boolean> {
   const parameters = sender.getParameters();
   const current = parameters.encodings?.[0] ?? {};
-  parameters.encodings = [{
-    ...current,
-    maxBitrate,
-    maxFramerate: config.frameRate,
-    scaleResolutionDownBy: Math.min(4, Math.max(1, scale)),
-    priority: 'high',
-    networkPriority: 'high',
-  } as RTCRtpEncodingParameters];
+  // O teto de FPS deixou de ser o do perfil e passou a ser o do ORÇAMENTO: sob
+  // pressão local, reduzir quadros custa menos imagem do que reduzir resolução,
+  // e era exatamente o que faltava. Nunca acima do perfil.
+  parameters.encodings = [{ ...current, ...screenEncoding(config, command) } as RTCRtpEncodingParameters];
   // Nos primeiros segundos o encoder ainda não sabe quanta banda tem. Segurar
   // a resolução nessa janela é o que faz a live abrir nítida; depois dela o
   // perfil volta a mandar, então jogo em 60 FPS continua fluido.
-  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = holdResolution ? 'maintain-resolution' : screenDegradationPreference(config);
+  (parameters as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = degradationFor(config, command);
   try {
     await sender.setParameters(parameters);
     return true;
@@ -190,14 +189,48 @@ async function tuneScreenSender(sender: RTCRtpSender, config: ScreenQualityConfi
 
 const SCREEN_WARMUP_MS = 9_000;
 
-async function tuneScreenPeer(state: PeerConnectionState, sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1, holdResolution = false): Promise<boolean> {
+// A fila serializa os comandos por enlace. O que ela NÃO fazia era descartar
+// um comando obsoleto: uma troca de qualidade seguida de outra deixava a
+// primeira esperando para aplicar um perfil que ninguém mais queria. Agora
+// cada comando carrega a geração da intenção, e só a mais nova chega ao
+// `setParameters`.
+async function tuneScreenPeer(state: PeerConnectionState, sender: RTCRtpSender, config: ScreenQualityConfig, maxBitrate = config.bitrate, scale = 1, holdResolution = false, frameRate = config.frameRate): Promise<boolean> {
+  const command: TuneCommand = { maxBitrate, scale, frameRate, holdResolution };
   let applied = false;
   const operation = state.screenTuning.catch(() => undefined).then(async () => {
-    applied = await tuneScreenSender(sender, config, maxBitrate, scale, holdResolution);
+    // Se a intenção mudou enquanto esperávamos a vez, este comando é lixo.
+    if (commandIsStale(command, { scale: state.desiredScreenScale, frameRate: state.desiredScreenFps })) return;
+    applied = await tuneScreenSender(sender, config, command);
+    // Só aqui o estado passa a refletir o que o encoder TEM. Uma rejeição
+    // deixa o valor anterior de pé e apenas conta a tentativa.
+    state.screenApplied = applyTuneOutcome(state.screenApplied, command, applied, Date.now());
   });
   state.screenTuning = operation.then(() => undefined, () => undefined);
   await operation;
   return applied;
+}
+
+// Um perfil novo zera o que o controlador aprendeu com o anterior. Este bloco
+// aparecia copiado em três lugares, e cada cópia esquecia um campo diferente.
+function resetScreenTuning(state: PeerConnectionState, config: ScreenQualityConfig, baseScale: number, frameRate: number): void {
+  state.screenSenderSince = Date.now();
+  state.screenWarmupHeld = true;
+  state.desiredScreenBitrate = config.bitrate;
+  state.desiredScreenScale = baseScale;
+  state.desiredScreenFps = frameRate;
+  // Perfil novo zera também a contagem de recusas: o comando é outro.
+  state.screenApplied = initialTuneApplied(baseScale, frameRate);
+  state.screenBaseScale = baseScale;
+  state.healthyScreenSamples = 0;
+  state.healthyEncoderSamples = 0;
+  state.encoderPressureSamples = 0;
+  state.lastFramesEncoded = undefined;
+  state.lastTotalEncodeTime = undefined;
+  state.outboundCounters = undefined;
+  state.receiverFrozenUntil = 0;
+  state.lastScreenBytes = undefined;
+  state.lastScreenPackets = undefined;
+  state.stalledScreenSamples = 0;
 }
 
 function savedStreamQuality(): StreamQuality {
@@ -464,6 +497,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const ensureMicrophoneRef = useRef<(options?: { force?: boolean }) => Promise<MediaStream>>(async () => { throw new Error('Microfone ainda não inicializado.'); });
   const negotiateRef = useRef<(peerId: string, iceRestart?: boolean) => Promise<void>>(async () => undefined);
   const recoverPeerRef = useRef<(peerId: string, reason?: string, notifyRemote?: boolean, severity?: RecoverySeverity | 'force') => void>(() => undefined);
+  const applyCodecPreferenceRef = useRef<(state: PeerConnectionState) => void>(() => undefined);
   const recoveryCooldown = useRef(new Map<string, number>());
   const recoveryAttemptCount = useRef(new Map<string, number>());
   const missingScreenSince = useRef(new Map<string, number>());
@@ -484,6 +518,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const mediaCaptureGeneration = useRef({ camera: 0, screen: 0 });
   const joinGeneration = useRef(0);
   const qualityChangeGeneration = useRef(0);
+  // Orçamento local de captura e de FPS. Um por máquina, não um por enlace: a
+  // captura é uma só, e a CPU também.
+  const captureSession = useRef<CaptureSession | null>(null);
+  const captureBudgetNote = useRef('');
+  // O que a captura está REALMENTE entregando, em uma frase, para a tela de
+  // configurações e para o relatório. Vazio enquanto não houver medição.
+  const [captureNote, setCaptureNote] = useState('');
+  const pressureState = useRef<PressureState>(initialPressureState(QUALITY[savedStreamQuality()].frameRate));
+  const fpsBudgetRef = useRef(QUALITY[savedStreamQuality()].frameRate);
+  // O que a medição do processo principal disse sobre aceleração. `null` em
+  // `hardwareEncode` continua sendo "não medido", e nada muda enquanto for.
+  const graphicsCapability = useRef<{ hardwareEncode: boolean | null; hardwareDecode: boolean | null; compositing: string } | null>(null);
   const preferencesRef = useRef(preferences);
   const [, retryCameraSwitch] = useState(0);
   preferencesRef.current = preferences;
@@ -674,16 +720,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         if (kind === 'screen' && track.kind === 'video') {
           const config = QUALITY[qualityRef.current];
           const baseScale = screenScaleForQuality(track.getSettings(), config);
-          state.screenSenderSince = Date.now();
-          state.screenWarmupHeld = true;
-          state.screenBaseScale = baseScale;
-          state.screenScale = baseScale;
           state.screenTuningPending = true;
-          void tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true).then((applied) => {
+          resetScreenTuning(state, config, baseScale, fpsBudgetRef.current);
+          void tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true, fpsBudgetRef.current).then((applied) => {
             if (peers.current.get(target) !== state) return;
             state.screenTuningPending = !applied;
             if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
           });
+          applyCodecPreferenceRef.current(state);
         }
       }
       if (kind === 'camera' || kind === 'screen') sendStreamMeta(target, stream, kind);
@@ -769,12 +813,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       connectedSince: 0,
       screenSenderSince: localStreams.current.has('screen') ? Date.now() : 0,
       screenWarmupHeld: localStreams.current.has('screen'),
-      lastScaleChangeAt: 0,
       mutedAudioTimers: new Map(),
-      screenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
+      desiredScreenBitrate: localStreams.current.has('screen') ? QUALITY[qualityRef.current].bitrate : undefined,
+      desiredScreenScale: screenBaseScale,
+      desiredScreenFps: fpsBudgetRef.current || QUALITY[qualityRef.current].frameRate,
+      screenApplied: initialTuneApplied(screenBaseScale, fpsBudgetRef.current || QUALITY[qualityRef.current].frameRate),
       healthyScreenSamples: 0,
       screenBaseScale,
-      screenScale: screenBaseScale,
       healthyEncoderSamples: 0,
       encoderPressureSamples: 0,
       receiverFrozenUntil: 0,
@@ -862,10 +907,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         if (state.screenTuningPending) {
           const screenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
           const sender = screenTrack ? pc.getSenders().find((candidate) => candidate.track === screenTrack) : undefined;
-          if (screenTrack && sender) {
+          if (screenTrack && sender && shouldRetry(state.screenApplied)) {
             const config = QUALITY[qualityRef.current];
             const baseScale = screenScaleForQuality(screenTrack.getSettings(), config);
-            void tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, Math.max(baseScale, state.screenScale), Date.now() - state.screenSenderSince < SCREEN_WARMUP_MS).then((applied) => {
+            const scale = Math.max(baseScale, state.desiredScreenScale);
+            state.desiredScreenScale = scale;
+            state.desiredScreenFps = fpsBudgetRef.current;
+            void tuneScreenPeer(state, sender, config, state.desiredScreenBitrate ?? config.bitrate, scale, Date.now() - state.screenSenderSince < SCREEN_WARMUP_MS, fpsBudgetRef.current).then((applied) => {
               if (peers.current.get(peerId) === state) state.screenTuningPending = !applied;
             });
           }
@@ -1035,6 +1083,82 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   }, [onError, publishState, sendStreamMeta]);
   screenAudioEndedRef.current = recoverScreenAudio;
 
+  // Ordem de codec, e só com motivo medido.
+  //
+  // A lista NUNCA é truncada — ela é reordenada. Truncar é como se quebra uma
+  // chamada: o outro lado pode não ter o que sobrou. Reordenando, quem não
+  // quiser o primeiro continua podendo escolher o segundo, e a compatibilidade
+  // bilateral fica preservada por construção. E nada disto acontece enquanto
+  // `hardwareEncode` for `null`: sem medição, a escolha continua do Chromium.
+  const applyCodecPreference = useCallback((state: PeerConnectionState) => {
+    const capability = graphicsCapability.current;
+    if (!capability) return;
+    const screenTrack = localStreams.current.get('screen')?.getVideoTracks().find((track) => track.readyState === 'live');
+    if (!screenTrack) return;
+    const transceiver = state.pc.getTransceivers().find((candidate) => candidate.sender.track === screenTrack);
+    if (!transceiver || typeof transceiver.setCodecPreferences !== 'function') return;
+    const decision = planVideoCodecPreference({
+      codecs: RTCRtpSender.getCapabilities?.('video')?.codecs,
+      hardwareEncode: capability.hardwareEncode,
+    });
+    if (!decision.apply) return;
+    try {
+      transceiver.setCodecPreferences(decision.codecs as RTCRtpCodec[]);
+      console.info('[grafico] preferência de codec reordenada para encoder de software');
+    } catch {
+      // Navegador sem suporte ou lista recusada: a negociação segue como antes.
+    }
+  }, []);
+
+  applyCodecPreferenceRef.current = applyCodecPreference;
+
+  // A qualidade escolhida agora chega até a CAPTURA, não só até o encoder.
+  //
+  // O caminho é `applyConstraints` na faixa que já existe: ele reconfigura a
+  // faixa sem tocar na sessão do portal, então o PipeWire/Wayland não volta a
+  // perguntar qual tela compartilhar. Três coisas que este código não promete:
+  //
+  //   · que o navegador vá aceitar (pode rejeitar; então o perfil segue
+  //     valendo só no encoder, como na 0.8.8);
+  //   · que aceitar signifique mudar (pode aceitar e ignorar; isso é
+  //     detectado comparando `getSettings()` antes e depois, e o perfil entra
+  //     numa lista para não ser pedido de novo em laço);
+  //   · que a economia seja total. O compositor continua produzindo o quadro
+  //     do monitor. O que sai é o custo de conversão, cópia, redimensionamento
+  //     no encoder e — quando o FPS cai — de quadro inteiro.
+  const applyCaptureBudget = useCallback(async (quality: StreamQuality, generation: number): Promise<void> => {
+    const stream = localStreams.current.get('screen');
+    const track = stream?.getVideoTracks().find((candidate) => candidate.readyState === 'live');
+    if (!stream || !track) return;
+    const before = track.getSettings?.() ?? {};
+    if (!captureSession.current) captureSession.current = initialCaptureSession(before, typeof track.applyConstraints === 'function');
+    captureSession.current = observeCaptureSettings(captureSession.current, before);
+    const plan = planCaptureConstraints({
+      session: captureSession.current,
+      quality,
+      settings: before,
+      now: Date.now(),
+      fpsBudget: fpsBudgetRef.current,
+    });
+    captureBudgetNote.current = describeCaptureBudget(quality, plan.envelope, before);
+    if (!plan.apply || !plan.constraints) return;
+    let ok = true;
+    try {
+      await track.applyConstraints(plan.constraints);
+    } catch {
+      ok = false;
+    }
+    // A pessoa pode ter trocado de qualidade ou parado a live enquanto o
+    // navegador pensava. Nesse caso o resultado não vale como aprendizado.
+    if (generation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream || track.readyState !== 'live') return;
+    const after = track.getSettings?.() ?? {};
+    const outcome = ok ? classifyCaptureOutcome(plan.envelope, before, after) : 'unknown';
+    captureSession.current = recordCaptureAttempt(captureSession.current, { quality, key: plan.key, ok, outcome, settings: after, now: Date.now() });
+    captureBudgetNote.current = describeCaptureBudget(quality, plan.envelope, after);
+    setCaptureNote(captureBudgetNote.current);
+    console.info('[captura] orçamento aplicado', { quality, ok, outcome, nota: captureBudgetNote.current });
+  }, []);
+
   const stopStream = useCallback(async (kind: 'camera' | 'screen') => {
     // Invalida getUserMedia/getDisplayMedia ainda pendentes antes de consultar
     // o mapa. Assim uma permissão que termina depois de “Sair” não ressuscita
@@ -1059,6 +1183,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       publishState({ camera: false });
     } else {
       if (screenAudioRecovery.current.timer) window.clearTimeout(screenAudioRecovery.current.timer);
+      // O que se aprendeu sobre ESTA captura morre com ela: a próxima pode ser
+      // outro monitor, outra janela, outro compositor.
+      captureSession.current = null;
+      captureBudgetNote.current = '';
+      setCaptureNote('');
+      pressureState.current = initialPressureState(QUALITY[qualityRef.current].frameRate);
+      fpsBudgetRef.current = QUALITY[qualityRef.current].frameRate;
       screenAudioRecovery.current = { ...IDLE_SCREEN_AUDIO };
       screenAudioEnabled.current = false;
       const bridge = screenAudioBridge.current;
@@ -1102,25 +1233,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const config = QUALITY[screenQuality];
         if (sender) {
           const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
-          state.screenSenderSince = Date.now();
-          state.screenWarmupHeld = true;
           state.screenTuningPending = true;
-          const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true);
+          resetScreenTuning(state, config, baseScale, fpsBudgetRef.current);
+          const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true, fpsBudgetRef.current);
           state.screenTuningPending = !applied;
           if (!applied) onError('A transmissão iniciou, mas o navegador recusou o perfil de qualidade deste enlace.');
-          state.screenBitrate = config.bitrate;
-          state.healthyScreenSamples = 0;
-          state.screenBaseScale = baseScale;
-          state.screenScale = baseScale;
-          state.healthyEncoderSamples = 0;
-          state.encoderPressureSamples = 0;
-          state.lastScaleChangeAt = 0;
-          state.lastFramesEncoded = undefined;
-          state.lastTotalEncodeTime = undefined;
-          state.receiverFrozenUntil = 0;
-          state.lastScreenBytes = undefined;
-          state.lastScreenPackets = undefined;
-          state.stalledScreenSamples = 0;
+          // Sem encoder por hardware, insistir em VP9/AV1 por software é gastar
+          // a CPU que o jogo também quer. A lista inteira continua na
+          // negociação; só a ORDEM muda, então o outro lado nunca fica sem
+          // codec compatível.
+          applyCodecPreference(state);
         }
       }
       if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) break;
@@ -1693,6 +1815,26 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // P2P antigo para o novo troca o socket, mas deve preservar a tela/câmera.
   useEffect(() => () => leaveRef.current(), []);
 
+  // O que a máquina consegue fazer, medido pelo processo principal depois de
+  // `gpu-info-update`. Enquanto isto não chega, `hardwareEncode` é `null` e
+  // nada muda de comportamento: um palpite errado aqui deixaria a live pior
+  // sem motivo.
+  useEffect(() => {
+    const bridge = window.tumacordDesktop;
+    if (!bridge?.graphicsCapability) return;
+    let vivo = true;
+    void bridge.graphicsCapability().then((capability) => {
+      if (vivo && capability) graphicsCapability.current = capability;
+    }).catch(() => undefined);
+    const parar = bridge.onGraphicsCapability?.((capability) => {
+      graphicsCapability.current = capability;
+      if (capability.hardwareEncode === false) {
+        console.info('[grafico] encoder de vídeo por hardware indisponível; a live usa orçamento de software');
+      }
+    });
+    return () => { vivo = false; parar?.(); };
+  }, []);
+
   const joinRef = useRef(join);
   joinRef.current = join;
   useEffect(() => {
@@ -1714,6 +1856,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (running) return;
       running = true;
       const samples: number[] = [];
+      const amostrasDePressao: PressureSample[] = [];
       const stalledPeers: string[] = [];
       const stalledVoicePeers = new Set<string>();
       const stalledRemoteScreens = new Set<string>();
@@ -1842,7 +1985,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           }
           const bitrateDecision = adaptScreenBitrate({
             targetBitrate: config.bitrate,
-            currentBitrate: state.screenBitrate ?? config.bitrate,
+            currentBitrate: state.screenApplied.maxBitrate ?? config.bitrate,
             healthySamples: state.healthyScreenSamples,
             rttMs: path.rttMs,
             availableOutgoingBitrate: path.availableOutgoingBitrate,
@@ -1865,7 +2008,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const receiverReportedFreeze = state.receiverFrozenUntil > Date.now();
           const encoderDecision = adaptEncoderScale({
             targetFps: config.frameRate,
-            currentScale: state.screenScale,
+            currentScale: state.screenApplied.scale,
             minimumScale: state.screenBaseScale,
             maximumScale: maximumAdaptiveScreenScale(state.screenBaseScale),
             healthySamples: state.healthyEncoderSamples,
@@ -1875,25 +2018,53 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
             receiverFrozen: receiverReportedFreeze,
           });
           if (receiverReportedFreeze) state.receiverFrozenUntil = 0;
+          // Leitura rica do mesmo relatório, para o diagnóstico e para separar
+          // pressão de captura de pressão de encoder. Ela não custa outra
+          // chamada: os `stats` já estão aqui.
+          const detalhe = readOutboundVideo(senderStats.length ? senderStats : stats, state.outboundCounters, sampledAt);
+          if (detalhe) {
+            state.outboundCounters = detalhe.counters;
+            amostrasDePressao.push({
+              targetFps: config.frameRate,
+              peers: peers.current.size,
+              rttMs: path.rttMs,
+              fractionLost: outbound.fractionLost,
+              availableOutgoingBitrate: path.availableOutgoingBitrate,
+              sendingBitrate,
+              currentBitrate: state.screenApplied.maxBitrate ?? config.bitrate,
+              averageEncodeMs,
+              qualityLimitationReason: outbound.qualityLimitationReason,
+              capturedFps: detalhe.captureFps,
+              framesCapturedDelta: detalhe.capturedFramesDelta,
+              framesDroppedDelta: detalhe.capturedDroppedDelta,
+              hardwareEncode: graphicsCapability.current?.hardwareEncode ?? undefined,
+            });
+          }
           // O que o controlador decide só vira comando quando muda alguma
-          // coisa de verdade. `state` guarda o que o encoder realmente tem,
-          // para que a próxima decisão parta do valor aplicado.
-          const appliedBitrate = state.screenBitrate ?? config.bitrate;
+          // coisa de verdade — e `state.screen*` guarda o que o encoder
+          // REALMENTE tem, atualizado só depois de `setParameters` dar certo.
+          // Até a 0.8.8 esses campos eram escritos antes, e uma rejeição
+          // deixava a próxima decisão partindo de um número que nunca existiu.
+          const appliedBitrate = state.screenApplied.maxBitrate ?? config.bitrate;
           const bitrateChanged = shouldApplyBitrateChange(appliedBitrate, bitrateDecision.bitrate);
           const nextScale = shouldApplyScaleChange({
-            currentScale: state.screenScale,
+            currentScale: state.screenApplied.scale,
             nextScale: encoderDecision.scale,
-            msSinceChange: sampledAt - (state.lastScaleChangeAt || state.screenSenderSince),
-          }) ? encoderDecision.scale : state.screenScale;
-          const scaleChanged = Math.abs(nextScale - state.screenScale) >= 0.01;
-          if (scaleChanged) state.lastScaleChangeAt = sampledAt;
+            msSinceChange: sampledAt - (state.screenApplied.changedAt || state.screenSenderSince),
+          }) ? encoderDecision.scale : state.screenApplied.scale;
+          const fpsAlvo = Math.min(config.frameRate, fpsBudgetRef.current || config.frameRate);
           state.healthyScreenSamples = bitrateDecision.healthySamples;
-          if (bitrateChanged) state.screenBitrate = bitrateDecision.bitrate;
-          state.screenScale = nextScale;
           state.healthyEncoderSamples = encoderDecision.healthySamples;
           state.encoderPressureSamples = encoderDecision.pressureSamples;
-          if (bitrateChanged || scaleChanged || warmupChanged || state.screenTuningPending) {
-            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, state.screenBitrate ?? config.bitrate, nextScale, holdResolution));
+          if (bitrateChanged) state.desiredScreenBitrate = bitrateDecision.bitrate;
+          state.desiredScreenScale = nextScale;
+          state.desiredScreenFps = fpsAlvo;
+          const comando: TuneCommand = { maxBitrate: state.desiredScreenBitrate ?? config.bitrate, scale: nextScale, frameRate: fpsAlvo, holdResolution };
+          const precisaAjustar = tuneIsNeeded(state.screenApplied, comando, warmupChanged || state.screenTuningPending || bitrateChanged);
+          // Três recusas seguidas e o enlace para de repetir o mesmo comando a
+          // cada dois segundos. A próxima mudança de intenção zera a contagem.
+          if (precisaAjustar && shouldRetry(state.screenApplied)) {
+            state.screenTuningPending = !(await tuneScreenPeer(state, sender, config, comando.maxBitrate, comando.scale, comando.holdResolution, comando.frameRate));
           }
 
           if (outbound.bytesSent !== undefined && outbound.packetsSent !== undefined && state.pc.connectionState === 'connected' && screenTrack.enabled) {
@@ -1910,6 +2081,24 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
               state.stalledScreenSamples = 0;
               stalledPeers.push(peerId);
             }
+          }
+        }
+        // Uma decisão de FPS por MÁQUINA, não uma por enlace: a captura é uma
+        // só e a CPU também. Vale a pior amostra — três espectadores confortáveis
+        // e um sufocando ainda é uma máquina sufocando.
+        if (amostrasDePressao.length) {
+          const pior = amostrasDePressao.reduce((atual, candidata) => (
+            (candidata.averageEncodeMs ?? 0) > (atual.averageEncodeMs ?? 0) || candidata.qualityLimitationReason === 'cpu' ? candidata : atual
+          ));
+          const decisao = adaptLocalPressure(pressureState.current, pior);
+          pressureState.current = { source: decisao.source, pressureSamples: decisao.pressureSamples, healthySamples: decisao.healthySamples, fpsBudget: decisao.fpsBudget };
+          if (decisao.changed) {
+            fpsBudgetRef.current = decisao.fpsBudget;
+            console.info('[pressao]', decisao.detail);
+            // Reduzir FPS mexe no encoder de cada enlace, e também na captura:
+            // um quadro que não é capturado não é convertido, não é copiado e
+            // não é codificado. É a única parte do custo que some de verdade.
+            void applyCaptureBudget(qualityRef.current, qualityChangeGeneration.current).catch(() => undefined);
           }
         }
         socket.emit('voice:latency', median(samples) ?? 9999);
@@ -2311,7 +2500,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         return;
       }
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: screenCaptureConstraints(),
+        // O perfil escolhido é o teto pedido à captura, não só ao encoder.
+        video: screenCaptureConstraints(selectedQuality),
         audio: includeAudio,
         selfBrowserSurface: 'exclude',
         systemAudio: includeAudio ? 'include' : 'exclude',
@@ -2385,7 +2575,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         video: {
           mandatory: {
             chromeMediaSourceId: sourceId,
-            ...desktopScreenCaptureConstraints(),
+            ...desktopScreenCaptureConstraints(selectedQuality),
           },
         } as unknown as MediaTrackConstraints,
       });
@@ -2422,47 +2612,155 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     }
   }
 
+  // Relatório gráfico e de mídia, sob demanda.
+  //
+  // Ele responde exatamente as perguntas que a 0.8.8 não respondia: qual
+  // backend de janelas está em uso, o que o Chromium ligou e desligou na GPU,
+  // se a live está sendo codificada em hardware ou não, quanto custa cada
+  // quadro e o que a captura está REALMENTE entregando.
+  //
+  // O que ele nunca carrega: SDP, endereço IP, candidato ICE, convite, chave,
+  // nome de janela capturada, nome de usuário. Identificador de enlace vira um
+  // prefixo curto, que serve para casar duas linhas do mesmo relatório e não
+  // serve para reconstruir nada.
+  const graphicsReport = useCallback(async (): Promise<string> => {
+    const agora = Date.now();
+    const linhas: string[] = ['Diagnóstico gráfico e de mídia', ''];
+    const bridge = window.tumacordDesktop;
+    const midia = {
+      capturas: localStreams.current.has('screen') ? 1 : 0,
+      camera: localStreams.current.has('camera'),
+      enlaces: peers.current.size,
+      perfil: qualityRef.current,
+      tetoDeFpsLocal: fpsBudgetRef.current,
+      pressao: pressureState.current.source,
+    };
+    // Opt-in de verdade: a coleta só é ligada quando alguém pede o relatório.
+    await bridge?.setGraphicsDiagnostics?.(true).catch(() => undefined);
+    const relatorio = await bridge?.graphicsReport?.(midia).catch(() => null) ?? null;
+    if (!relatorio) linhas.push('Processo principal: indisponível (aplicativo web ou diagnóstico desligado).');
+    else {
+      const status = relatorio.gpuFeatureStatus as Record<string, string> | null | undefined;
+      linhas.push(`Electron ${relatorio.electron} · Chromium ${relatorio.chromium} · ${relatorio.platform}`);
+      linhas.push(`Backend de janelas: ${relatorio.ozoneBackend}${relatorio.sessionType ? ` · sessão ${relatorio.sessionType}` : ''}`);
+      linhas.push(`Bandeiras: ${(relatorio.switches as string[] | undefined)?.join(' ') || 'nenhuma conhecida'}`);
+      linhas.push(`Recursos ligados: ${(relatorio.enabledFeatures as string[] | undefined)?.join(',') || 'nenhum'}`);
+      linhas.push(`Modo gráfico seguro: ${relatorio.safeGpuMode ? 'sim' : 'não'}`);
+      linhas.push('');
+      linhas.push('Aceleração (medida depois de gpu-info-update):');
+      if (!status) linhas.push('  ainda não medida — o Chromium não avisou');
+      else {
+        // Composição acelerada NÃO é encode por hardware. As três linhas
+        // existem separadas justamente porque foram confundidas antes.
+        linhas.push(`  composição da interface: ${status.gpu_compositing ?? 'desconhecida'}`);
+        linhas.push(`  encode de vídeo: ${status.video_encode ?? 'desconhecido'}`);
+        linhas.push(`  decode de vídeo: ${status.video_decode ?? 'desconhecido'}`);
+        linhas.push(`  vulkan: ${status.vulkan ?? 'desconhecido'} · webgl: ${status.webgl ?? 'desconhecido'}`);
+      }
+      if (relatorio.gpuInfoError) linhas.push(`  getGPUInfo falhou: ${relatorio.gpuInfoError}`);
+      const processos = relatorio.processes as Array<{ type: string; cpuPercent?: number; memoryMb?: number }> | undefined;
+      if (processos?.length) {
+        linhas.push('');
+        linhas.push('Processos:');
+        for (const processo of processos) {
+          linhas.push(`  ${String(processo.type).padEnd(10)} CPU ${processo.cpuPercent ?? 'desconhecida'}% · memória ${processo.memoryMb ?? 'desconhecida'} MB`);
+        }
+      }
+      const janelas = relatorio.windows as Array<Record<string, unknown>> | undefined;
+      if (janelas?.length) {
+        linhas.push('');
+        linhas.push('Janelas:');
+        for (const janela of janelas) {
+          linhas.push(`  #${janela.id} ${janela.minimized ? 'minimizada' : janela.visible ? 'visível' : 'oculta'}${janela.focused ? ' · em foco' : ''}${janela.fullscreen ? ' · tela cheia' : ''}`);
+        }
+      }
+    }
+    linhas.push('');
+    linhas.push('Captura:');
+    linhas.push(`  perfil escolhido: ${QUALITY[qualityRef.current].label}`);
+    linhas.push(`  ${captureBudgetNote.current || 'sem captura ativa'}`);
+    linhas.push(`  teto local de FPS: ${fpsBudgetRef.current} · pressão observada: ${pressureState.current.source}`);
+    const sessao = captureSession.current;
+    if (sessao) {
+      linhas.push(`  fonte observada: ${sessao.sourceWidth || '?'}×${sessao.sourceHeight || '?'} · ${sessao.sourceFrameRate ? `${Math.round(sessao.sourceFrameRate)} FPS` : 'FPS desconhecido'}`);
+      linhas.push(`  applyConstraints: ${sessao.supported ? 'disponível' : 'indisponível ou recusado'}${sessao.ignored.length ? ` · pedidos ignorados: ${sessao.ignored.length}` : ''}`);
+    }
+    linhas.push('');
+    linhas.push(`Enlaces (${peers.current.size}):`);
+    for (const [peerId, state] of peers.current) {
+      const relatorioPeer = await state.pc.getStats().catch(() => null);
+      const stats: RtcStatLike[] = [];
+      relatorioPeer?.forEach((stat) => stats.push(stat as unknown as RtcStatLike));
+      linhas.push(`  ${peerId.slice(0, 6)}… ${state.pc.connectionState}`);
+      const saida = readOutboundVideo(stats, state.outboundCounters, agora);
+      if (saida) {
+        const envelope = captureEnvelopeFor(qualityRef.current);
+        linhas.push('  envio:');
+        linhas.push(...formatOutboundVideo(saida, envelope).map((linha) => `  ${linha}`));
+        linhas.push(`    escala pedida ${state.desiredScreenScale} · aplicada ${state.screenApplied.scale} · FPS pedido ${state.desiredScreenFps} · aplicado ${state.screenApplied.frameRate}${state.screenApplied.attempts ? ` · ${state.screenApplied.attempts} recusa(s) de setParameters` : ''}`);
+      } else linhas.push('  envio: sem vídeo saindo neste enlace');
+      const entrada = readInboundVideo(stats, state.inboundCounters, agora);
+      if (entrada) {
+        state.inboundCounters = entrada.counters;
+        linhas.push('  recepção:');
+        linhas.push(...formatInboundVideo(entrada).map((linha) => `  ${linha}`));
+      } else linhas.push('  recepção: sem vídeo entrando neste enlace');
+    }
+    if (!peers.current.size) linhas.push('  ninguém mais na call');
+    return linhas.join('\n');
+  }, []);
+
   const changeQuality = async (next: StreamQuality) => {
     const operation = ++qualityChangeGeneration.current;
     qualityRef.current = next;
     setQuality(next);
     persistStreamQuality(next);
     const stream = localStreams.current.get('screen');
-    if (!stream) return true;
+    if (!stream) {
+      pressureState.current = initialPressureState(QUALITY[next].frameRate);
+      fpsBudgetRef.current = QUALITY[next].frameRate;
+      return true;
+    }
     const config = QUALITY[next];
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenContentHint(config);
+    // Primeiro a CAPTURA, depois o encoder. Era esta a metade que faltava: até
+    // a 0.8.8, escolher 720p30 num monitor 1440p continuava capturando 1440p60
+    // e mandava o encoder reduzir cada quadro por software. A sessão do portal
+    // não é tocada — nenhuma troca de qualidade pede a tela de novo.
+    await applyCaptureBudget(next, operation);
+    if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
+    // Sem encoder por hardware medido, a live abre um degrau abaixo e sobe se
+    // a folga aparecer. Subir com medição é melhor que descobrir o teto
+    // depois de a imagem já ter estragado.
+    const headroom = softwareEncodeHeadroom({
+      hardwareEncode: graphicsCapability.current?.hardwareEncode ?? null,
+      peers: peers.current.size,
+      targetFps: config.frameRate,
+    });
+    pressureState.current = { ...initialPressureState(config.frameRate), fpsBudget: headroom.startFps };
+    fpsBudgetRef.current = headroom.startFps;
     const baseScale = screenScaleForQuality(videoTrack?.getSettings() ?? {}, config);
     let rejectedByBrowser = 0;
     for (const state of peers.current.values()) {
       if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
       const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
       if (!sender) continue;
-      state.screenSenderSince = Date.now();
-      state.screenWarmupHeld = true;
       state.screenTuningPending = true;
-      const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true);
+      resetScreenTuning(state, config, baseScale, headroom.startFps);
+      const applied = await tuneScreenPeer(state, sender, config, config.bitrate, baseScale, true, headroom.startFps);
       if (operation !== qualityChangeGeneration.current || localStreams.current.get('screen') !== stream) return false;
       state.screenTuningPending = !applied;
       if (!applied) rejectedByBrowser += 1;
-      state.screenBitrate = config.bitrate;
-      state.healthyScreenSamples = 0;
-      state.screenBaseScale = baseScale;
-      state.screenScale = baseScale;
-      state.healthyEncoderSamples = 0;
-      state.encoderPressureSamples = 0;
-      state.lastScaleChangeAt = 0;
-      state.lastFramesEncoded = undefined;
-      state.lastTotalEncodeTime = undefined;
-      state.receiverFrozenUntil = 0;
-      state.lastScreenBytes = undefined;
-      state.lastScreenPackets = undefined;
-      state.stalledScreenSamples = 0;
     }
     if (rejectedByBrowser) {
       onError(`A captura continua ativa, mas ${rejectedByBrowser === 1 ? 'um enlace recusou' : `${rejectedByBrowser} enlaces recusaram`} o novo perfil de qualidade.`);
       return false;
     }
+    // Uma redução que não reduziu a captura não pode ser anunciada como se
+    // tivesse reduzido: o texto abaixo é a leitura de `getSettings()` depois
+    // do pedido, mais o que a medição disser sobre encoder por hardware.
+    setCaptureNote([captureBudgetNote.current, headroom.explain].filter(Boolean).join(' · '));
     return true;
   };
 
@@ -2471,7 +2769,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     drawings, sendDraw, screenSource,
-    quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
+    quality, setQuality: changeQuality, captureNote, graphicsReport, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
     showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource, screenAudioSupport,
     localCamera: localStreams.current.get('camera'),

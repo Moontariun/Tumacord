@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_DRAW_PREFERENCES, sanitizeDrawPreferences } from '../src/lib/drawPreferences';
+import { DEFAULT_DRAW_PREFERENCES, defaultDesktopOverlay, sanitizeDrawPreferences } from '../src/lib/drawPreferences';
 import { STROKE_LIFETIME_MS } from '../shared/telestration';
 
 test('o padrão deixa o desenho ligado, com prazo normal', () => {
@@ -33,4 +33,29 @@ test('a cor do perfil vira a cor do traço quando não há escolha salva', () =>
   assert.equal(sanitizeDrawPreferences({}, '#52d789').drawColor, '#52d789');
   assert.equal(sanitizeDrawPreferences({ drawColor: '#5cc8ff' }, '#52d789').drawColor, '#5cc8ff', 'a escolha vence o perfil');
   assert.match(sanitizeDrawPreferences({}, 'vermelho').drawColor, /^#[0-9a-f]{6}$/i, 'perfil inválido cai no padrão');
+});
+
+// A sobreposição sobre a área de trabalho passou a ser opcional na 0.8.9.
+// Medindo no KDE/Wayland, mapear aquela janela tira o foco de teclado de quem
+// estava digitando — e não devolve para ninguém. Quem estiver jogando perde o
+// controle do jogo no momento em que alguém aponta algo na live.
+test('a sobreposição sobre a área de trabalho nasce desligada no Linux e ligada no Windows', () => {
+  assert.equal(defaultDesktopOverlay('linux'), false);
+  assert.equal(defaultDesktopOverlay('win32'), true);
+  assert.equal(defaultDesktopOverlay(''), false, 'sem aplicativo instalado não existe sobreposição');
+  assert.equal(sanitizeDrawPreferences(null, undefined, 'linux').desktopOverlay, false);
+  assert.equal(sanitizeDrawPreferences(null, undefined, 'win32').desktopOverlay, true);
+});
+
+test('quem ligou a sobreposição continua com ela ligada, em qualquer sistema', () => {
+  assert.equal(sanitizeDrawPreferences({ desktopOverlay: true }, undefined, 'linux').desktopOverlay, true);
+  assert.equal(sanitizeDrawPreferences({ desktopOverlay: false }, undefined, 'win32').desktopOverlay, false);
+  // Valor inválido cai no padrão da plataforma, não em "ligado".
+  assert.equal(sanitizeDrawPreferences({ desktopOverlay: 'sim' }, undefined, 'linux').desktopOverlay, false);
+});
+
+test('desligar a sobreposição não desliga o desenho', () => {
+  const preferencias = sanitizeDrawPreferences({ allowDraw: true, desktopOverlay: false }, undefined, 'linux');
+  assert.equal(preferencias.allowDraw, true, 'o traço continua aparecendo no app e no vídeo de quem assiste');
+  assert.equal(preferencias.desktopOverlay, false);
 });

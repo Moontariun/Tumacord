@@ -32,8 +32,17 @@ function displayForSource(sourceId, displays, primary) {
   return encontrado ?? primary ?? null;
 }
 
+// Abrir e fechar a janela sobreposta custa caro em compositor — e, no
+// KDE/Wayland, cada mapeamento tira o foco de teclado de quem estava
+// digitando. Uma rajada de traços com pausas de dois segundos abria e fechava
+// a janela várias vezes. Agora, sem traços, ela só ESVAZIA; a janela em si é
+// fechada depois de uma carência, e um traço novo cancela o fechamento.
+const OVERLAY_LINGER_MS = 8_000;
+
 class DrawingOverlay {
   constructor(options = {}) {
+    this.lingerMs = options.lingerMs ?? OVERLAY_LINGER_MS;
+    this.lingerTimer = null;
     this.createWindow = options.createWindow ?? ((config) => new BrowserWindow(config));
     this.readDisplays = options.readDisplays ?? (() => screen.getAllDisplays());
     this.readPrimary = options.readPrimary ?? (() => screen.getPrimaryDisplay());
@@ -59,6 +68,7 @@ class DrawingOverlay {
   show({ sourceId, sourceKind, strokes, lifetime }) {
     const display = this.targetDisplay(sourceId, sourceKind);
     if (!display) return false;
+    this.cancelLinger();
     if (!this.window || this.window.isDestroyed() || this.sourceId !== sourceId) {
       this.close();
       const janela = this.createWindow({
@@ -122,7 +132,28 @@ class DrawingOverlay {
     this.window.webContents.send('tumacord:overlay-strokes', this.pending);
   }
 
+  // Sem traço nenhum: a página se esvazia e para de pintar, e a janela fica de
+  // pé por uma carência. É o que evita o vaivém de foco durante um desenho.
+  clear() {
+    this.cancelLinger();
+    if (!this.window || this.window.isDestroyed()) return false;
+    this.push([], this.pending ? this.pending.lifetime : 6000);
+    this.lingerTimer = setTimeout(() => {
+      this.lingerTimer = null;
+      this.close();
+    }, this.lingerMs);
+    if (typeof this.lingerTimer?.unref === 'function') this.lingerTimer.unref();
+    return true;
+  }
+
+  cancelLinger() {
+    if (!this.lingerTimer) return;
+    clearTimeout(this.lingerTimer);
+    this.lingerTimer = null;
+  }
+
   close() {
+    this.cancelLinger();
     const janela = this.window;
     this.window = null;
     this.sourceId = '';
@@ -138,4 +169,4 @@ class DrawingOverlay {
   }
 }
 
-module.exports = { DrawingOverlay, displayForSource };
+module.exports = { DrawingOverlay, OVERLAY_LINGER_MS, displayForSource };

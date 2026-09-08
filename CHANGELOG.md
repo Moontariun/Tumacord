@@ -1,5 +1,116 @@
 # Histórico de versões
 
+## 0.8.9 — a qualidade escolhida passa a valer para a captura
+
+No CachyOS/KDE, abrir o Enshrouded com uma live sendo enviada e outra sendo
+assistida corrompia a interface e derrubava o jogo para algo perto de 8 FPS. Sem
+o Tumacord aberto, o mesmo jogo rodava liso.
+
+Esta versão mediu o motivo em vez de adivinhar, e a medida mudou o que precisava
+ser consertado.
+
+**O que a medição encontrou**
+
+Nesta máquina — Electron 41.10.7, Chromium 146, NVIDIA 610.57.04, Wayland — o
+Chromium responde `video_encode: disabled_software`: **não existe encoder de
+vídeo por hardware disponível**. A live é codificada em software, e nenhuma
+bandeira cria um encoder que não existe.
+
+Com encoder de software e composição por GPU ligada, cada quadro precisa voltar
+da GPU para a memória do sistema antes de ser codificado. Em cinco pares de
+execuções alternadas, mesmo codec e mesma resolução, isso custou **43 ms por
+quadro** com composição na GPU contra **1,5 ms** com a composição fora dela.
+Vinte e oito vezes. E é trabalho de GPU: a mesma GPU do jogo.
+
+O custo escala com pixels e com quadros. Até a 0.8.8, **todo perfil de qualidade
+pedia captura 1440p60** — escolher 720p30 num monitor 1440p continuava
+capturando 1440p60 e mandava o encoder reduzir cada quadro. Era o pior caminho
+possível, escolhido em silêncio.
+
+**A qualidade passou a controlar a captura**
+
+Cada perfil agora pede o próprio teto à captura, sem tocar na sessão do portal:
+trocar a qualidade nunca pede a tela de novo. E a interface passou a mostrar o
+que a captura **entregou**, não o que foi pedido — se o pedido for ignorado, ela
+diz que foi ignorado em vez de anunciar uma economia que não houve.
+
+**Sob pressão, caem quadros antes de cair nitidez**
+
+Congestionamento de rede, encoder saturado, captura faminta e pintura
+sobrecarregada deixaram de ser a mesma coisa. Cada um tem sinal próprio, e só os
+três últimos reduzem o teto de FPS — rede continua sendo assunto do bitrate.
+A descida é de dois em dois segundos com histerese, a subida é lenta, e o número
+de espectadores entra na conta. **A voz nunca é moeda de troca.**
+
+**A interface para de gastar quando ninguém está olhando**
+
+O aplicativo desliga o estrangulamento de segundo plano de propósito — sem isso,
+minimizar com a live solta estrangulava a mídia. O preço era que `document.hidden`
+não funciona aqui: a janela minimizada continuava se dizendo visível, e desfoque,
+animação e prévia continuavam custando GPU. Agora o estado real vem do processo
+principal. Áudio, transporte, captura e a janela solta visível continuam.
+
+**A sobreposição de desenho parou de repintar o monitor 180 vezes por segundo**
+
+Ela limpava e redesenhava o monitor inteiro sem parar, inclusive com desenho
+persistente parado e sem traço nenhum. Agora pinta quando algo muda: 0 por
+segundo parada, 30 por segundo enquanto um traço desvanece.
+
+**No Linux, a sobreposição sobre a área de trabalho vem desligada**
+
+Achado desta versão, medido: abrir aquela janela no KDE/Wayland **tira o foco do
+teclado de quem estava digitando e não devolve para ninguém**. Testei nove
+combinações de opções do Electron; todas fazem isso. Quem estiver jogando perde o
+controle do jogo no instante em que alguém aponta algo na live.
+
+O desenho continua inteiro — dentro do Tumacord e dentro do vídeo de quem
+assiste. O que ficou opcional é a cópia sobre a área de trabalho, e no Windows
+ela continua ligada, porque lá ela se comporta.
+
+**Tela preta na live: três estados que se pareciam**
+
+Elemento pausado, faixa que nunca decodifica, e quadros decodificados que não
+chegam a ser pintados. Só o terceiro não aparece em `readyState`, e é justamente
+o que acontece quando o Chromium não consegue alocar o buffer gráfico do quadro.
+Um vigia detecta cada um e reata a faixa ao elemento, sem renegociar e sem tocar
+no áudio. A janela solta também ganhou política de autoplay própria — faltava, e
+bastava uma pausa para ela ficar preta.
+
+**Recuperação gradual para a interface que para de pintar**
+
+A versão anterior só reagia ao processo GPU morrer duas vezes em dez minutos.
+Uma interface corrompida com todo mundo vivo não acionava nada. Agora a cadência
+de pintura é medida, e a recuperação sobe um degrau por vez, com carência de dois
+minutos: largar enfeite, tirar a composição desta janela da GPU, comparar o
+backend X11, e só por último abrir uma vez sem aceleração. Três aberturas
+saudáveis devolvem um degrau.
+
+**Diagnóstico gráfico**
+
+Em Configurações → Diagnóstico, sob demanda. Backend de janelas efetivo,
+aceleração medida depois de o Chromium avisar, captura pedida contra captura
+efetiva, codec negociado, tempo de encode e decode por diferença, quadros
+capturados, largados, codificados, enviados, decodificados e descartados.
+Composição acelerada, encode por hardware e decode por hardware aparecem
+separados — foram confundidos antes. Estatística ausente aparece como
+desconhecida, nunca como zero. Nada de SDP, endereço, convite ou nome de janela.
+
+**O que esta versão não afirma**
+
+Não medi o Enshrouded, não fiz a matriz de cenários com o jogo aberto, não testei
+com um segundo peer e não comparei com Discord e VDO.Ninja. Nada foi executado em
+Windows — os artefatos saem do CI, que compila e roda os testes, mas não abre
+uma chamada. As evidências de GBM/NVKMS são do Linux e não são diagnóstico do
+Windows. O relatório completo, com o que ficou pendente, está em
+`docs/RELATORIO-0.8.9.md`.
+
+**Nada foi mudado fora do Tumacord**
+
+Sem desligar VSync, sem mexer no compositor, sem tocar em driver, sem alterar
+prioridade, afinidade ou energia, sem mudar configuração de jogo ou de outro
+programa. Todo degrau de recuperação vale só para o processo do Tumacord, e
+todos são reversíveis.
+
 ## 0.8.8 — o Windows para de devolver a call pela live
 
 Até aqui, o áudio da transmissão no Windows saía do loopback do Chromium: uma

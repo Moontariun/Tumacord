@@ -45,6 +45,21 @@ interface TumacordDirectReport {
   zeroTier: string[];
 }
 
+interface TumacordWindowActivity {
+  mode: 'active' | 'background' | 'hidden';
+  paintPreviews: boolean;
+  paintEffects: boolean;
+  detachedVisible: boolean;
+}
+
+interface TumacordGraphicsCapability {
+  hardwareEncode: boolean | null;
+  hardwareDecode: boolean | null;
+  compositing: string;
+  mitigation: string;
+  detail?: string;
+}
+
 interface DocumentPictureInPicture extends EventTarget {
   readonly window: Window | null;
   requestWindow: (options?: { width?: number; height?: number; disallowReturnToOpener?: boolean; preferInitialWindowPlacement?: boolean }) => Promise<Window>;
@@ -86,6 +101,14 @@ interface Window {
     toggleFullscreen: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     onFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;
+    onWindowActivity?: (listener: (state: TumacordWindowActivity) => void) => () => void;
+    setGraphicsDiagnostics?: (enabled: boolean) => Promise<boolean>;
+    graphicsReport?: (media?: unknown) => Promise<Record<string, unknown> | null>;
+    graphicsCapability?: () => Promise<TumacordGraphicsCapability | null>;
+    onGraphicsCapability?: (listener: (capability: TumacordGraphicsCapability) => void) => () => void;
+    reportPresentationFault?: (details: { verdict: string; paintFps?: number; longestGapMs?: number }) => Promise<{ step: string; relaunching: boolean } | null>;
+    onReduceEffects?: (listener: (enabled: boolean) => void) => () => void;
+    onMitigationArmed?: (listener: (details: { step: string }) => void) => () => void;
     beginMediaFullscreen: () => Promise<boolean>;
     endMediaFullscreen: () => Promise<boolean>;
     onMediaFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;

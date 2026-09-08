@@ -55,6 +55,36 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     ipcRenderer.on('tumacord:fullscreen-changed', handler);
     return () => ipcRenderer.removeListener('tumacord:fullscreen-changed', handler);
   },
+  // Estado real da janela, medido pelo processo principal. `document.hidden`
+  // não serve aqui: o aplicativo desliga o estrangulamento de segundo plano de
+  // propósito, e com isso uma janela minimizada continua se dizendo visível.
+  onWindowActivity: (listener) => {
+    const handler = (_event, state) => listener(state);
+    ipcRenderer.on('tumacord:window-activity', handler);
+    return () => ipcRenderer.removeListener('tumacord:window-activity', handler);
+  },
+  // Diagnóstico gráfico opcional. Nada é coletado enquanto ninguém pede.
+  setGraphicsDiagnostics: (enabled) => ipcRenderer.invoke('tumacord:set-graphics-diagnostics', enabled !== false),
+  graphicsReport: (media) => ipcRenderer.invoke('tumacord:graphics-report', media ?? null),
+  graphicsCapability: () => ipcRenderer.invoke('tumacord:graphics-capability'),
+  onGraphicsCapability: (listener) => {
+    const handler = (_event, capability) => listener(capability);
+    ipcRenderer.on('tumacord:graphics-capability', handler);
+    return () => ipcRenderer.removeListener('tumacord:graphics-capability', handler);
+  },
+  // A janela parou de pintar estando em primeiro plano. Quem mede é o
+  // renderer; quem decide o degrau da recuperação é o processo principal.
+  reportPresentationFault: (details) => ipcRenderer.invoke('tumacord:presentation-fault', details ?? null),
+  onReduceEffects: (listener) => {
+    const handler = (_event, enabled) => listener(Boolean(enabled));
+    ipcRenderer.on('tumacord:reduce-effects', handler);
+    return () => ipcRenderer.removeListener('tumacord:reduce-effects', handler);
+  },
+  onMitigationArmed: (listener) => {
+    const handler = (_event, details) => listener(details);
+    ipcRenderer.on('tumacord:mitigation-armed', handler);
+    return () => ipcRenderer.removeListener('tumacord:mitigation-armed', handler);
+  },
   beginMediaFullscreen: () => ipcRenderer.invoke('tumacord:begin-media-fullscreen'),
   endMediaFullscreen: () => ipcRenderer.invoke('tumacord:end-media-fullscreen'),
   onMediaFullscreenChanged: (listener) => {

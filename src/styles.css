@@ -1241,3 +1241,59 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .draw-colors button { width: 30px; height: 30px; border: 2px solid transparent; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,.35); cursor: pointer; }
 .draw-colors button.selected { border-color: white; transform: scale(1.12); }
 .draw-colors button:hover { transform: scale(1.12); }
+
+/* Trabalho visual x continuidade da chamada ------------------------------- */
+/* O aplicativo nasce com `disable-backgrounding-occluded-windows`,
+   `disable-renderer-backgrounding` e `backgroundThrottling: false`. As três
+   existem por um bom motivo: sem elas, minimizar o Tumacord com a live em uma
+   janela flutuante estrangulava timers e mídia. O preço é que NADA para
+   sozinho — desfoque, brilho e animação continuam custando GPU com a janela
+   minimizada, e `document.hidden` nem sequer avisa que ela está.
+
+   Por isso o estado real vem do processo principal e vira classe aqui. O que
+   estas regras desligam é enfeite. Áudio, transporte, captura e a janela solta
+   da live não têm nada a ver com CSS e continuam exatamente como estavam:
+   `has-detached-live` existe justamente para o vídeo que foi para a janela
+   flutuante continuar sendo pintado com a principal escondida. */
+
+.app-shell.presentation-background *, .app-shell.is-reduced * {
+  animation-play-state: paused !important;
+}
+
+/* Escondida ou em modo econômico: sem animação e sem desfoque. O desfoque é o
+   mais caro dos três — cada camada é uma passada extra de composição sobre a
+   área inteira, e havia doze delas na interface. */
+.app-shell.presentation-hidden, .app-shell.is-reduced {
+  --tumacord-blur: none;
+}
+
+.app-shell.presentation-hidden *, .app-shell.is-reduced * {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Com a janela minimizada, o único vídeo que ainda precisa pintar é o que foi
+   para a janela flutuante — e ele já está em outro documento. O que sobrou
+   aqui dentro não tem quem olhe. */
+.app-shell.presentation-hidden .video-tile video,
+.app-shell.presentation-hidden .floating-live video {
+  visibility: hidden;
+}
+
+.app-shell.presentation-hidden.has-detached-live .video-tile.is-detached video,
+.app-shell.presentation-hidden.has-detached-live .floating-live.is-detached video {
+  visibility: visible;
+}
+
+/* O ponto vermelho de "AO VIVO" pulsa para sempre. Ele é informação enquanto
+   alguém está olhando; escondido, é só uma animação em laço. */
+.app-shell.presentation-hidden .live-dot, .app-shell.is-reduced .live-dot {
+  animation: none !important;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell * { animation: none !important; transition: none !important; }
+}

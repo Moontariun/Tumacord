@@ -27,29 +27,51 @@ export const screenQualityOptions = (Object.entries(SCREEN_QUALITIES) as [Stream
 
 export const screenQualityOrder = screenQualityOptions.map(([value]) => value);
 
-const CAPTURE_ENVELOPE = SCREEN_QUALITIES.ultra60;
+// O teto absoluto de captura. Nenhum perfil pede mais que isto, e ele existe
+// para que uma tela 4K não vire uma captura 4K só porque o monitor é grande.
+export const CAPTURE_CEILING = SCREEN_QUALITIES.ultra60;
 
 export function parseStreamQuality(value: unknown): StreamQuality {
   return typeof value === 'string' && Object.hasOwn(SCREEN_QUALITIES, value) ? value as StreamQuality : 'source';
 }
 
-// A captura do portal permanece a mesma durante toda a transmissão. Os perfis
-// são aplicados no encoder de cada peer, portanto mudar a qualidade nunca pede
-// ao PipeWire/Wayland que escolha a tela novamente.
-export function screenCaptureConstraints(): MediaTrackConstraints {
+// Até a 0.8.8 toda captura nascia com teto 1440p60, qualquer que fosse o
+// perfil, e a qualidade só mexia no encoder de cada peer. Escolher 720p30 num
+// monitor 1440p continuava fazendo o PipeWire entregar 1440p60 e o encoder
+// reduzir cada quadro por software — trabalho que ninguém veria.
+//
+// Agora o perfil é o teto pedido à captura. O que se ganha aí é real e
+// mensurável (menos quadros, menos conversão, menos redimensionamento no
+// encoder), mas não é o custo inteiro: o portal e o compositor continuam
+// produzindo o quadro do monitor, e a redução acontece no caminho do
+// Chromium. Prometer custo zero de PipeWire seria mentira; o que dá para
+// afirmar é o que `getSettings()` devolver depois.
+export function captureEnvelopeFor(quality: StreamQuality): ScreenQualityConfig {
+  const config = SCREEN_QUALITIES[quality] ?? SCREEN_QUALITIES.source;
   return {
-    width: { ideal: CAPTURE_ENVELOPE.width, max: CAPTURE_ENVELOPE.width },
-    height: { ideal: CAPTURE_ENVELOPE.height, max: CAPTURE_ENVELOPE.height },
-    frameRate: { ideal: CAPTURE_ENVELOPE.frameRate, max: CAPTURE_ENVELOPE.frameRate },
+    ...config,
+    width: Math.min(config.width, CAPTURE_CEILING.width),
+    height: Math.min(config.height, CAPTURE_CEILING.height),
+    frameRate: Math.min(config.frameRate, CAPTURE_CEILING.frameRate),
   };
 }
 
-export function desktopScreenCaptureConstraints(): Record<string, number | string> {
+export function screenCaptureConstraints(quality: StreamQuality = 'source'): MediaTrackConstraints {
+  const envelope = captureEnvelopeFor(quality);
+  return {
+    width: { ideal: envelope.width, max: envelope.width },
+    height: { ideal: envelope.height, max: envelope.height },
+    frameRate: { ideal: envelope.frameRate, max: envelope.frameRate },
+  };
+}
+
+export function desktopScreenCaptureConstraints(quality: StreamQuality = 'source'): Record<string, number | string> {
+  const envelope = captureEnvelopeFor(quality);
   return {
     chromeMediaSource: 'desktop',
-    maxWidth: CAPTURE_ENVELOPE.width,
-    maxHeight: CAPTURE_ENVELOPE.height,
-    maxFrameRate: CAPTURE_ENVELOPE.frameRate,
+    maxWidth: envelope.width,
+    maxHeight: envelope.height,
+    maxFrameRate: envelope.frameRate,
   };
 }
 

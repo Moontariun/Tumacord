@@ -11,10 +11,37 @@
   // monitor: um ponto normalizado vira pixel por multiplicação direta, sem
   // barra preta para descontar. É a diferença entre esta camada e a de dentro
   // do aplicativo, onde o vídeo quase nunca preenche o elemento.
+  //
+  // Até a 0.8.8 esta página limpava e repintava o monitor inteiro em um
+  // `requestAnimationFrame` recursivo que nunca parava — inclusive com desenho
+  // persistente parado, e inclusive num monitor de 180 Hz, onde isso são 180
+  // limpezas de tela cheia por segundo sem um pixel de diferença entre elas.
+  //
+  // Agora a pintura é orientada a mudança. Ela acontece quando:
+  //
+  //   · chega um conjunto novo de traços;
+  //   · a janela muda de tamanho ou de densidade de pixel;
+  //   · e, só enquanto ALGO estiver realmente animando, num relógio próprio de
+  //     30 quadros por segundo — não na taxa do monitor.
+  //
+  // Quando nada mais anima, o laço para sozinho e a página volta a custar
+  // nada. O recurso de desenho continua o mesmo: nenhum traço deixa de
+  // aparecer, nenhum desvanecimento deixa de acontecer.
   const tela = document.getElementById('tela');
   const ctx = tela.getContext('2d');
   let strokes = [];
   let lifetime = 6000;
+  let animando = 0;
+  let pintaAgendada = false;
+  let ultimaPintura = 0;
+  let largura = 0;
+  let altura = 0;
+  let escalaAtual = 0;
+
+  // O apontador pulsa nos primeiros segundos e depois assenta. Sem esse fim, um
+  // traço de um ponto só com desenho persistente animaria para sempre.
+  const PULSO_MS = 3000;
+  const QUADRO_MS = 1000 / 30;
 
   function opacidade(stroke, agora) {
     if (lifetime === 0) return 1;
@@ -25,22 +52,42 @@
     return (lifetime - idade) / fade;
   }
 
-  function pintar() {
-    const escala = window.devicePixelRatio || 1;
-    const largura = Math.max(1, Math.round(window.innerWidth * escala));
-    const altura = Math.max(1, Math.round(window.innerHeight * escala));
-    if (tela.width !== largura || tela.height !== altura) {
-      tela.width = largura;
-      tela.height = altura;
+  // Existe alguma coisa cujo desenho mude com o tempo? Se não existir, uma
+  // pintura basta e o relógio pode parar.
+  function precisaAnimar(agora) {
+    if (!strokes.length) return false;
+    for (const stroke of strokes) {
+      if (lifetime !== 0 && agora - stroke.at < lifetime) return true;
+      if (stroke.points && stroke.points.length === 1 && agora - stroke.at < PULSO_MS) return true;
     }
+    return false;
+  }
+
+  function ajustarTela() {
+    const escala = window.devicePixelRatio || 1;
+    const alvoLargura = Math.max(1, Math.round(window.innerWidth * escala));
+    const alvoAltura = Math.max(1, Math.round(window.innerHeight * escala));
+    if (tela.width !== alvoLargura || tela.height !== alvoAltura) {
+      tela.width = alvoLargura;
+      tela.height = alvoAltura;
+    }
+    largura = window.innerWidth;
+    altura = window.innerHeight;
+    escalaAtual = escala;
     ctx.setTransform(escala, 0, 0, escala, 0, 0);
-    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  }
+
+  function pintar() {
+    pintaAgendada = false;
     const agora = Date.now();
-    const grossura = Math.max(3, Math.min(window.innerWidth, window.innerHeight) * 0.004);
+    ultimaPintura = agora;
+    ajustarTela();
+    ctx.clearRect(0, 0, largura, altura);
+    const grossura = Math.max(3, Math.min(largura, altura) * 0.004);
     for (const stroke of strokes) {
       const alpha = opacidade(stroke, agora);
       if (alpha <= 0) continue;
-      const pontos = stroke.points.map((p) => ({ x: p.x * window.innerWidth, y: p.y * window.innerHeight }));
+      const pontos = (stroke.points || []).map((p) => ({ x: p.x * largura, y: p.y * altura }));
       if (!pontos.length) continue;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = stroke.color;
@@ -51,7 +98,8 @@
       ctx.shadowColor = 'rgba(0,0,0,.6)';
       ctx.shadowBlur = grossura * 1.6;
       if (pontos.length === 1) {
-        const pulso = 1 + Math.sin((agora - stroke.at) / 120) * 0.18;
+        const idade = agora - stroke.at;
+        const pulso = idade < PULSO_MS ? 1 + Math.sin(idade / 120) * 0.18 : 1;
         ctx.beginPath();
         ctx.arc(pontos[0].x, pontos[0].y, grossura * 2.6 * pulso, 0, Math.PI * 2);
         ctx.stroke();
@@ -66,12 +114,53 @@
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     }
+    if (precisaAnimar(agora)) agendarAnimacao();
+    else pararAnimacao();
+  }
+
+  function agendarPintura() {
+    if (pintaAgendada) return;
+    pintaAgendada = true;
     requestAnimationFrame(pintar);
+  }
+
+  function agendarAnimacao() {
+    if (animando) return;
+    // O relógio é próprio, e é um temporizador — não um `requestAnimationFrame`
+    // acorrentado. Num monitor de 180 Hz, seguir a taxa de atualização
+    // acordaria o compositor 180 vezes por segundo para descobrir que ainda não
+    // é hora de pintar. O desvanecimento precisa de 30 quadros por segundo para
+    // parecer contínuo, e é isso que ele custa.
+    const espera = Math.max(0, QUADRO_MS - (Date.now() - ultimaPintura));
+    animando = setTimeout(() => {
+      animando = 0;
+      agendarPintura();
+    }, espera);
+  }
+
+  function pararAnimacao() {
+    if (animando) clearTimeout(animando);
+    animando = 0;
+  }
+
+  // Sem traço nenhum, a página larga tudo: nada agendado, canvas mínimo,
+  // memória devolvida. A janela em si é fechada pelo processo principal.
+  function descartar() {
+    pararAnimacao();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, tela.width, tela.height);
+    tela.width = 1;
+    tela.height = 1;
+    escalaAtual = 0;
   }
 
   window.tumacordOverlay?.onStrokes((payload) => {
     strokes = Array.isArray(payload?.strokes) ? payload.strokes : [];
     lifetime = typeof payload?.lifetime === 'number' ? payload.lifetime : 6000;
+    if (!strokes.length) descartar();
+    else agendarPintura();
   });
-  requestAnimationFrame(pintar);
+  window.addEventListener('resize', () => { if (strokes.length) agendarPintura(); });
+  window.addEventListener('pagehide', descartar, { once: true });
+  agendarPintura();
 </script>

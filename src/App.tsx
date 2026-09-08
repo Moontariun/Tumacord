@@ -16,6 +16,7 @@ import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectRep
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
 import { DRAW_COLORS, DRAW_LIFETIMES, fitFrame, isPersistent, pointFromViewport, pointToViewport, pointsAreFarEnough, strokeOpacity, POINTS_PER_MESSAGE, STROKE_LIFETIME_MS, type DrawPoint, type DrawStroke } from '../shared/telestration';
 import { readDrawPreferences, writeDrawPreferences, type DrawPreferences } from './lib/drawPreferences';
+import { shouldAnimate, usePresentation, usePresentationWatch } from './hooks/usePresentation';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
 import { diagnoseMicrophone, formatDiagnosticReport, type LayerVerdict, type ScreenAudioDiagnostics } from './lib/mediaDiagnostics';
@@ -540,6 +541,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
   useEffect(() => () => { void window.tumacordDesktop?.setHosting(null); }, []);
 
+  // Estado real da janela e vigia da cadência de pintura. Um por aplicativo.
+  const presentation = usePresentationWatch();
+
   // O que desenharem na MINHA transmissão vai para a janela sobreposta ao
   // desktop, para eu ver o traço sem precisar olhar para o Tumacord. Só faz
   // sentido transmitindo um monitor inteiro: capturando uma janela, o quadro é
@@ -550,7 +554,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     const ponte = window.tumacordDesktop;
     if (!ponte?.drawOverlay) return;
     const fonte = voice.screenSource;
-    if (!fonte || fonte.kind !== 'screen' || !drawing.allowDraw || !meusTracos?.length) {
+    // A sobreposição sobre a área de trabalho é opcional a partir da 0.8.9. No
+    // KDE/Wayland ela tira o foco de teclado de quem estava digitando — quem
+    // joga perde o controle do jogo justamente quando alguém aponta algo na
+    // live —, e por isso nasce desligada lá. Desligada, o traço continua
+    // aparecendo dentro do Tumacord e dentro do vídeo de quem assiste.
+    if (!fonte || fonte.kind !== 'screen' || !drawing.allowDraw || !drawing.desktopOverlay || !meusTracos?.length) {
       void ponte.drawOverlay(null).catch(() => undefined);
       return;
     }
@@ -560,7 +569,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       lifetime: drawing.drawLifetime,
       strokes: meusTracos.map((stroke) => ({ color: stroke.color, at: stroke.at, points: stroke.points })),
     }).catch(() => undefined);
-  }, [drawing.allowDraw, drawing.drawLifetime, meusTracos, voice.screenSource]);
+  }, [drawing.allowDraw, drawing.desktopOverlay, drawing.drawLifetime, meusTracos, voice.screenSource]);
 
   // Fechar o app ou sair da call não pode deixar a janela sobreposta órfã.
   useEffect(() => () => { void window.tumacordDesktop?.drawOverlay?.(null).catch(() => undefined); }, []);
@@ -633,7 +642,10 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   // reiniciava a saída várias vezes seguidas e derrubava o som da call.
   useEffect(() => { setSharedAudioSink(devices.preferences.speakerId); }, [devices.preferences.speakerId]);
 
-  return <div className="app-shell">
+  // As classes abaixo são o que permite ao CSS desligar desfoque, brilho e
+  // animação sem mexer em nada que a chamada precise. Elas vêm do estado REAL
+  // da janela, medido no processo principal.
+  return <div className={`app-shell presentation-${presentation.mode}${presentation.reduceEffects ? ' is-reduced' : ''}${presentation.detachedVisible ? ' has-detached-live' : ''}`}>
     <nav className="server-rail" aria-label="Servidor Tumacord">
       <button className="server-icon active" title="Tumacord"><span className="server-icon-art"><img src={logoUrl} alt="Tumacord" /></span></button>
     </nav>
@@ -705,7 +717,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(media.user?.id && mutedUsers[media.user.id])} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
-    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} captureNote={voice.captureNote} graphicsReport={voice.graphicsReport} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
@@ -1100,16 +1112,49 @@ function DrawingLayer({ videoRef, strokes, lifetime, canDraw, color, onStroke, o
   const canvas = useRef<HTMLCanvasElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const traco = useRef<{ id: string; pendentes: DrawPoint[]; ultimo?: DrawPoint } | null>(null);
-  const [, redesenhar] = useState(0);
+  const [tique, redesenhar] = useState(0);
+  const presentation = usePresentation();
+  const pintando = presentation.paintPreviews || presentation.detachedVisible;
 
   // Um relógio leve só enquanto houver traço com prazo correndo: é ele que faz
   // o desvanecimento acontecer, e ele para sozinho quando não há o que sumir.
-  const precisaAnimar = strokes.length > 0 && !isPersistent(lifetime);
+  // Com a janela escondida ele nem começa: um traço que desaparece atrás de
+  // uma janela minimizada não é imagem que alguém veja.
+  const precisaAnimar = pintando && strokes.length > 0 && !isPersistent(lifetime);
   useEffect(() => {
     if (!precisaAnimar) return;
     const timer = window.setInterval(() => redesenhar((n) => n + 1), 80);
     return () => window.clearInterval(timer);
   }, [precisaAnimar]);
+
+  // O que muda o desenho: os traços, o prazo, o tamanho da área e o tamanho do
+  // quadro do vídeo. Até a 0.8.8 este efeito não tinha lista de dependências
+  // nenhuma e repintava a cada render do componente pai — inclusive sem um
+  // traço na tela e com a live parada.
+  const assinatura = useMemo(
+    () => strokes.map((stroke) => `${stroke.id}:${stroke.color}:${stroke.points.length}:${stroke.at}`).join('|'),
+    [strokes],
+  );
+  const [geometria, setGeometria] = useState('0x0');
+  useEffect(() => {
+    const area = host.current;
+    const video = videoRef.current;
+    if (!area) return;
+    const medirGeometria = () => {
+      const caixa = area.getBoundingClientRect();
+      setGeometria(`${Math.round(caixa.width)}x${Math.round(caixa.height)}x${video?.videoWidth ?? 0}x${video?.videoHeight ?? 0}x${window.devicePixelRatio || 1}`);
+    };
+    medirGeometria();
+    const observer = new ResizeObserver(medirGeometria);
+    observer.observe(area);
+    video?.addEventListener('loadedmetadata', medirGeometria);
+    video?.addEventListener('resize', medirGeometria);
+    return () => {
+      observer.disconnect();
+      video?.removeEventListener('loadedmetadata', medirGeometria);
+      video?.removeEventListener('resize', medirGeometria);
+    };
+  }, [videoRef]);
 
   const medir = useCallback(() => {
     const video = videoRef.current;
@@ -1129,7 +1174,7 @@ function DrawingLayer({ videoRef, strokes, lifetime, canDraw, color, onStroke, o
   useEffect(() => {
     const tela = canvas.current;
     const area = host.current;
-    if (!tela || !area) return;
+    if (!tela || !area || !pintando) return;
     const caixa = area.getBoundingClientRect();
     const escala = window.devicePixelRatio || 1;
     const largura = Math.max(1, Math.round(caixa.width * escala));
@@ -1178,7 +1223,7 @@ function DrawingLayer({ videoRef, strokes, lifetime, canDraw, color, onStroke, o
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     }
-  });
+  }, [assinatura, geometria, lifetime, medir, pintando, strokes, tique]);
 
   const enviarPendentes = (fim: boolean) => {
     const atual = traco.current;
@@ -1415,6 +1460,52 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
   useEffect(() => {
     syncPlayback.current();
   }, [muted, speakerId, stream, volume]);
+
+  // Vigia da PINTURA do vídeo.
+  //
+  // Uma live "preta" não é um estado, são três, e os três se pareciam:
+  //
+  //   · o elemento pausou e o `play()` seguinte foi recusado (a janela solta
+  //     não tinha política de autoplay própria até a 0.8.9);
+  //   · a faixa chega e nunca produz um quadro decodificado;
+  //   · quadros são decodificados e nenhum é PINTADO — que é o que acontece
+  //     quando o Chromium não consegue alocar o buffer gráfico do quadro,
+  //     exatamente o `Failed to create BO with modifiers` que apareceu nos
+  //     registros desta máquina.
+  //
+  // O terceiro é o único que `readyState` não denuncia. `totalVideoFrames`
+  // parado com a faixa viva e o elemento tocando é a assinatura dele. A
+  // recuperação é local e barata: reatar a mesma faixa ao mesmo elemento. Ela
+  // não renegocia, não reconstrói enlace e não toca no áudio.
+  useEffect(() => {
+    const media = ref.current as HTMLVideoElement | null;
+    if (audioOnly || !media || !stream.getVideoTracks().length) return;
+    let ultimoTotal = -1;
+    let paradas = 0;
+    const olhar = () => {
+      const faixa = stream.getVideoTracks().find((track) => track.readyState === 'live');
+      if (!faixa || faixa.muted) { paradas = 0; ultimoTotal = -1; return; }
+      if (media.paused) void media.play().catch(() => undefined);
+      const qualidade = media.getVideoPlaybackQuality?.();
+      const total = qualidade ? qualidade.totalVideoFrames : -1;
+      if (total < 0) return;
+      const avancou = ultimoTotal < 0 || total > ultimoTotal;
+      ultimoTotal = total;
+      if (avancou) { paradas = 0; return; }
+      paradas += 1;
+      // Duas janelas de quatro segundos sem um quadro novo pintado. Menos que
+      // isso pega cena parada, que é imagem legítima.
+      if (paradas < 2) return;
+      paradas = 0;
+      console.warn('[video] quadros parados de pintar; reatando a faixa ao elemento', { total, videoWidth: media.videoWidth });
+      media.srcObject = null;
+      media.srcObject = stream;
+      void media.play().catch(() => undefined);
+    };
+    const timer = window.setInterval(olhar, 4_000);
+    return () => window.clearInterval(timer);
+  }, [audioOnly, stream, trackRevision]);
+
   return audioOnly ? <audio ref={ref as React.RefObject<HTMLAudioElement>} autoPlay /> : <video ref={ref as React.RefObject<HTMLVideoElement>} autoPlay playsInline />;
 }
 
@@ -1549,7 +1640,7 @@ function screenAudioExplanation(support: ScreenAudioSupport): string {
   return 'Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.';
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
+function SettingsModal({ devices, quality, setQuality, captureNote, graphicsReport, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; captureNote: string; graphicsReport: ReturnType<typeof useVoice>['graphicsReport']; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
   const [tab, setTab] = useState<'media' | 'drawing' | 'network' | 'diagnostics'>('media');
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
@@ -1558,13 +1649,16 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
     <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho na tela</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
     {tab === 'drawing' && <DrawingSettings drawing={drawing} onChange={onDrawing} onClose={onClose} />}
     {tab === 'network' && <NetworkSettings preferences={networkPreferences} onChange={onNetworkPreferences} onClose={onClose} />}
-    {tab === 'diagnostics' && <MediaDiagnostics snapshot={mediaSnapshot} preferences={networkPreferences} connectionMode={connectionMode} onNotice={onNotice} onClose={onClose} />}
+    {tab === 'diagnostics' && <MediaDiagnostics snapshot={mediaSnapshot} graphicsReport={graphicsReport} preferences={networkPreferences} connectionMode={connectionMode} onNotice={onNotice} onClose={onClose} />}
     {tab === 'media' && <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Voz e vídeo</h1><p className="settings-intro">O Tumacord processa a voz localmente em 48 kHz com cancelamento de eco, filtro neural GTCRN, corte de ruído grave e compressor de voz.</p>
       <DeviceSelect label="Microfone" hint="As entradas duplicadas do Chromium ficam de fora da lista." value={devices.preferences.microphoneId} devices={devices.microphones} onChange={(value) => update('microphoneId', value)} />
       <DeviceSelect label="Saída de áudio" value={devices.preferences.speakerId} devices={devices.speakers} onChange={(value) => update('speakerId', value)} />
       <DeviceSelect label="Câmera" value={devices.preferences.cameraId} devices={devices.cameras} onChange={(value) => update('cameraId', value)} />
       <label className="sound-toggle"><input type="checkbox" checked={devices.preferences.noiseSuppression} onChange={(event) => update('noiseSuppression', event.target.checked)} /><span><strong>Supressão neural de ruído</strong><small>GTCRN em WebAssembly para reduzir teclado, ventilador e ruído ambiente sem enviar seu áudio para nenhum serviço.</small></span></label>
-      <div className="setting-label"><span className="setting-title">Qualidade da transmissão<small>Vale para a próxima live e para a que já estiver no ar.</small></span><Dropdown label="Qualidade da transmissão" value={quality} options={qualityDropdownOptions} onChange={(next) => { void setQuality(next as StreamQuality); }} /></div>
+      <div className="setting-label"><span className="setting-title">Qualidade da transmissão<small>Vale para a próxima live e para a que já estiver no ar. A partir da 0.8.9 ela é o teto pedido à captura, não só ao encoder: escolher menos passou a capturar menos.</small></span><Dropdown label="Qualidade da transmissão" value={quality} options={qualityDropdownOptions} onChange={(next) => { void setQuality(next as StreamQuality); }} /></div>
+      {/* O que a captura ENTREGOU, não o que foi pedido. Um 720p que não
+          reduziu a captura precisa dizer isso em vez de anunciar economia. */}
+      {captureNote && <div className="quality-note"><strong>Captura medida agora</strong><span>{captureNote}</span></div>}
       <label className="sound-toggle"><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong><small>Entrada, saída, mensagens, microfone e troca de host.</small></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
       <div className="quality-note"><strong>Áudio da transmissão</strong><span>{screenAudioExplanation(audioSupport)}</span></div>
@@ -1611,6 +1705,10 @@ function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferen
         onClick={() => onChange({ drawColor: cor })}
       />)}
     </div>
+
+    <label className="sound-toggle"><input type="checkbox" checked={drawing.desktopOverlay} onChange={(event) => onChange({ desktopOverlay: event.target.checked })} /><span><strong>Mostrar o traço também sobre a área de trabalho</strong><small>Uma janela transparente cobre o monitor que você compartilha, para ver o traço sem olhar para o Tumacord. Desligada, o desenho continua aparecendo dentro do app e no vídeo de quem assiste.</small></span></label>
+
+    {drawing.desktopOverlay && window.tumacordDesktop?.platform === 'linux' && <div className="quality-note"><strong>No KDE/Wayland isto custa o seu teclado</strong><span>Medimos nesta combinação: abrir a janela sobreposta tira o foco do teclado de quem estava digitando e não devolve para ninguém — quem estiver jogando perde o controle do jogo no momento em que alguém aponta algo na live. Por isso ela vem desligada no Linux. O desenho em si não depende dela.</span></div>}
 
     <div className="quality-note"><strong>Como se desenha</strong><span>No quadro de quem está transmitindo, o lápis liga o modo de desenho. Arrastar faz um traço; um toque sem arrastar deixa um apontador que pulsa. Enquanto o lápis está ligado, o clique duplo para ampliar fica desativado naquele quadro.</span></div>
   </section>;
@@ -1666,10 +1764,13 @@ const LAYER_LABEL: Record<string, string> = {
 };
 const STATUS_LABEL: Record<string, string> = { ok: 'ok', broken: 'falha', unknown: 'sem medida', idle: 'inativo' };
 
-function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onClose }: { snapshot: ReturnType<typeof useVoice>['mediaSnapshot']; preferences: NetworkPreferences; connectionMode: 'p2p' | 'server'; onNotice: (message: string) => void; onClose: () => void }) {
+function MediaDiagnostics({ snapshot, graphicsReport, preferences, connectionMode, onNotice, onClose }: { snapshot: ReturnType<typeof useVoice>['mediaSnapshot']; graphicsReport: ReturnType<typeof useVoice>['graphicsReport']; preferences: NetworkPreferences; connectionMode: 'p2p' | 'server'; onNotice: (message: string) => void; onClose: () => void }) {
   const [estado, setEstado] = useState(() => snapshot());
   const [audioDaLive, setAudioDaLive] = useState<ScreenAudioDiagnostics | null>(null);
+  const [grafico, setGrafico] = useState('');
+  const [coletando, setColetando] = useState(false);
   const relatorio = useRef<HTMLTextAreaElement>(null);
+  const relatorioGrafico = useRef<HTMLTextAreaElement>(null);
   // Uma leitura por segundo: o suficiente para acompanhar uma falha aparecer,
   // sem transformar o painel em custo de CPU durante a call.
   useEffect(() => {
@@ -1719,6 +1820,22 @@ function MediaDiagnostics({ snapshot, preferences, connectionMode, onNotice, onC
     <textarea ref={relatorio} className="invite-code" readOnly rows={10} value={texto} onFocus={(event) => event.currentTarget.select()} />
     <button className="primary-button" onClick={() => { void copyText(texto, relatorio.current).then((copiado) => onNotice(copiado ? 'Diagnóstico copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar diagnóstico</button>
     <small className="invite-hint">O texto acima não carrega token, chave, credencial de TURN nem endereço IP — pode ser colado em uma conversa.</small>
+    {/* Diagnóstico gráfico: opcional e sob demanda. Ele acorda o processo
+        principal para ler o estado da GPU, e por isso não roda sozinho. */}
+    <h2 className="settings-section">Vídeo e placa gráfica</h2>
+    <p className="settings-intro">Este relatório responde o que a versão anterior não respondia: qual camada de janelas está em uso, o que o Chromium ligou na GPU, se a live está sendo codificada em hardware ou em software, quanto custa cada quadro e o que a captura está entregando de verdade. Ele é coletado só quando você pede.</p>
+    <button className="primary-button" disabled={coletando} onClick={() => {
+      setColetando(true);
+      void graphicsReport()
+        .then((linha) => setGrafico(linha))
+        .catch(() => setGrafico('Não consegui coletar o diagnóstico gráfico nesta sessão.'))
+        .finally(() => setColetando(false));
+    }}>{coletando ? 'Coletando…' : grafico ? 'Coletar de novo' : 'Coletar diagnóstico gráfico'}</button>
+    {grafico && <>
+      <textarea ref={relatorioGrafico} className="invite-code" readOnly rows={14} value={grafico} onFocus={(event) => event.currentTarget.select()} />
+      <button className="primary-button" onClick={() => { void copyText(grafico, relatorioGrafico.current).then((copiado) => onNotice(copiado ? 'Diagnóstico gráfico copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar diagnóstico gráfico</button>
+      <small className="invite-hint">Também sem endereço, sem SDP, sem convite e sem nome de janela capturada.</small>
+    </>}
   </section>;
 }
 

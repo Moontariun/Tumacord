@@ -18,7 +18,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/windows-audio-v0.8.8}"
+alvo="${1:-release/graphics-and-capture-v0.8.9}"
 projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$projeto"
 

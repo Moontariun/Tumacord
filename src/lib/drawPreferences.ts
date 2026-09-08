@@ -18,17 +18,42 @@ export interface DrawPreferences {
   drawLifetime: number;
   /** Cor do meu traço quando eu desenho na transmissão dos outros. */
   drawColor: string;
+  /**
+   * Mostrar o traço também POR CIMA da área de trabalho, fora do Tumacord.
+   *
+   * Ligado, uma janela sobreposta cobre o monitor compartilhado. No Windows ela
+   * se comporta: `setContentProtection` a tira da própria captura e ela não
+   * disputa o teclado. No KDE/Wayland, não: medindo nesta máquina, mapear
+   * ESSA janela — em todas as combinações que testei, com `focusable: false`,
+   * `type` de notificação, com e sem `alwaysOnTop` — tira o foco de teclado de
+   * quem estava digitando e não devolve para ninguém. Quem estiver jogando
+   * perde o controle do jogo no momento exato em que alguém aponta algo na
+   * live. Por isso ela nasce desligada no Linux.
+   *
+   * Desligada, o desenho continua inteiro: aparece dentro do Tumacord para
+   * quem transmite e dentro do vídeo para quem assiste. O que não aparece é a
+   * cópia sobre a área de trabalho.
+   */
+  desktopOverlay: boolean;
 }
 
 const KEY = 'tumacord.drawing';
+
+// O padrão depende da plataforma porque o defeito depende da plataforma. Fora
+// do aplicativo instalado não existe sobreposição nenhuma, e o valor não é
+// usado.
+export function defaultDesktopOverlay(platform = typeof window === 'undefined' ? '' : window.tumacordDesktop?.platform ?? ''): boolean {
+  return platform === 'win32';
+}
 
 export const DEFAULT_DRAW_PREFERENCES: DrawPreferences = {
   allowDraw: true,
   drawLifetime: STROKE_LIFETIME_MS,
   drawColor: DRAW_COLORS[0],
+  desktopOverlay: false,
 };
 
-export function sanitizeDrawPreferences(input: unknown, fallbackColor?: string): DrawPreferences {
+export function sanitizeDrawPreferences(input: unknown, fallbackColor?: string, platform?: string): DrawPreferences {
   const bruto = (input ?? {}) as Partial<DrawPreferences>;
   const cor = isDrawColor(bruto.drawColor) ? bruto.drawColor as string
     : isDrawColor(fallbackColor) ? fallbackColor as string
@@ -37,6 +62,7 @@ export function sanitizeDrawPreferences(input: unknown, fallbackColor?: string):
     allowDraw: typeof bruto.allowDraw === 'boolean' ? bruto.allowDraw : DEFAULT_DRAW_PREFERENCES.allowDraw,
     drawLifetime: parseDrawLifetime(bruto.drawLifetime),
     drawColor: cor,
+    desktopOverlay: typeof bruto.desktopOverlay === 'boolean' ? bruto.desktopOverlay : defaultDesktopOverlay(platform),
   };
 }
 

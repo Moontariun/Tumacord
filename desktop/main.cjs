@@ -5,8 +5,10 @@ const { TumacordDiscovery } = require('./discovery.cjs');
 const { DirectLink } = require('./direct-link.cjs');
 const { readNetworkPreferences, writeNetworkPreferences } = require('./network-preferences.cjs');
 const { createScreenAudioRouter } = require('./screen-audio.cjs');
-const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
-const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
+const { detectLinuxGpuVendors, encodeCapability, decodeCapability, ozoneSwitches, streamingFeatures } = require('./gpu-policy.cjs');
+const { appendRuntimeEvent, consumeMitigation, consumeSafeGpuMode, recordGpuFailure, recordHealthyRun, recordPresentationFault, safeRelaunchArgs } = require('./runtime-health.cjs');
+const { GraphicsReporter, readAccelerationSummary } = require('./graphics-report.cjs');
+const { WindowActivity } = require('./window-activity.cjs');
 const { DrawingOverlay } = require('./drawing-overlay.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
@@ -22,6 +24,10 @@ const gpuVendors = detectLinuxGpuVendors();
 const runtimeHealthFile = path.join(app.getPath('userData'), 'runtime-health.json');
 const runtimeLogFile = path.join(app.getPath('userData'), 'logs', 'runtime-health.log');
 const safeGpuMode = consumeSafeGpuMode(runtimeHealthFile);
+// Qual degrau da escada de recuperação vale nesta execução. Ele não muda
+// driver, compositor nem configuração de jogo nenhum: o alcance é o processo
+// do Tumacord, e só.
+const mitigation = safeGpuMode ? 'safe-gpu' : consumeMitigation(runtimeHealthFile);
 if (safeGpuMode) app.disableHardwareAcceleration();
 const enabledFeatures = streamingFeatures(process.platform, gpuVendors, safeGpuMode);
 if (enabledFeatures.length) app.commandLine.appendSwitch('enable-features', enabledFeatures.join(','));
@@ -29,7 +35,17 @@ if (enabledFeatures.length) app.commandLine.appendSwitch('enable-features', enab
 // atrás de nomes mDNS e o ICE perde o candidato da própria rede.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
 // Ozone é a camada de janelas do Chromium no Linux. No Windows não existe.
-if (process.platform === 'linux') app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+// O degrau `xwayland` troca o hint automático por X11 explícito — é uma
+// COMPARAÇÃO de backend, não uma correção: serve para separar um defeito do
+// caminho Wayland/GBM de um defeito do driver, e a captura pelo portal
+// continua sendo verificada nos dois.
+for (const [name, value] of ozoneSwitches(process.platform, mitigation)) app.commandLine.appendSwitch(name, value);
+// Degrau medido, não chute. Com encoder de vídeo por SOFTWARE e composição por
+// GPU ligada, cada quadro precisa voltar da GPU para a memória do sistema antes
+// de ser codificado — e nesta máquina isso mediu ~43 ms por quadro contra
+// ~1,5 ms com a composição fora da GPU, no mesmo codec e na mesma resolução.
+// O alcance é o processo do Tumacord: nenhum outro programa é afetado.
+if (mitigation === 'software-composite') app.commandLine.appendSwitch('disable-gpu-compositing');
 // Sem estes, o Chromium trata a janela coberta pela live flutuante como
 // oculta e reduz o ritmo de composição: a imagem escurece e engasga
 // exatamente quando a janela solta ganha foco.
@@ -78,6 +94,56 @@ let activeScreenAudioSource = '';
 let quittingAfterAudioCleanup = false;
 let safeGpuRelaunching = false;
 const liveWindows = new Set();
+const graphicsReporter = new GraphicsReporter({
+  app,
+  readWindows: () => [mainWindow, ...liveWindows].filter((window) => window && !window.isDestroyed()),
+  safeGpuMode,
+  enabledFeatures,
+  gpuVendors,
+});
+// O estado real de cada janela, medido pelo processo principal e mandado ao
+// renderer. Com `backgroundThrottling: false` o renderer não consegue saber
+// disso sozinho: `document.hidden` continua falso com a janela minimizada.
+const windowActivity = new WindowActivity({
+  readDetached: () => [...liveWindows],
+  send: (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:window-activity', state);
+  },
+});
+// Uma abertura que passa quinze minutos sem falha de apresentação conta como
+// saudável e devolve, aos poucos, os degraus da escada de recuperação.
+let healthyRunTimer = setTimeout(() => {
+  const relaxed = recordHealthyRun(runtimeHealthFile);
+  if (relaxed.relaxed) appendRuntimeEvent(runtimeLogFile, { event: 'mitigation-relaxed', mitigation: relaxed.mitigation });
+}, 15 * 60_000);
+if (typeof healthyRunTimer.unref === 'function') healthyRunTimer.unref();
+let presentationRelaunching = false;
+
+// `getGPUFeatureStatus` só vale depois deste evento. Antes dele, o Chromium
+// ainda responde com o que supôs — foi por isso que "provavelmente usa NVENC"
+// e "provavelmente é software" tinham o mesmo peso na 0.8.8.
+app.on('gpu-info-update', () => {
+  graphicsReporter.observeGpuInfoUpdate();
+  void graphicsReporter.collectGpuInfo().then(() => {
+    const status = graphicsReporter.featureStatus;
+    const aceleracao = readAccelerationSummary(status);
+    appendRuntimeEvent(runtimeLogFile, {
+      event: 'gpu-feature-status',
+      mitigation,
+      composicao: aceleracao.compositing,
+      encodeVideo: aceleracao.videoEncode,
+      decodeVideo: aceleracao.videoDecode,
+    });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('tumacord:graphics-capability', {
+        ...encodeCapability(status),
+        ...decodeCapability(status),
+        compositing: aceleracao.compositing,
+        mitigation,
+      });
+    }
+  });
+});
 
 // A janela solta abre acima das outras; daí em diante quem manda é a barra de
 // título do sistema, que já oferece "manter acima". Nem todo compositor honra
@@ -229,6 +295,12 @@ async function createWindow() {
           nodeIntegration: false,
           sandbox: true,
           backgroundThrottling: false,
+          // O vídeo é MOVIDO para cá, não recriado — mas basta uma pausa
+          // (troca de faixa, renegociação) para o `play()` seguinte precisar
+          // de gesto que ninguém vai dar numa janela sem controles, e a live
+          // solta fica preta. A janela principal já nasce com esta política;
+          // faltava a janela flutuante.
+          autoplayPolicy: 'no-user-gesture-required',
         },
       },
     };
@@ -245,9 +317,12 @@ async function createWindow() {
     // Soltar do pai também significa que ela não fecha junto: sem isto, fechar
     // o Tumacord deixaria a janela da live órfã segurando o processo.
     liveWindows.add(child);
-    child.on('closed', () => liveWindows.delete(child));
+    windowActivity.refresh();
+    for (const evento of ['show', 'hide', 'minimize', 'restore', 'focus', 'blur']) child.on(evento, () => windowActivity.refresh());
+    child.on('closed', () => { liveWindows.delete(child); windowActivity.refresh(); });
   });
   window.on('closed', () => {
+    windowActivity.unwatch();
     drawingOverlay.close();
     closeScreenAudioChannel();
     for (const child of liveWindows) {
@@ -284,6 +359,7 @@ async function createWindow() {
     }
   });
   await window.loadURL(target);
+  windowActivity.watch(window);
   if (isDevelopment) window.webContents.openDevTools({ mode: 'detach' });
 }
 
@@ -388,6 +464,54 @@ app.whenReady().then(async () => {
     closeScreenAudioChannel();
     return result;
   });
+  // Diagnóstico gráfico: opcional, e o renderer é quem pede. Ele nunca sai
+  // sozinho para lugar nenhum, e o conteúdo é número e nome de recurso do
+  // Chromium — sem SDP, sem endereço, sem convite, sem nome de janela.
+  ipcMain.handle('tumacord:graphics-report', (event, media) => {
+    if (event.sender !== mainWindow?.webContents) return null;
+    return graphicsReporter.snapshot(media && typeof media === 'object' ? media : null);
+  });
+  ipcMain.handle('tumacord:set-graphics-diagnostics', (event, enabled) => {
+    if (event.sender !== mainWindow?.webContents) return false;
+    return graphicsReporter.enable(enabled !== false);
+  });
+  ipcMain.handle('tumacord:graphics-capability', (event) => {
+    if (event.sender !== mainWindow?.webContents) return null;
+    const status = graphicsReporter.featureStatus;
+    if (!status) return { hardwareEncode: null, hardwareDecode: null, compositing: 'desconhecido', mitigation, detail: 'ainda não medido' };
+    return { ...encodeCapability(status), ...decodeCapability(status), compositing: readAccelerationSummary(status).compositing, mitigation };
+  });
+  // A interface parou de pintar com a janela em primeiro plano. O renderer
+  // mede a própria cadência; aqui só se escolhe o degrau, e nunca dois de uma
+  // vez nem em laço — a escada tem carência de dois minutos.
+  ipcMain.handle('tumacord:presentation-fault', (event, details) => {
+    if (event.sender !== mainWindow?.webContents) return null;
+    const payload = details && typeof details === 'object' ? details : {};
+    const decision = recordPresentationFault(runtimeHealthFile, {}, Date.now(), process.platform);
+    appendRuntimeEvent(runtimeLogFile, {
+      event: 'presentation-fault',
+      verdict: typeof payload.verdict === 'string' ? payload.verdict : undefined,
+      paintFps: Number.isFinite(payload.paintFps) ? Math.round(payload.paintFps * 10) / 10 : undefined,
+      longestGapMs: Number.isFinite(payload.longestGapMs) ? Math.round(payload.longestGapMs) : undefined,
+      mitigation,
+      escalatedTo: decision.escalated ? decision.step : undefined,
+    });
+    if (!decision.escalated) return { step: decision.step, relaunching: false };
+    if (decision.step === 'reduce-effects') {
+      // Este degrau acontece aqui dentro: a interface larga desfoque, animação
+      // e prévia. Nada de reiniciar, nada de derrubar a call.
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:reduce-effects', true);
+      return { step: decision.step, relaunching: false };
+    }
+    if (!decision.shouldRelaunch || presentationRelaunching) return { step: decision.step, relaunching: false };
+    // Reiniciar no meio de uma chamada é pior que a falha. O degrau fica
+    // guardado e vale na PRÓXIMA abertura, que é quando dá para comparar os
+    // dois backends sem tirar ninguém da conversa.
+    presentationRelaunching = true;
+    appendRuntimeEvent(runtimeLogFile, { event: 'mitigation-armed', step: decision.step, applyOn: 'próxima abertura' });
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:mitigation-armed', { step: decision.step });
+    return { step: decision.step, relaunching: false };
+  });
   ipcMain.handle('tumacord:discover-calls', () => discovery?.list() ?? []);
   ipcMain.handle('tumacord:network-preferences', () => networkPreferences);
   ipcMain.handle('tumacord:set-network-preferences', (_event, patch) => {
@@ -415,7 +539,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:draw-overlay', (_event, payload) => {
     try {
       if (!payload || !Array.isArray(payload.strokes) || !payload.strokes.length) {
-        drawingOverlay.close();
+        // Esvaziar em vez de fechar. Fechar e reabrir a cada pausa do desenho
+        // custava um mapeamento de janela por rajada — e no KDE/Wayland cada
+        // mapeamento tira o foco de teclado de quem estava digitando.
+        if (!drawingOverlay.clear()) drawingOverlay.close();
         return false;
       }
       return drawingOverlay.show(payload);

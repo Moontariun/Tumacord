@@ -7,6 +7,7 @@ const { DrawingOverlay, displayForSource } = require('../desktop/drawing-overlay
   DrawingOverlay: new (options: Record<string, unknown>) => {
     targetDisplay: (sourceId: string, kind: string) => { id: number } | null;
     show: (payload: Record<string, unknown>) => boolean;
+    clear: () => boolean;
     close: () => void;
     visible: boolean;
   };
@@ -233,4 +234,34 @@ test('fechar solta o traço guardado, para a live seguinte não herdar o anterio
   overlay.close();
   (janela as unknown as { terminarCarregamento: () => void }).terminarCarregamento();
   assert.equal(enviados.length, 0, 'uma janela já fechada não recebe traço nenhum');
+});
+
+// Cada mapeamento de janela custa foco de teclado no KDE/Wayland. Uma rajada
+// de traços com pausas abria e fechava a sobreposição várias vezes.
+test('uma pausa no desenho esvazia a sobreposição em vez de fechá-la', () => {
+  const enviados: unknown[] = [];
+  let criadas = 0;
+  const monitor = { id: 7, bounds: { x: 0, y: 0, width: 1920, height: 1080 } };
+  const overlay = new DrawingOverlay({
+    createWindow: () => { criadas += 1; return janelaFalsa(enviados); },
+    readDisplays: () => [monitor],
+    readPrimary: () => monitor,
+    lingerMs: 60_000,
+  });
+  assert.equal(overlay.show({ sourceId: 'screen:7:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 1, points: [] }], lifetime: 6_000 }), true);
+  assert.equal(criadas, 1);
+  assert.equal(overlay.clear(), true);
+  assert.equal(overlay.visible, true, 'a janela continua de pé durante a carência');
+  assert.deepEqual((enviados[enviados.length - 1] as { strokes: unknown[] }).strokes, [], 'a página recebe a lista vazia e para de pintar');
+  // Um traço novo reaproveita a mesma janela: nenhum mapeamento novo, nenhum
+  // foco de teclado tirado de quem estava digitando.
+  overlay.show({ sourceId: 'screen:7:0', sourceKind: 'screen', strokes: [{ color: '#fff', at: 2, points: [] }], lifetime: 6_000 });
+  assert.equal(criadas, 1, 'nenhuma janela nova foi criada');
+  overlay.close();
+  assert.equal(overlay.visible, false);
+});
+
+test('esvaziar sem janela aberta não finge que havia uma', () => {
+  const overlay = new DrawingOverlay({ createWindow: () => janelaFalsa([]), readDisplays: () => [], readPrimary: () => null });
+  assert.equal(overlay.clear(), false);
 });
