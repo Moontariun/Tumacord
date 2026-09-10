@@ -1,4 +1,5 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, session, Tray } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, session, shell, Tray } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { TumacordDiscovery } = require('./discovery.cjs');
@@ -8,6 +9,7 @@ const { createScreenAudioRouter } = require('./screen-audio.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
 const { DrawingOverlay } = require('./drawing-overlay.cjs');
+const { Updater } = require('./updater.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
 // isso para manter a voz da call fora do áudio compartilhado.
@@ -66,6 +68,13 @@ const screenAudioRouter = createScreenAudioRouter({
   onDiagnostic: (details) => appendRuntimeEvent(runtimeLogFile, details),
 });
 const drawingOverlay = new DrawingOverlay();
+// Procura uma versão nova ao abrir e para por aí: baixar e aplicar são cliques
+// de quem está usando o aplicativo. Uma atualização que se aplica sozinha no
+// meio de uma call custaria a call.
+const updater = new Updater({ app, log: (details) => appendRuntimeEvent(runtimeLogFile, details) });
+updater.onChange((state) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:update-changed', state);
+});
 // O renderer só pode pedir captura de uma fonte que o próprio Tumacord
 // ofereceu. Sem esta lista, um renderer comprometido poderia mandar um
 // identificador arbitrário e pedir o áudio de qualquer processo da máquina.
@@ -303,6 +312,39 @@ function createTray() {
   tray.on('click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
+// Reabrir na versão nova. Quem decide o executável é o jeito da instalação:
+// o atalho `~/.local/bin/tumacord` resolve `current` a cada abertura e é o
+// caminho certo para a instalação gerenciada; o AppImage precisa ser reaberto
+// pelo próprio arquivo, porque `process.execPath` aponta para dentro da
+// montagem temporária, que some junto com este processo.
+function restartForUpdate() {
+  const applied = updater.state().applied;
+  if (!applied) return false;
+  if (applied.restart === 'manual') {
+    if (applied.folder) void shell.openPath(applied.folder);
+    return false;
+  }
+  if (applied.restart === 'now') {
+    const candidates = [];
+    if (updater.kind === 'linux-appimage' && process.env.APPIMAGE) candidates.push(process.env.APPIMAGE);
+    if (updater.kind === 'linux-managed') {
+      const dataHome = process.env.XDG_DATA_HOME || path.join(app.getPath('home'), '.local', 'share');
+      candidates.push(path.join(app.getPath('home'), '.local', 'bin', 'tumacord'), path.join(dataHome, 'tumacord', 'current', 'tumacord'));
+    }
+    const execPath = candidates.find((candidate) => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    app.relaunch(execPath ? { execPath, args: [] } : {});
+  }
+  app.quit();
+  return true;
+}
+
 app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return;
   // Remove módulos deixados por encerramento forçado ou atualização. Assim,
@@ -414,6 +456,15 @@ app.whenReady().then(async () => {
   // pedido é recusado e o desenho fica só dentro do aplicativo.
   ipcMain.handle('tumacord:draw-overlay', (_event, payload) => {
     try {
+      // A janela sobreposta é do Windows e só dele. No Linux ela tira o foco
+      // do teclado de quem está jogando e ainda volta dentro da captura do
+      // portal — foi por isso que, na 0.9.0, receber desenho passou a ser
+      // exclusividade do Windows. A interface já não pede; a recusa aqui é
+      // para o caso de ela pedir mesmo assim.
+      if (process.platform !== 'win32') {
+        drawingOverlay.close();
+        return false;
+      }
       if (!payload || !Array.isArray(payload.strokes) || !payload.strokes.length) {
         drawingOverlay.close();
         return false;
@@ -452,8 +503,29 @@ app.whenReady().then(async () => {
     return false;
   });
 
+  ipcMain.handle('tumacord:update-state', () => updater.state());
+  ipcMain.handle('tumacord:update-check', () => updater.check({ manual: true }));
+  ipcMain.handle('tumacord:update-download', () => updater.download());
+  ipcMain.handle('tumacord:update-cancel', () => updater.cancel());
+  ipcMain.handle('tumacord:update-apply', () => updater.apply());
+  ipcMain.handle('tumacord:update-dismiss', (_event, version) => updater.dismiss(typeof version === 'string' ? version : ''));
+  ipcMain.handle('tumacord:update-notes-seen', (_event, version) => updater.markNotesSeen(typeof version === 'string' ? version : ''));
+  ipcMain.handle('tumacord:update-set-enabled', (_event, enabled) => updater.setEnabled(enabled !== false));
+  ipcMain.handle('tumacord:update-restart', () => restartForUpdate());
+  ipcMain.handle('tumacord:update-open-page', () => {
+    const page = updater.state().pageUrl;
+    // Só um endereço de Release do GitHub, e só o que o próprio atualizador
+    // guardou: `openExternal` entrega o endereço ao sistema, e o que ele
+    // recebe não pode vir de fora sem conferência.
+    if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\//.test(page)) void shell.openExternal(page);
+    return page;
+  });
+
   await createWindow();
   createTray();
+  // A procura acontece com a janela já de pé: ela não pode atrasar a abertura,
+  // e uma falha de rede aqui não vira tela de erro nenhuma.
+  if (updater.preferences.enabled) void updater.check().catch(() => undefined);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
 }).catch((error) => {
   // Última rede: uma falha aqui deixaria o processo vivo e mudo. Registrada,

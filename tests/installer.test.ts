@@ -32,6 +32,8 @@ const SHELL_SCRIPTS = [
   'install-v0.8.6.sh',
   'install-v0.8.7.sh',
   'install-v0.8.8.sh',
+  'install-v0.9.0.sh',
+  'marcar-versao-retirada.sh',
   'update-server.sh',
   'uninstall-linux.sh',
   'uninstall-cachyos.sh',
@@ -148,6 +150,71 @@ test('README, instalador e atualizador seguem a versão do package.json', () => 
 
   const atualizador = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
   assert.ok(atualizador.includes(`\${1:-${branch}}`), `update-server.sh sem argumento precisa ir para ${branch}, não para uma versão anterior`);
+});
+
+// O atualizador do servidor tira a versão do mesmo lugar que o aplicativo: as
+// Releases do GitHub. Estes casos rodam só o pedaço que decide — a parte que
+// mexe em Docker e em volume fica de fora, como deve.
+function consultarReleases(pergunta: string, tag: string, releases: unknown[]): string {
+  const script = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  const preambulo = script.slice(0, script.indexOf('# `ultima` vira a tag'));
+  const directory = mkdtempSync(path.join(tmpdir(), 'tumacord-atualizador-'));
+  try {
+    const arquivo = path.join(directory, 'sonda.sh');
+    writeFileSync(arquivo, `${preambulo}\nreleases_json=$(cat "$1")\nconsultar_releases ${pergunta} ${tag}\n`, 'utf8');
+    const json = path.join(directory, 'releases.json');
+    writeFileSync(json, JSON.stringify(releases), 'utf8');
+    return execFileSync(BASH, [arquivo, json], { encoding: 'utf8' }).trim();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+const RELEASES = [
+  { tag_name: 'v0.9.5', body: 'notas\n<!-- tumacord:versao-quebrada -->' },
+  { tag_name: 'v0.9.1', body: 'notas boas' },
+  { tag_name: 'v0.8.9', body: 'a versão retirada' },
+  { tag_name: 'v0.10.0', body: 'ainda rascunho', draft: true },
+  { tag_name: 'v0.9.2-rc1', body: 'candidata', prerelease: true },
+];
+
+test('o atualizador do servidor escolhe a Release mais nova que presta', { skip: SO_POSIX }, () => {
+  assert.equal(consultarReleases('ultima', '', RELEASES), 'v0.9.1', 'pula a retirada, o rascunho e a pré-versão');
+  assert.equal(consultarReleases('ultima', '', []), '', 'sem resposta utilizável, ele não inventa uma versão');
+});
+
+test('o atualizador do servidor reconhece uma versão retirada antes de tocar no Docker', { skip: SO_POSIX }, () => {
+  assert.equal(consultarReleases('estado', 'v0.9.5', RELEASES), 'retirada', 'a marca nas notas retira a versão');
+  assert.equal(consultarReleases('estado', 'v0.8.9', RELEASES), 'retirada', 'a 0.8.9 está na lista embutida');
+  assert.equal(consultarReleases('estado', 'v0.9.1', RELEASES), '', 'uma versão boa passa');
+});
+
+// Reiniciar o contêiner derruba quem está conectado. O script só reconstrói
+// quando o código mudou ou quando a versão no ar é outra.
+test('o atualizador do servidor só reconstrói quando há motivo', () => {
+  const atualizador = readFileSync(path.join(scripts, 'update-server.sh'), 'utf8');
+  assert.match(atualizador, /Nada a fazer: o código já está em/);
+  assert.match(atualizador, /"\$antes" == "\$depois"/);
+  assert.match(atualizador, /api\/health/);
+});
+
+// A Release já publicada é a única coisa que o aplicativo instalado consulta.
+// Sem este script, marcar uma versão como retirada no CHANGELOG não chegaria a
+// nenhuma máquina — o CI só escreve as notas quando a tag nasce.
+test('marcar uma versão como retirada republica as notas do CHANGELOG, com confirmação', () => {
+  const marcador = readFileSync(path.join(scripts, 'marcar-versao-retirada.sh'), 'utf8');
+  assert.match(marcador, /gh release edit/);
+  assert.match(marcador, /--notes-file/);
+  assert.match(marcador, /read -r -p/, 'nada é publicado sem alguém confirmar');
+  assert.match(marcador, /CHANGELOG\.md/);
+  assert.ok(!/gh release delete/.test(marcador), 'retirar uma versão nunca é apagar a Release');
+});
+
+test('o CHANGELOG marca a 0.8.9 como retirada, do jeito que o aplicativo entende', () => {
+  const changelog = readFileSync(path.join(projectRoot, 'CHANGELOG.md'), 'utf8');
+  const secao = changelog.slice(changelog.indexOf('## 0.8.9'), changelog.indexOf('## 0.8.8'));
+  assert.match(secao, /<!--\s*tumacord:versao-quebrada\s*-->/, 'sem o marcador, nenhuma cópia instalada saberia');
+  assert.match(secao, /Não instale esta versão/);
 });
 
 test('o bootstrap do GitHub prefere o instalador novo e mantém o nome antigo como reserva', () => {

@@ -12,7 +12,7 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - **enlace direto sem ZeroTier**: travessia de NAT por ICE/STUN, entrada por IPv6 e abertura de porta no roteador por PCP, NAT-PMP ou UPnP;
 - **servidor de encontro opcional**, alcançado só por conexão de saída: funciona atrás de CGNAT sem abrir porta em lugar nenhum, e com relay TURN para o caso em que nem o ICE atravessa;
 - convite em código que aponta o servidor da call e leva a chave de entrada;
-- desenho sobre a transmissão de quem está compartilhando a tela, com a permissão sendo de quem transmite;
+- desenho sobre a transmissão de quem está compartilhando a tela, **na live de quem está no Windows**, com a permissão sendo de quem transmite;
 - descoberta automática de calls na rede local, sem copiar IP;
 - ZeroTier opcional, ligado ou desligado em **Configurações › Rede e conexão**;
 - servidor completo embutido em toda instalação;
@@ -28,7 +28,8 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - aplicativo Windows com instalador NSIS e alternativa portátil, sem exigir Node, npm nem redistribuível do Visual C++ na máquina de quem instala;
 - perfis 1080p60, 1440p60, 1440p30, 1080p30, 720p30 e 480p15, com preferência persistente e troca dinâmica durante a live sem recapturar nem selecionar a tela novamente;
 - volume individual por participante e pela live, de 0 a 200%, com ganho real de até +18 dB e limitador contra estouro;
-- dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**;
+- dois modos para a live: **Ampliar dentro do app**, mantendo barras e controles, e **Tela cheia real**. A tela cheia da janela inteira ficou só no F11, sem botão na barra;
+- **atualização pelo próprio aplicativo**, procurada a cada abertura e aplicada quando você quiser, com o que mudou aparecendo uma vez depois de cada versão nova;
 - ao abrir o chat durante uma live, ela continua tocando em uma miniatura móvel e redimensionável, preservando mute e volume;
 - layout responsivo para janela dividida: em meia tela a lista de membros recolhe, os controles compactam e múltiplas lives se empilham sem esmagar o vídeo;
 - indicador **AO VIVO** no nome de quem transmite, recuperação visível quando a mídia atrasa e opção de sair apenas da live sem abandonar a call;
@@ -57,20 +58,49 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/windows-audio-v0.8.8/scripts/install-v0.8.8.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/atualizacao-no-app-v0.9.0/scripts/install-v0.9.0.sh | bash
 ```
 
-Este comando instala a v0.8.8 a partir da branch separada `release/windows-audio-v0.8.8`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.9.0 a partir da branch separada `release/atualizacao-no-app-v0.9.0`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.8.8, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-windows-audio-v0.8.8`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.0, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-atualizacao-no-app-v0.9.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/windows-audio-v0.8.8/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/atualizacao-no-app-v0.9.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
+
+### Atualização pelo próprio aplicativo
+
+A partir da 0.9.0 o Tumacord procura uma versão nova **toda vez que abre** e
+mostra um botão na barra de cima quando encontra alguma. Ele para por aí:
+baixar é um clique e aplicar é outro, na hora que você escolher. Nada é
+instalado sozinho — trocar de versão no meio de uma call custaria a call.
+
+No Linux instalado por este script, aplicar coloca a build nova em uma pasta
+própria e troca só o atalho `current`, exatamente como o instalador faz: **a
+call aberta não é interrompida** e a versão nova passa a valer ao reabrir. No
+AppImage o arquivo é substituído no lugar. No Windows, o instalador da versão
+nova é aberto e o Tumacord fecha para ele poder trabalhar; no portátil, o
+executável novo fica guardado ao lado do atual, porque o Windows não deixa
+substituir um `.exe` em uso.
+
+Versões marcadas como retiradas — a **0.8.9** é uma delas — nunca são
+oferecidas, e quem estiver rodando uma delas é avisado disso pelo aplicativo.
+
+Procurar ao abrir pode ser desligado na própria tela de atualização; o botão de
+procurar continua onde está. O comando de instalação acima e a página de
+Releases continuam valendo e aparecem escritos dentro dessa tela.
+
+**O que mudou, uma vez por versão.** Na primeira abertura depois de uma
+atualização, o Tumacord mostra as notas daquela versão — o mesmo texto que está
+na página de Releases do GitHub, que é para onde o CHANGELOG é publicado. Isso
+vale para qualquer caminho de atualização: pelo botão, pelo comando de
+instalação ou trocando o arquivo à mão. Fechar a tela é o que a marca como lida,
+e ela não volta até a próxima versão.
 
 O AppImage continua disponível como alternativa portátil nas **Releases** e nos artefatos de cada build do GitHub Actions. Ele serve para quem preferir baixar e executar um arquivo isolado, mas é opcional.
 
@@ -107,7 +137,7 @@ nenhum redistribuível do Visual C++**.
 
 ### Instalador (recomendado)
 
-Baixe `Tumacord-0.8.8-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+Baixe `Tumacord-0.9.0-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
 e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
 escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
 Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
@@ -118,7 +148,7 @@ avisa e o encerra antes de continuar.
 
 ### Portátil
 
-`Tumacord-0.8.8-portable.exe` roda sem instalar nada. É a opção para pendrive
+`Tumacord-0.9.0-portable.exe` roda sem instalar nada. É a opção para pendrive
 ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
 atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
 na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
@@ -187,7 +217,7 @@ certificado configurado — o instalador, o portátil, o executável principal e
 componente de áudio, todos com carimbo de tempo. Você pode conferir:
 
 ```powershell
-Get-AuthenticodeSignature .\Tumacord-0.8.8-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\Tumacord-0.9.0-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` precisa ser `Valid`.
@@ -231,15 +261,49 @@ e anexos é uma decisão sua, e você pode remover essa pasta à mão depois.
   novo. Em versões anteriores a transmissão vai sem áudio, com aviso na tela;
 - não há build para ARM64 nem para 32 bits;
 - ao transmitir **uma janela**, o desenho de quem assiste aparece dentro do
-  aplicativo, e não sobreposto ao desktop. Isso vale para os dois sistemas: com
-  uma janela não dá para saber onde ela está na tela. Transmitindo o **monitor
-  inteiro**, o traço aparece sobre o desktop de verdade;
+  aplicativo, e não sobreposto ao desktop: com uma janela não dá para saber onde
+  ela está na tela. Transmitindo o **monitor inteiro**, o traço aparece sobre o
+  desktop de verdade. Desde a 0.9.0 isso é exclusividade do Windows — veja
+  abaixo;
 - o portátil não configura o firewall — a permissão é dada no aviso do próprio
   Windows, na primeira execução.
 
 Para compilar, assinar e publicar, veja
 [`docs/windows-build.md`](docs/windows-build.md). A matriz de teste manual está
 em [`docs/windows-testing.md`](docs/windows-testing.md).
+
+## Desenho sobre a transmissão
+
+Quem assiste a uma live pode rabiscar em cima dela para apontar alguma coisa. O
+traço aparece na live de todo mundo que está vendo e, quando o que está sendo
+transmitido é o monitor inteiro, também sobre a área de trabalho de verdade de
+quem transmite — que é o que dá sentido à ferramenta: continuar olhando para o
+jogo e ainda ver o que estão apontando.
+
+**A partir da 0.9.0, isso só funciona na transmissão de quem está no Windows.**
+
+O motivo é a janela que pinta o traço sobre a área de trabalho. No Windows ela
+se comporta: não rouba foco, e `setContentProtection` a mantém fora da própria
+captura. No Linux, não — ela tira o foco do teclado de quem estava jogando e não
+o devolve para ninguém, e o portal do PipeWire não sabe deixá-la fora da
+captura, então o traço volta dentro do próprio vídeo. Uma live com desenho no
+Linux custava o controle do jogo para quem estava transmitindo.
+
+Na prática:
+
+- transmitindo do **Windows**: tudo como antes. A permissão continua sendo de
+  quem transmite, em **Configurações › Desenho na tela**, e o prazo do traço
+  também;
+- transmitindo do **Linux**: ninguém desenha na sua live. Quem assiste vê o
+  lápis no canto do seu quadro **desabilitado**, translúcido, dizendo por quê —
+  em vez de um botão que sumiu ou de um traço que não chega. O servidor recusa o
+  traço, então nem um cliente modificado pinta na sua tela;
+- **você, no Linux, continua desenhando** na transmissão de quem estiver no
+  Windows, normalmente.
+
+Um cliente anterior à 0.9.0 não declara em que sistema está, e por isso é tratado
+como quem não recebe desenho: adivinhar o sistema de alguém para pintar na área
+de trabalho dele seria a escolha errada.
 
 ## Enlace direto: a call sem ZeroTier
 
@@ -468,6 +532,20 @@ relay se ele já estava no ar, e confere se o servidor voltou a responder — ne
 ordem, porque procurar o backup depois do problema é tarde. Se houver alteração
 local sua no `docker-compose.yml`, ele para e avisa em vez de descartá-la.
 
+Para ir direto à versão que o aplicativo está oferecendo para todo mundo:
+
+```bash
+./scripts/update-server.sh ultima
+```
+
+Ele pergunta ao GitHub qual é a Release mais nova, **pula as que estão marcadas
+como retiradas** — a 0.8.9 é uma delas — e vai para a tag dela. É a mesma fonte
+que o aplicativo consulta: o repositório do GitHub vale para os dois lados.
+
+O Docker só é reconstruído quando há motivo. Se o código já está na referência
+pedida e o servidor no ar já responde com essa versão, o script diz isso e sai
+sem derrubar ninguém — dá para rodá-lo só para conferir se está em dia.
+
 À mão, se preferir:
 
 ```bash
@@ -488,6 +566,23 @@ docker run --rm -v tumacord-data:/data -v "$PWD":/backup alpine tar czf /backup/
 ```
 
 **Nunca use `docker compose down -v` para atualizar** — a flag `-v` apaga o volume com todos os dados.
+
+### Retirar uma versão publicada
+
+Quando um defeito aparece depois do lançamento — que é quando defeito costuma
+aparecer —, marcar a versão no CHANGELOG não chega sozinho a lugar nenhum: o CI
+escreve as notas da Release quando a tag nasce, e nunca mais.
+
+```bash
+./scripts/marcar-versao-retirada.sh 0.8.9
+```
+
+O script mostra o que vai publicar, pede confirmação e republica as notas
+daquela Release a partir do CHANGELOG. Se a seção trouxer o comentário
+`<!-- tumacord:versao-quebrada -->`, **toda cópia instalada** para de oferecer
+aquela versão — inclusive as que já estavam na rua — e o
+`./scripts/update-server.sh` passa a recusá-la. A Release não é apagada: quem
+precisar do arquivo continua achando.
 
 ### Voltar atrás
 

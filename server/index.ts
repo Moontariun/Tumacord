@@ -1018,6 +1018,7 @@ io.on('connection', (socket) => {
       camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional(),
       allowDraw: z.boolean().optional(),
       drawLifetime: z.number().optional().transform((value) => (value === undefined ? undefined : parseDrawLifetime(value))),
+      drawSupported: z.boolean().optional(),
     }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
@@ -1068,6 +1069,12 @@ io.on('connection', (socket) => {
     // `allowDraw` ausente é um cliente anterior à 0.8.7: permitido, como o
     // padrão da versão nova.
     if (!dono?.screen || dono.allowDraw === false) return;
+    // E só sobre uma transmissão de um sistema que sabe receber traço. A
+    // recusa mora aqui, e não só na interface: esconder o lápis é conveniência
+    // para quem assiste, não proteção para quem transmite. Sem esta linha, um
+    // cliente modificado pintaria sobre a área de trabalho de quem está no
+    // Linux — que é justamente onde a janela sobreposta rouba o foco.
+    if (dono.drawSupported !== true) return;
     // Limpar tudo é da dona da tela. Qualquer outro pode limpar só o que é seu.
     if (parsed.data.clearAll && parsed.data.target !== socket.id) return;
     if (!drawBucket.take()) return;

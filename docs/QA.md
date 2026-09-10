@@ -164,3 +164,43 @@ exige duas máquinas em redes diferentes.
 | Anexo entre pares exige sessão fora da rede local | TESTADO AUTOMATICAMENTE (política) |
 | Limite de tentativas de login | TESTADO AUTOMATICAMENTE |
 | Histórico P2P não vai para servidor dedicado | VALIDADO POR ANÁLISE |
+
+---
+
+## Atualização pelo aplicativo — 0.9.0
+
+A parte que decide — qual versão oferecer, se ela foi retirada, qual arquivo
+serve para cada jeito de instalação — roda sem rede e sem disco e está coberta
+por teste. A parte que aplica foi exercitada contra um disco de verdade, em
+pasta temporária, nos caminhos do Linux. **O que nenhum teste daqui prova é o
+Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
+
+| Item | Estado |
+| --- | --- |
+| 0.8.9 nunca é oferecida, e quem está nela é avisado | TESTADO AUTOMATICAMENTE |
+| Marcador nas notas retira uma versão que a cópia não conhecia | TESTADO AUTOMATICAMENTE |
+| 0.8.10 > 0.8.9 na comparação de versão | TESTADO AUTOMATICAMENTE |
+| Cada tipo de instalação recebe o arquivo certo | TESTADO AUTOMATICAMENTE |
+| Só `https` e só GitHub para baixar | TESTADO AUTOMATICAMENTE |
+| Nome de arquivo baixado não escapa da pasta | TESTADO AUTOMATICAMENTE |
+| Linux gerenciado: pasta nova, troca do atalho, `previous` preservado | TESTADO AUTOMATICAMENTE (disco real) |
+| AppImage substituído no lugar | TESTADO AUTOMATICAMENTE (disco real) |
+| Portable novo guardado ao lado do que roda | TESTADO AUTOMATICAMENTE |
+| "O que mudou" aparece uma vez e fica marcado no disco | TESTADO AUTOMATICAMENTE |
+| SHA-256 conferido antes de aplicar | VALIDADO POR ANÁLISE |
+| Instalador do Windows abre e o app fecha para ele | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Reabrir na versão nova pelo atalho `current` | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
+
+## Desenho só na transmissão do Windows — 0.9.0
+
+| Item | Estado |
+| --- | --- |
+| Servidor recusa traço para quem não declara o sistema | TESTADO AUTOMATICAMENTE (servidor real) |
+| Cliente anterior à 0.9.0 é tratado como "não recebe" | TESTADO AUTOMATICAMENTE (servidor real) |
+| Permitir não basta: o sistema decide primeiro | TESTADO AUTOMATICAMENTE (servidor real) |
+| `drawSupported` começa falso ao entrar na call | TESTADO AUTOMATICAMENTE |
+| Sobreposição recusada fora do Windows | VALIDADO POR ANÁLISE |
+| Lápis translúcido na live de quem está no Linux | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Desenhar do Linux na live de quem está no Windows | IMPLEMENTADO — REQUER TESTE MANUAL |

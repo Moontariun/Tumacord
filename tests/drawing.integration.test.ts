@@ -11,6 +11,11 @@ import { freePort } from './freePort';
 // A regra desta versão, provada contra um servidor de verdade: quem transmite
 // decide se aceita desenho. Esconder o lápis do outro lado é conveniência —
 // quem recusa é o servidor, e é isso que um cliente modificado encontra.
+//
+// Na 0.9.0 a decisão passou a ter duas metades, e as duas moram no servidor: o
+// sistema de quem transmite precisa saber receber traço (`drawSupported`, que
+// só o Windows declara) e a pessoa precisa permitir (`allowDraw`). Faltando
+// qualquer uma, o traço não é repassado.
 
 function waitFor<T>(socket: Socket, event: string, predicate: (payload: T) => boolean = () => true, timeoutMs = 4_000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -100,7 +105,7 @@ test('quem transmite recebe o traço, e todo mundo na call vê o mesmo', { timeo
   await juntar(assiste);
   await juntar(terceiro);
 
-  transmite.emit('voice:state', { screen: true, allowDraw: true });
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: true });
   await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.screen));
 
   const noHost = waitFor<Record<string, unknown>>(transmite, 'rtc:draw');
@@ -123,7 +128,7 @@ test('com a opção desligada, o servidor recusa o traço', { timeout: 40_000 },
   const eu = await juntar(transmite);
   await juntar(assiste);
 
-  transmite.emit('voice:state', { screen: true, allowDraw: false });
+  transmite.emit('voice:state', { screen: true, allowDraw: false, drawSupported: true });
   const membros = await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.allowDraw === false));
   assert.equal(membros.find((x) => x.socketId === eu.selfId)?.allowDraw, false, 'a recusa é anunciada para quem assiste');
 
@@ -132,11 +137,39 @@ test('com a opção desligada, o servidor recusa o traço', { timeout: 40_000 },
   assert.equal(await silencio, true, 'um cliente modificado não desenha na tela de quem recusou');
 
   // E religar volta a funcionar, sem precisar reentrar na call.
-  transmite.emit('voice:state', { allowDraw: true });
+  transmite.emit('voice:state', { allowDraw: true, drawSupported: true });
   await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.allowDraw !== false));
   const volta = waitFor(transmite, 'rtc:draw');
   assiste.emit('rtc:draw', traco(eu.selfId));
   await volta;
+});
+
+// O caso do Linux, que é o motivo da regra: a janela que pinta o traço sobre a
+// área de trabalho rouba o foco do teclado de quem está jogando, e o portal do
+// PipeWire não sabe deixá-la fora da captura.
+test('sem sistema que receba desenho, nem permitir adianta', { timeout: 40_000 }, async (context) => {
+  const { entrar, juntar } = await ambiente(context);
+  const transmite = await entrar('Host');
+  const assiste = await entrar('Amiga');
+  const eu = await juntar(transmite);
+  await juntar(assiste);
+
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: false });
+  const membros = await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.screen));
+  assert.equal(membros.find((x) => x.socketId === eu.selfId)?.drawSupported, false, 'quem assiste sabe que o lápis fica desabilitado');
+
+  const silencio = naoChega(transmite, 'rtc:draw');
+  assiste.emit('rtc:draw', traco(eu.selfId));
+  assert.equal(await silencio, true, 'permitir não basta: o sistema de quem transmite precisa receber');
+
+  // E o mesmo vale para um cliente anterior à 0.9.0, que não declara nada.
+  const semDeclarar = await entrar('Antiga');
+  const outro = await juntar(semDeclarar);
+  semDeclarar.emit('voice:state', { screen: true, allowDraw: true });
+  await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === outro.selfId && x.screen));
+  const mudo = naoChega(semDeclarar, 'rtc:draw');
+  assiste.emit('rtc:draw', traco(outro.selfId));
+  assert.equal(await mudo, true, 'ausência é lida como "não sabe receber", não como permissão');
 });
 
 test('não se desenha sobre quem não está transmitindo', { timeout: 40_000 }, async (context) => {
@@ -145,7 +178,7 @@ test('não se desenha sobre quem não está transmitindo', { timeout: 40_000 }, 
   const assiste = await entrar('Amiga');
   const eu = await juntar(transmite);
   await juntar(assiste);
-  transmite.emit('voice:state', { screen: false, allowDraw: true });
+  transmite.emit('voice:state', { screen: false, allowDraw: true, drawSupported: true });
 
   const silencio = naoChega(transmite, 'rtc:draw');
   assiste.emit('rtc:draw', traco(eu.selfId));
@@ -158,7 +191,7 @@ test('limpar tudo é de quem transmite; os outros só limpam o que é seu', { ti
   const assiste = await entrar('Amiga');
   const eu = await juntar(transmite);
   await juntar(assiste);
-  transmite.emit('voice:state', { screen: true, allowDraw: true });
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: true });
   await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.screen));
 
   const negado = naoChega(transmite, 'rtc:draw');
@@ -181,7 +214,7 @@ test('quem não está na mesma call não alcança a tela de ninguém', { timeout
   const transmite = await entrar('Host');
   const deFora = await entrar('Estranho');
   const eu = await juntar(transmite);
-  transmite.emit('voice:state', { screen: true, allowDraw: true });
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: true });
 
   const silencio = naoChega(transmite, 'rtc:draw');
   deFora.emit('rtc:draw', traco(eu.selfId));
@@ -194,7 +227,7 @@ test('payload malformado é descartado sem derrubar o servidor', { timeout: 40_0
   const assiste = await entrar('Amiga');
   const eu = await juntar(transmite);
   await juntar(assiste);
-  transmite.emit('voice:state', { screen: true, allowDraw: true });
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: true });
   await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.screen));
 
   const silencio = naoChega(transmite, 'rtc:draw');
@@ -223,7 +256,7 @@ test('inundação de traços é cortada, e a mão normal continua passando', { t
   const assiste = await entrar('Amiga');
   const eu = await juntar(transmite);
   await juntar(assiste);
-  transmite.emit('voice:state', { screen: true, allowDraw: true });
+  transmite.emit('voice:state', { screen: true, allowDraw: true, drawSupported: true });
   await waitFor<VoiceState[]>(assiste, 'voice:members', (m) => m.some((x) => x.socketId === eu.selfId && x.screen));
 
   let recebidos = 0;

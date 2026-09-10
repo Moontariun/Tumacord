@@ -6,6 +6,7 @@ import {
   MAX_STROKES,
   STROKE_LIFETIME_MS,
   applyDrawMessage,
+  drawSupportedOn,
   dropAuthor,
   expireStrokes,
   fadeFor,
@@ -225,4 +226,15 @@ test('cor inventada cai na cor padrão em vez de virar CSS solto', () => {
 test('mensagem sem ponto nenhum não cria traço vazio', () => {
   const strokes = applyDrawMessage([], { target: 't', strokeId: 's', color: '#fff', points: [], ...autor }, 0);
   assert.deepEqual(strokes, []);
+});
+
+// A regra que a 0.9.0 acrescentou: receber desenho é do Windows. No Linux a
+// janela sobreposta rouba o foco do teclado de quem está jogando e ainda volta
+// dentro da captura do portal, então nem a preferência de quem transmite
+// consegue ligar isso — e o servidor recusa o traço do mesmo jeito.
+test('só o Windows recebe desenho sobre a transmissão', () => {
+  assert.equal(drawSupportedOn('win32'), true);
+  for (const sistema of ['linux', 'darwin', 'freebsd', '', undefined, null, 42, 'Win32', 'windows']) {
+    assert.equal(drawSupportedOn(sistema), false, `aceitou ${JSON.stringify(sistema)}`);
+  }
 });

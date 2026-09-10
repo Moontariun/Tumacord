@@ -88,6 +88,27 @@ O contêiner serve `dist-web`, API e Socket.IO na porta `4600`; o servidor embut
 
 O nome administrativo é configurável por `ADMIN_USERNAME` e vale apenas no servidor dedicado. O painel expõe estado do serviço, canais e usuários conectados; ações administrativas exigem uma sessão autenticada desse usuário.
 
+## Desenho sobre a transmissão
+
+As coordenadas viajam como fração de 0 a 1 do quadro capturado, nunca em pixels: quem desenha em uma janela de 600 px e quem transmite em 4K precisam ver o traço no mesmo lugar do *conteúdo*. `shared/telestration.ts` guarda essa conversão, o prazo do traço e os tetos que protegem contra um cliente falante; o servidor reenvia cada traço para a sala inteira com um balde por socket.
+
+Duas permissões decidem se um traço passa, e as duas moram no servidor:
+
+- `allowDraw` — a preferência de quem transmite, publicada no estado de voz;
+- `drawSupported` — o *sistema* de quem transmite, que só é verdadeiro no Windows. `desktop/drawing-overlay.cjs` abre uma janela sem moldura sobre o monitor capturado para o traço aparecer na área de trabalho de verdade; no Windows ela não rouba foco e sai da captura por `setContentProtection`, e no Linux ela faz as duas coisas erradas — tira o foco do teclado de quem está jogando e volta dentro da captura do portal do PipeWire. O processo principal recusa a sobreposição fora do Windows, e o servidor recusa o traço: esconder o lápis é conveniência da interface, não proteção.
+
+Ausência de `drawSupported` é lida como "não recebe": um cliente anterior à 0.9.0 não declara o sistema, e adivinhar o sistema de alguém para pintar na área de trabalho dele seria a escolha errada.
+
+## Atualização do aplicativo
+
+A fonte é o repositório do GitHub, e ela é a mesma para o aplicativo e para o servidor. `desktop/update-check.cjs` recebe a lista de Releases já baixada e devolve uma decisão — sem rede e sem disco, para poder ser testada inteira: qual versão oferecer, se ela foi retirada (lista embutida ou o marcador `<!-- tumacord:versao-quebrada -->` no corpo da Release), qual arquivo serve para o jeito daquela instalação (`linux-managed`, `linux-appimage`, `windows-installed`, `windows-portable`, `unknown`) e quais são as notas da versão instalada.
+
+`desktop/updater.cjs` é a parte que precisa de rede e de disco: só `https` e só GitHub, cada redirecionamento conferido de novo, tamanho e SHA-256 conferidos antes de qualquer coisa ser executada, e um caminho de aplicação por tipo de instalação. No Linux gerenciado ele repete o que o instalador faz — build nova em pasta imutável, troca atômica do atalho `current`, anterior apontada por `previous` —, o que permite atualizar sem interromper a call em andamento.
+
+A procura acontece uma vez, na abertura, com a janela já de pé. Baixar e aplicar são cliques da interface (`src/components/UpdatePanel.tsx`); nada é automático. `update-state.json`, na pasta de dados do usuário, guarda três coisas: se a procura ao abrir está ligada, qual versão foi ignorada e qual versão já teve o "o que mudou" mostrado — é o que faz o changelog aparecer uma vez por versão, venha a atualização de onde vier.
+
+No servidor, `scripts/update-server.sh` lê as mesmas Releases: `ultima` resolve a versão publicada mais nova que não foi retirada, o script recusa uma tag marcada como retirada antes de tocar no Docker, e só reconstrói quando o código mudou ou quando a versão no ar é outra — reiniciar um contêiner que já está certo derruba a call de alguém à toa.
+
 ## Replicação pessoal
 
 Mensagens e perfis são mesclados entre os computadores online. Perfis usam o nome normalizado como identidade P2P e `updatedAt` como revisão: avatar, banner, bio e cor mais recentes vencem. As mídias de perfil são publicadas no host atual e baixadas para o servidor embutido de cada desktop, permitindo que qualquer participante assuma como host sem voltar para uma foto antiga.

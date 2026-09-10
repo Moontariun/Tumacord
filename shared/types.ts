@@ -91,6 +91,11 @@ export interface VoiceState extends PublicUser {
   // ausente é lido como permitido, que é o padrão de quem tem a versão nova.
   allowDraw?: boolean;
   drawLifetime?: number;
+  // Se o sistema de quem transmite sabe receber desenho. Só o Windows sabe: no
+  // Linux a janela sobreposta rouba o foco do teclado e volta dentro da
+  // captura. Ausente é lido como "não sabe" — um cliente anterior à 0.9.0 não
+  // declara isso, e oferecer desenho para ele seria adivinhar o sistema dele.
+  drawSupported?: boolean;
 }
 
 export interface ServerSnapshot {

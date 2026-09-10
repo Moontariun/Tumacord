@@ -24,6 +24,10 @@ export class VoiceRooms {
       reachability: Math.max(0, Math.min(100, Math.round(participant.reachability ?? 0))),
       allowDraw: true,
       drawLifetime: STROKE_LIFETIME_MS,
+      // Quem entra ainda não disse em que sistema está. Até dizer, ninguém
+      // desenha na tela dele: o padrão seguro é o que não pinta nada na área
+      // de trabalho de quem talvez não suporte isso.
+      drawSupported: false,
       joinedAt: this.sequence++,
       isHost: room.size === 0,
       pingMs: 9999,
@@ -66,7 +70,7 @@ export class VoiceRooms {
     return changed;
   }
 
-  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'allowDraw' | 'drawLifetime'>>): VoiceState[] {
+  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'allowDraw' | 'drawLifetime' | 'drawSupported'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
     if (participant) {
       Object.assign(participant, patch);

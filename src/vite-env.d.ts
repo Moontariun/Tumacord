@@ -45,6 +45,36 @@ interface TumacordDirectReport {
   zeroTier: string[];
 }
 
+// Como esta cópia foi instalada, e por isso como ela atualiza. `unknown` é o
+// caso honesto: dá para avisar que existe versão nova, não dá para aplicá-la.
+type TumacordInstallKind = 'linux-managed' | 'linux-appimage' | 'windows-installed' | 'windows-portable' | 'unknown';
+
+interface TumacordUpdateState {
+  phase: 'idle' | 'checking' | 'up-to-date' | 'available' | 'no-asset' | 'downloading' | 'ready' | 'applying' | 'applied' | 'error';
+  kind: TumacordInstallKind;
+  installed: string;
+  /** Motivo pelo qual a versão instalada não deveria estar em uso; vazio quando ela está de pé. */
+  installedBroken: string;
+  /** As notas da versão instalada, como estão na página de Releases do GitHub. */
+  installedRelease: { version: string; title: string; notes: string; pageUrl: string; publishedAt: string } | null;
+  version: string;
+  title: string;
+  notes: string;
+  pageUrl: string;
+  publishedAt: string;
+  asset: { name: string; url: string; size: number; digest: string } | null;
+  progress: { received: number; total: number };
+  error: string;
+  applied: { restart: 'now' | 'quit' | 'manual'; message: string; folder?: string } | null;
+  file: string;
+  skipped: Array<{ version: string; reason: string }>;
+  enabled: boolean;
+  lastCheck: number;
+  dismissed: string;
+  /** Versão cujo "o que mudou" já foi mostrado nesta instalação. */
+  notesSeen: string;
+}
+
 interface DocumentPictureInPicture extends EventTarget {
   readonly window: Window | null;
   requestWindow: (options?: { width?: number; height?: number; disallowReturnToOpener?: boolean; preferInitialWindowPlacement?: boolean }) => Promise<Window>;
@@ -83,6 +113,19 @@ interface Window {
     setNetworkPreferences: (patch: Partial<TumacordNetworkPreferences>) => Promise<TumacordNetworkPreferences>;
     onNetworkPreferencesChanged: (listener: (preferences: TumacordNetworkPreferences) => void) => () => void;
     directReport: (options?: { force?: boolean }) => Promise<TumacordDirectReport>;
+    update?: {
+      state: () => Promise<TumacordUpdateState>;
+      check: () => Promise<TumacordUpdateState>;
+      download: () => Promise<TumacordUpdateState>;
+      cancel: () => Promise<TumacordUpdateState>;
+      apply: () => Promise<TumacordUpdateState>;
+      restart: () => Promise<boolean>;
+      dismiss: (version?: string) => Promise<TumacordUpdateState>;
+      markNotesSeen: (version?: string) => Promise<TumacordUpdateState>;
+      setEnabled: (enabled: boolean) => Promise<TumacordUpdateState>;
+      openPage: () => Promise<string>;
+      onChanged: (listener: (state: TumacordUpdateState) => void) => () => void;
+    };
     toggleFullscreen: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     onFullscreenChanged: (listener: (fullscreen: boolean) => void) => () => void;

@@ -48,3 +48,16 @@ test('estado impossível de áudio/tela e fala/mute é normalizado', () => {
   const [stopped] = rooms.update('call', 'socket-a', { screen: false });
   assert.equal(stopped.screenAudio, false);
 });
+
+// Quem entra ainda não disse em que sistema está. Até dizer, ninguém desenha na
+// tela dele: o padrão seguro é o que não pinta nada na área de trabalho de quem
+// talvez não suporte isso.
+test('desenho na minha tela começa desligado até o cliente declarar o sistema', () => {
+  const rooms = new VoiceRooms();
+  const entrou = rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927' });
+  assert.equal(entrou[0].drawSupported, false);
+  assert.equal(entrou[0].allowDraw, true, 'a permissão continua sendo a de sempre; o que falta é o sistema');
+
+  const declarou = rooms.update('call', 'socket-a', { drawSupported: true });
+  assert.equal(declarou[0].drawSupported, true);
+});

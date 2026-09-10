@@ -1,5 +1,143 @@
 # Histórico de versões
 
+## 0.9.0 — o aplicativo avisa quando existe versão nova
+
+Esta versão sai da **0.8.8**, não da 0.8.9. A 0.8.9 foi retirada (veja abaixo), e
+o que ela mexeu em captura, qualidade e diagnóstico gráfico não vem junto: ela
+continua na branch `release/graphics-and-capture-v0.8.9` para quem quiser
+retomar aquele trabalho a partir de uma base medida.
+
+**Descobrir que existe versão nova deixou de depender de alguém avisar**
+
+Até aqui, saber que saiu uma versão dependia de alguém dizer no grupo. Quem não
+visse a mensagem ficava para trás — e foi assim que gente ficou parada em versão
+com defeito conhecido.
+
+Agora o Tumacord olha as Releases publicadas **toda vez que abre**. Só isso: uma
+consulta e uma comparação. Nada é baixado, nada é instalado, nada acontece
+sozinho — a hora errada de trocar de versão é no meio de uma call, e é durante
+uma call que este aplicativo é usado.
+
+**Baixar é um clique; aplicar é outro, quando você quiser**
+
+O botão fica na barra de cima e é sempre o mesmo botão: com uma versão esperando
+ele ganha um ponto, e sem nada a fazer ele continua sendo por onde se procura de
+novo. Dentro dele estão a versão oferecida, o que mudou nela, o tamanho do
+arquivo e um botão por vez — baixar, depois aplicar. "Agora não" cala o aviso
+daquela versão, e ele volta na próxima.
+
+**Aplicar faz coisas diferentes, e cada uma é dita antes**
+
+- **Linux instalado pelo script:** a build nova entra em uma pasta própria e só
+  o atalho `current` é trocado, de uma vez. É exatamente o que o instalador já
+  fazia. **A call aberta não é interrompida:** a sessão continua lendo a pasta
+  antiga, que ninguém tocou, e a versão nova vale ao reabrir. A anterior fica
+  apontada por `previous`, que é o caminho de volta;
+- **AppImage:** o arquivo é substituído no lugar. A sessão aberta continua
+  inteira porque ela já está montada;
+- **Windows instalado:** o instalador é aberto e o Tumacord fecha para ele poder
+  substituir a instalação. O Windows pede confirmação, como sempre;
+- **Windows portátil:** um executável em uso não pode ser substituído. O novo
+  fica guardado ao lado do atual e a troca é sua, com o aplicativo fechado;
+- **Cópia de origem desconhecida:** o aviso existe, o botão de aplicar não. Não
+  há como adivinhar onde escrever sem arriscar escrever no lugar errado.
+
+**Versão marcada como quebrada não é oferecida a ninguém**
+
+Uma versão pode ser condenada de duas formas: pela lista embutida no aplicativo
+e por uma marca nas notas da Release — e as notas de cada Release saem deste
+CHANGELOG. Marcar aqui e republicar as notas faz **toda cópia instalada** parar
+de oferecer aquela versão, inclusive as que já estavam na rua quando o defeito
+apareceu.
+
+Quem já estiver rodando uma versão condenada é avisado disso na cara, e o aviso
+não some quando ignorado: ignorar não conserta.
+
+**O que mudou nesta versão, uma vez**
+
+Na primeira abertura depois de atualizar, o texto da Release aparece uma vez —
+não importa se a atualização veio pelo botão, pelo comando de instalação ou de
+alguém trocando o arquivo à mão. O Markdown é lido em blocos e desenhado como
+texto: **nada do que chega pela rede vira HTML**.
+
+**O cuidado com o que é baixado e executado**
+
+O endereço do arquivo vem de uma resposta da rede, e um instalador é um
+executável. Por isso: só `https`, só GitHub, e cada redirecionamento conferido de
+novo; tamanho conferido e SHA-256 comparado com o resumo publicado antes de
+qualquer coisa rodar; teto de tamanho; e o nome do arquivo higienizado antes de
+virar caminho em disco.
+
+**Os caminhos de sempre continuam existindo**
+
+O comando de instalação e a página de Releases estão escritos dentro da própria
+tela de atualização — inclusive quando não há arquivo para o jeito daquela
+cópia, que é justamente quando eles são a única saída.
+
+Procurar ao abrir pode ser desligado; o botão de procurar continua ali.
+
+**Desenhar na tela dos outros virou coisa do Windows**
+
+A janela que pinta o traço sobre a área de trabalho é o que dá sentido a
+desenhar na live de alguém: quem transmite continua olhando para o jogo, não
+para o Tumacord, e é lá que o traço precisa aparecer. No Windows ela se
+comporta — não rouba foco, e sai da própria captura por
+`setContentProtection`.
+
+No Linux, não. Ela tira o foco do teclado de quem estava jogando e não devolve
+para ninguém, e o portal do PipeWire não sabe deixá-la fora da captura: o traço
+volta dentro do próprio vídeo. Quem estava transmitindo perdia o controle do
+jogo no instante em que alguém apontava alguma coisa.
+
+Então a permissão deixou de ser só uma preferência de quem transmite. **O
+sistema de quem transmite decide primeiro**, e só o Windows recebe desenho:
+
+- transmitindo do Windows, tudo como antes;
+- transmitindo do Linux, ninguém desenha na sua live. Quem assiste vê o lápis
+  **desabilitado** no canto do seu quadro, translúcido, dizendo por quê — em vez
+  de um botão que sumiu sem explicação ou de um traço que não chega;
+- você, no Linux, continua desenhando na transmissão de quem está no Windows;
+- a recusa mora no servidor, não na interface: nem um cliente modificado pinta
+  na área de trabalho de quem não pode receber;
+- um cliente anterior à 0.9.0 não declara em que sistema está, e por isso é
+  tratado como quem não recebe. Adivinhar o sistema de alguém para pintar na
+  área de trabalho dele seria a escolha errada.
+
+**Um botão de tela cheia a menos**
+
+Havia dois botões de maximizar fazendo coisas diferentes: o da barra de cima
+punha a *janela* em tela cheia, e o do canto de cada live punha o *vídeo*. O
+primeiro saiu. Ele continua no **F11**, como em qualquer navegador, e o da live
+— que é o que alguém quer numa call — continua exatamente onde estava.
+
+## 0.8.9 — retirada
+
+<!-- tumacord:versao-quebrada -->
+
+> **Não instale esta versão.** As resoluções e o FPS da transmissão saem
+> errados. Ela foi publicada com a validação final pendente — o jogo não foi
+> medido com a live aberta, não houve teste com um segundo participante e nada
+> foi executado em uma máquina Windows de verdade — e o defeito apareceu em uso.
+> Use a **0.9.0**. Quem estiver nela será avisado pelo próprio aplicativo a
+> partir da 0.9.0; quem estiver na 0.8.9 precisa atualizar pelo comando de
+> instalação ou pela página de Releases.
+
+Ela tentou consertar um problema real e medido: no CachyOS/KDE, abrir um jogo com
+uma live sendo enviada e outra sendo assistida corrompia a interface e derrubava
+o jogo para perto de 8 FPS. A medição encontrou o motivo — encoder de vídeo por
+software com composição por GPU ligada, 43 ms por quadro contra 1,5 ms — e a
+resposta foi fazer o perfil de qualidade valer também para a captura, que até a
+0.8.8 pedia 1440p60 em todo perfil.
+
+A resposta estava certa na explicação e errada no resultado: a qualidade
+escolhida deixou de ser respeitada, e a live passou a sair em resolução e
+cadência que ninguém pediu.
+
+O trabalho não foi jogado fora. Ele continua na branch
+`release/graphics-and-capture-v0.8.9`, com a medição inteira em
+`docs/RELATORIO-0.8.9.md`, e é de lá que a correção deve sair — a partir de
+números que já existem, e não de outro chute.
+
 ## 0.8.8 — o Windows para de devolver a call pela live
 
 Até aqui, o áudio da transmissão no Windows saía do loopback do Chromium: uma

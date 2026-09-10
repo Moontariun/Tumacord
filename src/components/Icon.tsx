@@ -5,7 +5,7 @@ export type IconName =
   | 'settings' | 'leave' | 'plus' | 'users' | 'send' | 'host' | 'close'
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
-  | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser';
+  | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser' | 'update';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -45,6 +45,9 @@ const glyphs: Record<IconName, ReactNode> = {
   server: <><rect x="3.2" y="4" width="17.6" height="7" rx="2" /><rect x="3.2" y="13" width="17.6" height="7" rx="2" /><circle cx="7.2" cy="7.5" r=".9" fill="currentColor" stroke="none" /><circle cx="7.2" cy="16.5" r=".9" fill="currentColor" stroke="none" /><path d="M11 7.5h6M11 16.5h6" /></>,
   shield: <><path d="M12 3.2 20 6v5.4c0 4.5-3.2 7.8-8 9.4-4.8-1.6-8-4.9-8-9.4V6Z" /><path d="m8.8 12 2.4 2.4 4-4.4" /></>,
   refresh: <><path d="M20.2 12a8.2 8.2 0 1 1-2.4-5.8" /><path d="M20.4 4.4v5.2h-5.2" /></>,
+  // O mesmo giro do `refresh`, com a seta apontando para dentro: o que chega é
+  // uma versão, não um recarregamento.
+  update: <><path d="M20.2 12a8.2 8.2 0 1 1-2.4-5.8" /><path d="M20.4 4.4v5.2h-5.2" /><path d="M12 8.4v6.8M9.4 12.8 12 15.4l2.6-2.6" /></>,
   popOut: <><path d="M20.4 12.4V6.2a2 2 0 0 0-2-2H5.6a2 2 0 0 0-2 2v9.2a2 2 0 0 0 2 2h5" /><rect x="12.4" y="12.6" width="9" height="7" rx="1.8" /></>,
   popIn: <><path d="M3.6 11.6v-5.4a2 2 0 0 1 2-2h12.8a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H12" /><rect x="2.6" y="13.4" width="9" height="7" rx="1.8" /><path d="M14.2 9.8 18.6 5.4M18.6 5.4h-3.4M18.6 5.4v3.4" /></>,
 };

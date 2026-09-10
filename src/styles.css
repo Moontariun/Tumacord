@@ -1241,3 +1241,49 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .draw-colors button { width: 30px; height: 30px; border: 2px solid transparent; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,.35); cursor: pointer; }
 .draw-colors button.selected { border-color: white; transform: scale(1.12); }
 .draw-colors button:hover { transform: scale(1.12); }
+
+/* Atualização -------------------------------------------------------------- */
+/* O botão é sempre o mesmo botão, no mesmo lugar da barra: com novidade ele
+   ganha um ponto, sem novidade ele continua sendo por onde se procura de novo.
+   Um botão que aparece e some seria um botão que ninguém aprende onde fica. */
+.update-button { position: relative; }
+.update-button.has-update { color: #b6a6ff; }
+.update-button.has-update:hover { color: #d3c8ff; }
+.update-button i { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border: 2px solid var(--panel); border-radius: 50%; background: var(--violet); }
+
+.update-modal > p { margin-bottom: 14px; }
+.update-modal .invite-status + .invite-status { margin-top: 10px; }
+.update-published { margin: 14px 0 0; color: #7f8191; font-size: 11px; }
+
+/* As notas vêm do CHANGELOG pela página de Releases: elas são lidas em blocos
+   e desenhadas como texto. Nada daqui vira HTML. */
+.release-notes { max-height: 260px; margin: 12px 0 0; padding: 14px 16px; overflow-y: auto; display: grid; gap: 9px; border: 1px solid var(--border); border-radius: 12px; background: #15161f; }
+.release-notes strong { color: #d7d8e2; font-size: 12px; }
+.release-notes p { margin: 0; color: #9ea0ae; font-size: 12px; line-height: 1.6; }
+.release-notes .note-item { padding-left: 14px; text-indent: -14px; }
+.release-notes .note-item::before { content: '— '; color: #6d6f80; }
+.release-notes .note-quote { padding-left: 11px; border-left: 2px solid rgba(125,92,255,.4); color: #b6a6ff; }
+
+.update-progress { margin-top: 14px; display: grid; gap: 7px; }
+.update-progress-bar { height: 6px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.06); }
+.update-progress-bar i { display: block; height: 100%; border-radius: 99px; background: var(--violet); transition: width .2s ease; }
+.update-progress span { color: #8b8d9d; font-size: 10px; font-variant-numeric: tabular-nums; }
+
+.update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; }
+.update-actions .primary-button { width: auto; margin-top: 0; padding: 11px 20px; }
+.update-actions .ghost { display: flex; align-items: center; gap: 7px; padding: 11px 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: rgba(255,255,255,.05); color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.update-actions .ghost:hover { background: rgba(255,255,255,.09); color: var(--ink); }
+.update-actions .ghost svg { width: 15px; height: 15px; }
+
+/* Os outros caminhos continuam à vista. Quando não há arquivo para este tipo
+   de instalação, eles deixam de ser alternativa e passam a ser o caminho. */
+.update-manual { margin-top: 22px; padding-top: 18px; display: grid; gap: 9px; border-top: 1px solid var(--border); }
+.update-manual strong { color: #c5c6d2; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.update-manual p { margin: 0; color: #8b8d9d; font-size: 11px; line-height: 1.55; }
+.update-manual code { padding: 11px 13px; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: #14151d; color: #b9bac6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; white-space: pre; }
+.update-manual .ghost { justify-self: start; padding: 8px 13px; border: 1px solid var(--border-strong); border-radius: 10px; background: rgba(255,255,255,.05); color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.update-manual .ghost:hover { background: rgba(255,255,255,.09); color: var(--ink); }
+/* A caixa de "procurar ao abrir" divide o desenho com as outras opções do
+   aplicativo; aqui ela só perde a margem que existe dentro de Configurações. */
+.update-toggle { margin: 18px 0 0; }
+.update-link { color: #b6a6ff; word-break: break-all; }

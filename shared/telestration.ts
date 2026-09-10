@@ -65,6 +65,27 @@ export const DRAW_LIFETIMES = [
   { value: 0, label: 'Não apagar sozinho' },
 ] as const;
 
+// Onde o desenho funciona de verdade.
+//
+// A cópia do traço sobre a área de trabalho é o que dá sentido a desenhar na
+// tela de alguém: quem transmite continua olhando para o jogo, não para o
+// Tumacord, e é lá que o traço precisa aparecer. No Windows a janela
+// sobreposta se comporta — ela não rouba foco e `setContentProtection` a tira
+// da própria captura.
+//
+// No Linux, não. A janela sobreposta tira o foco do teclado de quem estava
+// jogando e não o devolve, e o portal do PipeWire não sabe excluí-la da
+// captura, então o traço volta dentro do vídeo. Uma live com desenho no Linux
+// custava o controle do jogo para quem estava transmitindo.
+//
+// Por isso a permissão não é mais só uma preferência de quem transmite: o
+// sistema de quem transmite decide primeiro. Quem está no Linux (ou no
+// navegador, que não tem área de trabalho para pintar) não recebe desenho, e
+// quem assiste vê o lápis desabilitado em vez de um botão que não faz nada.
+export function drawSupportedOn(platform: unknown): boolean {
+  return platform === 'win32';
+}
+
 export const STROKE_LIFETIME_MS = 6_000;
 /** O fim da vida é gasto desaparecendo, sem nunca passar de dois segundos. */
 export const STROKE_FADE_MS = 2_000;

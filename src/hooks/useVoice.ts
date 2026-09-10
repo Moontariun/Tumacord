@@ -20,8 +20,14 @@ import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSende
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 import { discardPendingScreenAudioPort, openScreenAudioStream, primeScreenAudioBridge, type ScreenAudioStream } from '../lib/screenAudioBridge';
-import { STROKE_LIFETIME_MS, applyDrawMessage, dropAuthor, expireStrokes, type DrawMessage, type DrawStroke } from '../../shared/telestration';
+import { STROKE_LIFETIME_MS, applyDrawMessage, drawSupportedOn, dropAuthor, expireStrokes, type DrawMessage, type DrawStroke } from '../../shared/telestration';
 import type { DrawPreferences } from '../lib/drawPreferences';
+
+// O sistema desta cópia não muda no meio da sessão, e é ele que decide se
+// alguém pode desenhar na minha transmissão. Vai junto do estado de voz para
+// que quem assiste saiba desabilitar o lápis em vez de mandar traço que o
+// servidor vai recusar.
+const DESENHO_SUPORTADO = drawSupportedOn(window.tumacordDesktop?.platform);
 
 export type { StreamQuality } from '../lib/screenQuality';
 
@@ -1391,6 +1397,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         speaking: false,
         allowDraw: drawingRef.current.allowDraw,
         drawLifetime: drawingRef.current.drawLifetime,
+        drawSupported: DESENHO_SUPORTADO,
       });
       playSound('join');
     });
@@ -1511,6 +1518,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         speaking: speakingRef.current,
         allowDraw: drawingRef.current.allowDraw,
         drawLifetime: drawingRef.current.drawLifetime,
+        drawSupported: DESENHO_SUPORTADO,
       });
       if (shouldInitiateRecovery(selfId.current, peer.socketId)) void negotiateRef.current(peer.socketId);
     };
@@ -1675,7 +1683,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // o mesmo campo para aceitar ou recusar o traço.
   useEffect(() => {
     if (!channelId) return;
-    publishState({ allowDraw: drawing.allowDraw, drawLifetime: drawing.drawLifetime });
+    publishState({ allowDraw: drawing.allowDraw, drawLifetime: drawing.drawLifetime, drawSupported: DESENHO_SUPORTADO });
     // Desligar não deixa para trás o que já estava na tela.
     if (!drawing.allowDraw && selfId.current) {
       socket?.emit('rtc:draw', { target: selfId.current, strokeId: 'off', color: '#ffffff', points: [], clearAll: true });

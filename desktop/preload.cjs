@@ -48,6 +48,25 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     return () => ipcRenderer.removeListener('tumacord:network-preferences-changed', handler);
   },
   directReport: (options) => ipcRenderer.invoke('tumacord:direct-report', options),
+  // Atualização. O processo principal procura sozinho ao abrir; a interface
+  // pergunta o que ele encontrou, e só ela pede para baixar e para aplicar.
+  update: {
+    state: () => ipcRenderer.invoke('tumacord:update-state'),
+    check: () => ipcRenderer.invoke('tumacord:update-check'),
+    download: () => ipcRenderer.invoke('tumacord:update-download'),
+    cancel: () => ipcRenderer.invoke('tumacord:update-cancel'),
+    apply: () => ipcRenderer.invoke('tumacord:update-apply'),
+    restart: () => ipcRenderer.invoke('tumacord:update-restart'),
+    dismiss: (version) => ipcRenderer.invoke('tumacord:update-dismiss', typeof version === 'string' ? version : ''),
+    markNotesSeen: (version) => ipcRenderer.invoke('tumacord:update-notes-seen', typeof version === 'string' ? version : ''),
+    setEnabled: (enabled) => ipcRenderer.invoke('tumacord:update-set-enabled', enabled !== false),
+    openPage: () => ipcRenderer.invoke('tumacord:update-open-page'),
+    onChanged: (listener) => {
+      const handler = (_event, state) => listener(state);
+      ipcRenderer.on('tumacord:update-changed', handler);
+      return () => ipcRenderer.removeListener('tumacord:update-changed', handler);
+    },
+  },
   toggleFullscreen: () => ipcRenderer.invoke('tumacord:toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('tumacord:is-fullscreen'),
   onFullscreenChanged: (listener) => {

@@ -6,6 +6,7 @@ import { Icon } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
 import { AdminPanel } from './components/AdminPanel';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
+import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './components/UpdatePanel';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
@@ -14,7 +15,7 @@ import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLo
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectReport, requestShortInvite, resolveAnyInvite, type DirectReport } from './lib/directLink';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
-import { DRAW_COLORS, DRAW_LIFETIMES, fitFrame, isPersistent, pointFromViewport, pointToViewport, pointsAreFarEnough, strokeOpacity, POINTS_PER_MESSAGE, STROKE_LIFETIME_MS, type DrawPoint, type DrawStroke } from '../shared/telestration';
+import { DRAW_COLORS, DRAW_LIFETIMES, drawSupportedOn, fitFrame, isPersistent, pointFromViewport, pointToViewport, pointsAreFarEnough, strokeOpacity, POINTS_PER_MESSAGE, STROKE_LIFETIME_MS, type DrawPoint, type DrawStroke } from '../shared/telestration';
 import { readDrawPreferences, writeDrawPreferences, type DrawPreferences } from './lib/drawPreferences';
 import { copyText } from './lib/clipboard';
 import { cachedTurnServers, forgetTurnServers, refreshTurnServers } from './lib/iceServers';
@@ -27,6 +28,10 @@ import logoUrl from '../assets/tumacord-logo.png';
 import packageMetadata from '../package.json';
 
 const APP_VERSION = packageMetadata.version;
+// Se a MINHA transmissão aceita desenho. Só o Windows aceita, e o motivo está
+// em `shared/telestration.ts`: no Linux a janela sobreposta rouba o foco do
+// teclado e ainda volta dentro da captura.
+const DRAW_SUPPORTED_HERE = drawSupportedOn(window.tumacordDesktop?.platform);
 const qualityDropdownOptions = qualityOptions.map(([value, option]) => ({ value, label: option.label }));
 
 // Um erro dentro de um efeito derrubava a árvore inteira: a janela ficava
@@ -174,12 +179,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const [syncFiles, setSyncFiles] = useState(() => localStorage.getItem('tumacord.sync-files') === 'true');
   const [connected, setConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const update = useUpdates();
   const [adminOpen, setAdminOpen] = useState(false);
   const [memberListOpen, setMemberListOpen] = useState(true);
   const [toast, setToast] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(readSoundEnabled);
   const [soundVolume, setFeedbackVolume] = useState(readSoundVolume);
-  const [appFullscreen, setAppFullscreen] = useState(false);
   const [discoveredCalls, setDiscoveredCalls] = useState<DiscoveredCall[]>([]);
   const [networkPreferences, setNetworkPreferences] = useState<NetworkPreferences>(() => currentNetworkPreferences());
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -271,9 +277,13 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     localStorage.setItem('tumacord.stream-muted', String(muted));
   }, []);
 
+  // A tela cheia da janela inteira perdeu o botão na 0.9.0 e ficou só no F11.
+  // Ela nunca foi a tela cheia que alguém queria numa call — essa é a do
+  // quadro da live, que continua no canto de cada transmissão. Dois botões de
+  // maximizar lado a lado, fazendo coisas diferentes, era a fonte da confusão.
   const toggleAppFullscreen = useCallback(async () => {
     try {
-      if (window.tumacordDesktop) setAppFullscreen(await window.tumacordDesktop.toggleFullscreen());
+      if (window.tumacordDesktop) await window.tumacordDesktop.toggleFullscreen();
       else if (document.fullscreenElement) await document.exitFullscreen();
       else await document.documentElement.requestFullscreen();
     } catch {
@@ -481,16 +491,6 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   }, [onLogout, onSessionChange, session.connectionMode, session.password, session.rememberMe, session.resumeChannelId, session.serverUrl, session.token, session.user.id, session.user.username, showToast]);
 
   useEffect(() => {
-    if (!window.tumacordDesktop) {
-      const update = () => setAppFullscreen(Boolean(document.fullscreenElement));
-      document.addEventListener('fullscreenchange', update);
-      return () => document.removeEventListener('fullscreenchange', update);
-    }
-    void window.tumacordDesktop.isFullscreen().then(setAppFullscreen);
-    return window.tumacordDesktop.onFullscreenChanged(setAppFullscreen);
-  }, []);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'F11') return;
       event.preventDefault();
@@ -550,7 +550,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     const ponte = window.tumacordDesktop;
     if (!ponte?.drawOverlay) return;
     const fonte = voice.screenSource;
-    if (!fonte || fonte.kind !== 'screen' || !drawing.allowDraw || !meusTracos?.length) {
+    // `DRAW_SUPPORTED_HERE` decide antes de tudo: fora do Windows não existe
+    // traço para pintar, porque ninguém pode desenhar nesta transmissão.
+    if (!DRAW_SUPPORTED_HERE || !fonte || fonte.kind !== 'screen' || !drawing.allowDraw || !meusTracos?.length) {
       void ponte.drawOverlay(null).catch(() => undefined);
       return;
     }
@@ -690,9 +692,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
         <div className="topbar-spacer" />
         <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : `Host dinâmico por enlace direto${networkPreferences.zeroTierEnabled ? ', rede local e ZeroTier' : ' e rede local'}`}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
+        {/* No navegador não há ponte de atualização: quem atualiza a versão
+            web é o servidor, e um botão que não faz nada seria pior do que
+            botão nenhum. */}
+        {update.supported && <UpdateButton state={update.state} onOpen={() => setUpdateOpen(true)} />}
         {isServerAdmin && <button className="admin-toolbar-button" onClick={() => setAdminOpen(true)} title="Painel administrativo"><Icon name="shield" /></button>}
         <button className={memberListOpen ? 'toolbar-active' : ''} onClick={() => setMemberListOpen((value) => !value)} title="Membros"><Icon name="users" /></button>
-        <button onClick={() => void toggleAppFullscreen()} title={appFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}><Icon name={appFullscreen ? 'minimize' : 'maximize'} /></button>
       </header>
       <div className="content-row">
         {selectedChannel?.type === 'voice'
@@ -705,6 +710,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(media.user?.id && mutedUsers[media.user.id])} volume={media.user?.id ? Math.max(0, Math.min(2, userVolumes[media.user.id] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
+    {updateOpen && <UpdateModal bridge={update} onClose={() => setUpdateOpen(false)} onNotice={showToast} />}
+    {update.state?.installedRelease && update.state.notesSeen !== update.state.installed && <WhatsNewModal release={update.state.installedRelease} onClose={() => update.markNotesSeen(update.state?.installed ?? '')} onOpenPage={update.openPage} />}
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
@@ -846,12 +853,18 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
   const meuSocket = voice.members.find((member) => member.id === voice.user.id)?.socketId ?? '';
   const tileDrawing = (target: string, dono: VoiceState | undefined, ehMinha: boolean): TileDrawing | undefined => {
     if (!target) return undefined;
+    // Duas recusas diferentes, e a diferença aparece no lápis: o sistema de
+    // quem transmite não sabe receber traço, ou a pessoa desligou o desenho.
+    // Nos dois casos o botão continua na tela, translúcido, dizendo qual dos
+    // dois é — some tinha o mesmo efeito de um botão que não faz nada.
+    const sistemaAceita = ehMinha ? DRAW_SUPPORTED_HERE : dono?.drawSupported === true;
     const permite = ehMinha ? drawing.allowDraw : dono?.allowDraw !== false;
     const prazo = ehMinha ? drawing.drawLifetime : dono?.drawLifetime ?? STROKE_LIFETIME_MS;
     return {
       strokes: voice.drawings[target] ?? [],
       lifetime: prazo,
-      allowed: permite,
+      allowed: sistemaAceita && permite,
+      blocked: !sistemaAceita ? 'sistema' : !permite ? 'desligado' : '',
       color: drawing.drawColor,
       onStroke: (strokeId, points, done) => voice.sendDraw({ target, strokeId, color: drawing.drawColor, points, done }),
       onClear: () => voice.sendDraw({ target, strokeId: 'clear', color: drawing.drawColor, points: [], clear: true }),
@@ -1070,6 +1083,8 @@ interface TileDrawing {
   lifetime: number;
   /** Se esta transmissão aceita desenho agora. */
   allowed: boolean;
+  /** Por que não aceita, quando não aceita. Vazio quando aceita. */
+  blocked: '' | 'sistema' | 'desligado';
   color: string;
   onStroke: (strokeId: string, points: DrawPoint[], done: boolean) => void;
   onClear: () => void;
@@ -1307,7 +1322,7 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     toggleTheater();
   };
   const podeRabiscar = Boolean(drawing?.allowed && drawArmed);
-  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${podeRabiscar ? 'is-drawing' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{drawing && <DrawingLayer videoRef={mediaRef} strokes={drawing.strokes} lifetime={drawing.lifetime} canDraw={podeRabiscar} color={drawing.color} onStroke={drawing.onStroke} onClear={drawing.onClear} />}{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{drawing?.allowed && <button className={podeRabiscar ? 'is-on' : ''} aria-pressed={podeRabiscar} onClick={() => setDrawArmed((atual) => !atual)} title={podeRabiscar ? 'Parar de desenhar (Esc)' : 'Desenhar sobre esta transmissão'}><Icon name="pencil" /></button>}{drawing?.canClearAll && drawing.strokes.length > 0 && <button onClick={() => drawing.onClearAll?.()} title="Apagar tudo o que desenharam na minha tela"><Icon name="eraser" /></button>}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${podeRabiscar ? 'is-drawing' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{drawing && <DrawingLayer videoRef={mediaRef} strokes={drawing.strokes} lifetime={drawing.lifetime} canDraw={podeRabiscar} color={drawing.color} onStroke={drawing.onStroke} onClear={drawing.onClear} />}{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{drawing && <button className={podeRabiscar ? 'is-on' : ''} aria-pressed={podeRabiscar} disabled={!drawing.allowed} onClick={() => setDrawArmed((atual) => !atual)} title={drawing.blocked === 'sistema' ? 'Só dá para desenhar na transmissão de quem está no Windows' : drawing.blocked === 'desligado' ? 'O desenho está desligado nesta transmissão' : podeRabiscar ? 'Parar de desenhar (Esc)' : 'Desenhar sobre esta transmissão'}><Icon name="pencil" /></button>}{drawing?.canClearAll && drawing.strokes.length > 0 && <button onClick={() => drawing.onClearAll?.()} title="Apagar tudo o que desenharam na minha tela"><Icon name="eraser" /></button>}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote, mediaRef }: { stream: MediaStream; muted: boolean; volume?: number; speakerId?: string; audioOnly?: boolean; remote?: boolean; mediaRef?: React.RefObject<HTMLVideoElement | null> }) {
@@ -1590,9 +1605,11 @@ function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferen
   return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Desenho na tela</h1>
     <p className="settings-intro">Quem assiste à sua transmissão pode rabiscar em cima dela para apontar alguma coisa. O traço aparece na live de todo mundo que está vendo, e na sua tela de verdade enquanto você compartilha o monitor inteiro.</p>
 
-    <label className="sound-toggle"><input type="checkbox" checked={drawing.allowDraw} onChange={(event) => onChange({ allowDraw: event.target.checked })} /><span><strong>Deixar quem assiste desenhar na minha transmissão</strong><small>Desligado, o lápis some para quem está vendo e o servidor recusa qualquer traço — nem um cliente modificado desenha na sua tela. O que já estava desenhado é apagado na hora.</small></span></label>
+    {!DRAW_SUPPORTED_HERE && <div className="quality-note"><strong>Neste sistema, ninguém desenha na sua transmissão</strong><span>Receber desenho só funciona no Windows, e a partir da 0.9.0 é só lá que ele é oferecido. A janela que pinta o traço sobre a área de trabalho tira o foco do teclado de quem está jogando no Linux e não o devolve, e o portal do PipeWire não sabe deixá-la fora da captura — o traço voltaria dentro do próprio vídeo. Quem assiste vê o lápis desabilitado na sua live, e o servidor recusa o traço. <strong>Você continua desenhando na transmissão de quem estiver no Windows</strong>, normalmente.</span></div>}
 
-    {drawing.allowDraw && <>
+    <label className="sound-toggle"><input type="checkbox" disabled={!DRAW_SUPPORTED_HERE} checked={DRAW_SUPPORTED_HERE && drawing.allowDraw} onChange={(event) => onChange({ allowDraw: event.target.checked })} /><span><strong>Deixar quem assiste desenhar na minha transmissão</strong><small>Desligado, o lápis fica desabilitado para quem está vendo e o servidor recusa qualquer traço — nem um cliente modificado desenha na sua tela. O que já estava desenhado é apagado na hora.</small></span></label>
+
+    {DRAW_SUPPORTED_HERE && drawing.allowDraw && <>
       <div className="setting-label"><span className="setting-title">Quanto tempo o traço fica<small>Vale para quem desenhar na sua transmissão. O padrão some sozinho; "não apagar" deixa o desenho parado até alguém limpar.</small></span><Dropdown label="Duração do traço" value={String(drawing.drawLifetime)} options={DRAW_LIFETIMES.map((opcao) => ({ value: String(opcao.value), label: opcao.label }))} onChange={(valor) => onChange({ drawLifetime: Number(valor) })} /></div>
 
       {isPersistent(drawing.drawLifetime) && <div className="quality-note"><strong>O traço não vai sumir sozinho</strong><span>Use o borrachinha no canto do seu quadro para apagar tudo de uma vez. Quem desenhou também pode limpar o próprio traço, e tudo é apagado quando a transmissão termina.</span></div>}
@@ -1614,6 +1631,22 @@ function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferen
 
     <div className="quality-note"><strong>Como se desenha</strong><span>No quadro de quem está transmitindo, o lápis liga o modo de desenho. Arrastar faz um traço; um toque sem arrastar deixa um apontador que pulsa. Enquanto o lápis está ligado, o clique duplo para ampliar fica desativado naquele quadro.</span></div>
   </section>;
+}
+
+// Cada jeito de instalar tem um jeito de atualizar, e a diferença muda o que
+// acontece com a sessão aberta. Dizer isso antes é o que evita alguém aplicar
+// no meio de uma call achando que só ia baixar.
+const INSTALL_KIND_NOTES: Record<TumacordInstallKind, string> = {
+  'linux-managed': 'Instalação feita pelo script do Linux. A versão nova entra em uma pasta própria e só o atalho é trocado, de uma vez; a sessão aberta continua na versão de antes e a nova passa a valer ao reabrir o Tumacord. A versão anterior fica guardada para recuperação.',
+  'linux-appimage': 'AppImage. O arquivo é substituído no lugar — a sessão aberta continua inteira, porque ela já está montada — e a versão nova vale ao reabrir.',
+  'windows-installed': 'Instalação do Windows. O instalador da versão nova é aberto e o Tumacord fecha para ele poder substituir a instalação; o Windows vai pedir sua confirmação.',
+  'windows-portable': 'Portable do Windows. Um executável em uso não pode ser substituído, então a versão nova é guardada ao lado da atual e a troca é sua, com o aplicativo fechado.',
+  unknown: 'Esta cópia não veio por um caminho que o Tumacord saiba atualizar sozinho. Dá para avisar da versão nova e abrir a página dela; instalar continua sendo pelo instalador.',
+};
+
+function lastCheckLabel(moment: number): string {
+  if (!moment) return 'Ainda não procurei nesta máquina.';
+  return `Última procura: ${new Date(moment).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}.`;
 }
 
 function NetworkSettings({ preferences, onChange, onClose }: { preferences: NetworkPreferences; onChange: (patch: Partial<NetworkPreferences>) => void; onClose: () => void }) {
