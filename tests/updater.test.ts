@@ -20,7 +20,10 @@ const { Updater, isAllowedUrl, safeFileName, sanitizeState } = require('../deskt
   sanitizeState: (input: unknown) => { enabled: boolean; lastCheck: number; dismissed: string; notesSeen: string };
 };
 
-const SO_POSIX = process.platform === 'win32' ? 'estes caminhos são do Linux' : false;
+// Trocar o atalho `current` é um `rename` de symlink, e o Windows recusa isso
+// sem privilégio. O que depende disso é pulado lá; o resto — inclusive o
+// caminho do portable, que é do Windows — roda nos dois sistemas.
+const SO_POSIX = process.platform === 'win32' ? 'trocar symlink exige privilégio no Windows' : false;
 
 function ambiente(t: { after: (fn: () => void) => void }, extra: Record<string, unknown> = {}) {
   const raiz = mkdtempSync(path.join(tmpdir(), 'tumacord-updater-'));
@@ -92,7 +95,7 @@ test('ignorar uma versão e desligar a procura ficam guardados', (t) => {
 // A instalação do Linux vive em pastas imutáveis com um atalho `current`. É
 // isso que permite atualizar durante uma call: a sessão aberta continua lendo a
 // pasta antiga, que ninguém tocou.
-test('no Linux gerenciado, a build nova entra ao lado e só o atalho muda', (t) => {
+test('no Linux gerenciado, a build nova entra ao lado e só o atalho muda', { skip: SO_POSIX }, (t) => {
   const { raiz, updater } = ambiente(t, { kind: 'linux-managed' });
   const dataHome = path.join(raiz, 'home', '.local', 'share');
   updater.env = { XDG_DATA_HOME: dataHome };
@@ -125,7 +128,7 @@ test('no Linux gerenciado, a build nova entra ao lado e só o atalho muda', (t) 
   assert.equal(realpathSync(path.join(dataHome, 'tumacord', 'previous')), antiga, 'e continua alcançável para voltar');
   assert.equal(readFileSync(path.join(dataHome, 'tumacord', 'version'), 'utf8').trim(), '0.9.1');
   assert.equal(existsSync(pacote), false, 'o arquivo baixado não fica ocupando disco depois de aplicado');
-}, { skip: SO_POSIX });
+});
 
 test('um pacote sem o executável não vira instalação', (t) => {
   const { raiz, updater } = ambiente(t, { kind: 'linux-managed' });
@@ -142,7 +145,7 @@ test('um pacote sem o executável não vira instalação', (t) => {
 
   assert.throws(() => updater.applyFile(pacote, '0.9.1'), /não contém o executável/);
   assert.equal(existsSync(path.join(dataHome, 'tumacord', 'current')), false, 'nenhum atalho é criado apontando para nada');
-}, { skip: SO_POSIX });
+});
 
 // O AppImage em execução continua montado a partir do arquivo aberto: trocar o
 // arquivo por baixo é seguro, e é o que o próprio formato espera.
@@ -160,7 +163,7 @@ test('o AppImage é substituído no lugar onde ele já estava', (t) => {
   assert.equal(readFileSync(instalado, 'utf8'), 'appimage novo');
   assert.equal(existsSync(baixado), false);
   assert.equal(existsSync(`${instalado}.novo`), false, 'nenhum arquivo pela metade fica para trás');
-}, { skip: SO_POSIX });
+});
 
 // Um portable não se substitui em execução: o Windows mantém o arquivo do
 // processo bloqueado. O certo é deixar o novo ao lado e dizer isso.
@@ -217,7 +220,7 @@ test('o estado devolvido é uma cópia, não a memória do atualizador', (t) => 
   assert.equal(updater.state().phase, 'idle');
 });
 
-test('o atalho `previous` some do caminho quando a pasta da versão é a mesma', (t) => {
+test('o atalho `previous` some do caminho quando a pasta da versão é a mesma', { skip: SO_POSIX }, (t) => {
   const { raiz, updater } = ambiente(t, { kind: 'linux-managed' });
   const dataHome = path.join(raiz, 'home', '.local', 'share');
   updater.env = { XDG_DATA_HOME: dataHome };
@@ -239,4 +242,4 @@ test('o atalho `previous` some do caminho quando a pasta da versão é a mesma',
   updater.applyFile(pacote, '0.9.1');
   assert.equal(readlinkSync(path.join(dataHome, 'tumacord', 'current')), atual);
   assert.equal(existsSync(path.join(atual, 'tumacord')), true);
-}, { skip: SO_POSIX });
+});
