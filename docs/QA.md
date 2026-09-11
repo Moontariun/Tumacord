@@ -193,6 +193,35 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Mesa de desenho compartilhada — 0.9.1
+
+| Item | Estado |
+| --- | --- |
+| Três pessoas desenham ao mesmo tempo e convergem | TESTADO AUTOMATICAMENTE (servidor real) |
+| Quem entra depois vê os desenhos anteriores | TESTADO AUTOMATICAMENTE (servidor real) |
+| Reconectar e reenviar o mesmo lote não duplica traços | TESTADO AUTOMATICAMENTE (servidor real) |
+| Passar de 64 traços não apaga os primeiros | TESTADO AUTOMATICAMENTE (servidor real e modelo) |
+| No teto, a recusa é explícita e nada é descartado | TESTADO AUTOMATICAMENTE |
+| Desfazer não apaga o trabalho alheio | TESTADO AUTOMATICAMENTE (servidor real e modelo) |
+| Borracha: cada um apaga os seus; quem gerencia, os demais | TESTADO AUTOMATICAMENTE (servidor real) |
+| Observador não desenha, e a recusa vem do servidor | TESTADO AUTOMATICAMENTE (servidor real) |
+| Revogação bloqueia a operação seguinte de quem já está conectado | TESTADO AUTOMATICAMENTE (servidor real) |
+| Bloquear a mesa impede todo mundo, menos quem gerencia | TESTADO AUTOMATICAMENTE (servidor real) |
+| Limpar tudo chega a quem reconecta depois | TESTADO AUTOMATICAMENTE (servidor real) |
+| Salvar e reabrir no dedicado preserva o conteúdo | TESTADO AUTOMATICAMENTE (servidor reiniciado de verdade) |
+| P2P: a mesa sobrevive à troca de host | TESTADO AUTOMATICAMENTE (dois servidores P2P reais) |
+| Servidor dedicado recusa mesa vinda de fora | TESTADO AUTOMATICAMENTE (servidor real) |
+| Lacuna de revisão vira pedido de recuperação | TESTADO AUTOMATICAMENTE (modelo) |
+| Compactar o histórico não apaga traço visível | TESTADO AUTOMATICAMENTE (modelo) |
+| Coordenadas iguais em janelas de tamanhos diferentes | TESTADO AUTOMATICAMENTE (modelo) |
+| Desenhar, desfazer, apagar e limpar pela interface | TESTADO NO APLICATIVO (dois clientes no mesmo servidor) |
+| Bloquear rebaixa o outro cliente na hora | TESTADO NO APLICATIVO (dois clientes no mesmo servidor) |
+| Exportação em PNG | TESTADO NO APLICATIVO (imagem gerada, 44 KB) |
+| Pausa da pintura com a janela em segundo plano | TESTADO NO APLICATIVO |
+| Cursor de outra pessoa aparecendo e sumindo | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Caneta com pressão / tela sensível ao toque | FORA DESTA VERSÃO |
+| Desenhar em uma mesa aberta durante uma call real | IMPLEMENTADO — REQUER TESTE MANUAL |
+
 ## Desenho só na transmissão do Windows — 0.9.0
 
 | Item | Estado |

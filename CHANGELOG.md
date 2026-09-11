@@ -1,5 +1,100 @@
 # Histórico de versões
 
+## 0.9.1 — uma mesa de desenho para o grupo
+
+Esta versão sai da **0.9.0** e acrescenta uma coisa: um quadro em branco dentro
+do app, onde várias pessoas desenham ao mesmo tempo.
+
+**O que muda no dia a dia**
+
+Na barra dos canais apareceu **Mesas de desenho**. Você clica no `+`, dá um
+nome, e recebe uma folha em branco. Quem enxerga aquele canal recebe o anúncio
+e escolhe **entrar na mesa** — ninguém é arrastado para dentro dela.
+
+A mesa **não depende de live**. Não é preciso estar transmitindo a tela, não é
+preciso estar em call, e não existe janela sobreposta ao jogo no meio do
+caminho. É por isso que ela funciona igual no Linux e no Windows: o desenho
+acontece dentro do Tumacord, e não sobre a área de trabalho de alguém.
+
+Se a call estiver acontecendo, ela continua acontecendo. A voz não é
+interrompida para desenhar, e desenhar não exige a voz.
+
+**O que dá para fazer nesta primeira versão**
+
+Caneta, sete cores, cinco espessuras. Borracha que apaga **o traço inteiro**,
+nunca um pedaço dele. Desfazer o seu próprio traço. Zoom e deslocamento da
+folha. Lista de quem está na mesa. Exportar o quadro em PNG.
+
+O zoom é **seu**. Aproximar para olhar um canto não arrasta a visão de mais
+ninguém: a folha tem coordenadas próprias, e cada pessoa olha para ela de onde
+quiser, em qualquer tamanho de janela.
+
+**Quem criou a mesa manda nela**
+
+Bloquear novos desenhos, aceitar ou recusar observadores, tirar e devolver a
+permissão de desenhar de uma pessoa, limpar o quadro, encerrar e — no servidor
+dedicado — arquivar guardando o conteúdo.
+
+**Limpar tudo pergunta antes.** Ele apaga o trabalho do grupo, e não só o seu.
+
+Tirar a permissão de alguém vale na operação seguinte, e não na próxima vez que
+a pessoa entrar: quem foi rebaixado a observador para de desenhar na hora,
+continuando a ver o quadro.
+
+**Desfazer nunca apaga o trabalho alheio**
+
+Desfazer age sobre um objeto identificado e **seu** — não sobre "o último item
+da lista", que quase sempre é de outra pessoa. A borracha segue a mesma regra:
+cada um apaga os seus, e quem gerencia a mesa apaga os dos outros. A recusa
+mora no servidor, não na interface: esconder um botão é conveniência, não
+autorização.
+
+**Nada some sozinho para liberar espaço**
+
+O desenho sobre a live guarda no máximo 64 traços e joga fora o mais antigo —
+o que é correto para um apontamento que ia sumir de qualquer jeito, e seria
+destruição numa mesa. Aqui o teto é outro, e o comportamento no teto é outro:
+ao encostar no limite, **a operação nova é recusada com uma mensagem** e o que
+já está desenhado continua exatamente onde estava.
+
+**Entrar atrasado, cair e voltar**
+
+Quem entra no meio recebe o quadro em uma revisão conhecida mais tudo o que
+aconteceu depois — inclusive o que aconteceu enquanto a tela carregava. Quem
+cai e volta diz até onde chegou e recebe só a diferença; se ficou para trás
+demais, recebe o quadro inteiro.
+
+Cada pedaço de traço viaja com identidade própria, e é por isso que uma
+reconexão que reenvia o que já tinha enviado **não desenha duas vezes**.
+
+**No servidor dedicado, a mesa fica**
+
+Ela é gravada no arquivo do servidor e volta inteira quando ele reinicia.
+Desligar o servidor grava antes de sair, para o último traço não se perder na
+janela entre a mão levantar e o arquivo ser escrito.
+
+**No P2P, a mesa dura enquanto o grupo durar**
+
+Quem ordena as operações é o host, que é o mesmo processo rodando na máquina de
+quem abriu a call. Se o host sair, o servidor do próximo sobe vazio e quem
+estava na mesa devolve o quadro — a mesa atravessa a troca de host e o grupo
+continua de onde parou.
+
+Isso está dito na tela, dentro da própria mesa, junto com o botão de exportar:
+**ela não é guardada em servidor nenhum** e some quando a última pessoa sai. E
+ela não atravessa para fora do grupo: um servidor dedicado recusa qualquer mesa
+vinda de fora, e no P2P só quem está na call agora devolve a mesa dela.
+
+**Detalhes que não aparecem, mas se sentem**
+
+- o cursor das outras pessoas aparece enquanto elas mexem e some quando param;
+  ele não entra no histórico e não sobrevive a um recarregamento;
+- com a janela em segundo plano, a mesa para de pintar e de mandar cursor —
+  a sincronização continua, então voltar não mostra um quadro velho;
+- o traço sai da sua mão na hora, sem esperar a ida e a volta pela rede;
+- o histórico é compactado em snapshot quando cresce, e **compactar troca
+  histórico por snapshot, nunca traço por espaço**.
+
 ## 0.9.0 — o aplicativo avisa quando existe versão nova
 
 Esta versão sai da **0.8.8**, não da 0.8.9. A 0.8.9 foi retirada (veja abaixo), e

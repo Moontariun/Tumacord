@@ -6,6 +6,7 @@ import { profileIsNewer } from '../shared/profileVersion.js';
 import { countOwners, migrateRoles, normalizeRole, type Role } from './roles.js';
 import { applyOrder, detachCategory, nextPosition, normalizePositions, type CategoryRecord, type ChannelRecord } from './channels.js';
 import { appendAudit, type AuditEntry } from './audit.js';
+import type { StoredBoard } from './whiteboards.js';
 
 export interface StoredUser {
   id: string;
@@ -51,6 +52,10 @@ interface StoredData {
   sessions: StoredSession[];
   invites: StoredInvite[];
   auditLog: AuditEntry[];
+  // Mesas de desenho do servidor dedicado. Ausente nos arquivos anteriores à
+  // 0.9.1, e ausência é lista vazia — carregar sem elas precisa continuar
+  // funcionando.
+  boards: StoredBoard[];
 }
 
 type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
@@ -70,6 +75,7 @@ const initialData = (): StoredData => ({
   sessions: [],
   invites: [],
   auditLog: [],
+  boards: [],
 });
 
 function profileKey(username: string): string {
@@ -143,6 +149,7 @@ export class JsonStore {
         profiles: [...profiles.values()],
         sessions,
         auditLog: parsed.auditLog ?? [],
+        boards: parsed.boards ?? [],
       };
       if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
@@ -277,6 +284,16 @@ export class JsonStore {
 
   get categories(): readonly CategoryRecord[] { return this.data.categories; }
   get auditLog(): readonly AuditEntry[] { return this.data.auditLog; }
+  get boards(): readonly StoredBoard[] { return this.data.boards ?? (this.data.boards = []); }
+
+  // As mesas vão para o disco inteiras, e não por operação: o arquivo já é
+  // reescrito por completo a cada gravação, e um caminho incremental aqui só
+  // criaria uma segunda verdade para manter em dia. Quem chama debounce a
+  // gravação — desenhar produz operações a poucos milissegundos de distância.
+  async saveBoards(boards: readonly StoredBoard[]): Promise<void> {
+    this.data.boards = [...boards];
+    await this.save();
+  }
 
   async createChannel(channel: Omit<Channel, 'position'>): Promise<Channel> {
     const criado = { ...channel, position: nextPosition(this.data.channels) } as Channel;

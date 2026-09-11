@@ -99,6 +99,24 @@ Duas permissões decidem se um traço passa, e as duas moram no servidor:
 
 Ausência de `drawSupported` é lida como "não recebe": um cliente anterior à 0.9.0 não declara o sistema, e adivinhar o sistema de alguém para pintar na área de trabalho dele seria a escolha errada.
 
+## Mesa de desenho compartilhada
+
+A mesa é o oposto do desenho sobre a live em quase tudo. Aquilo é apontamento — vive dentro do vídeo, tem prazo, e depende de uma janela sobreposta que só se comporta no Windows. A mesa é o trabalho: ela fica, ela é o motivo de estarem ali, e ela é desenhada dentro do próprio app, sem overlay e sem live, o que a torna igual no Linux e no Windows.
+
+`shared/whiteboard.ts` é o modelo, e é puro: coordenadas de documento (a folha tem tamanho próprio, independente de qualquer janela), as operações, os limites e a função que aplica uma operação a um quadro. Zoom e deslocamento são estado local de quem olha; a folha é a única coisa compartilhada.
+
+**Operação, e não imagem.** O que viaja é "traço tal, destes pontos, desta cor", em pedaços, conforme a mão anda — nunca um quadro inteiro a cada movimento. Cada pedaço leva um id próprio: é ele que faz a retentativa de uma reconexão não virar traço duplo.
+
+**Revisão densa.** `server/whiteboards.ts` ordena: cada operação aceita ganha o próximo número, e **recusa não gasta número**. Com isso quem recebe separa três casos com uma comparação — a revisão esperada chegou (aplica), uma que já passou voltou (ignora), ou saltou (pede recuperação). Deduplicação e detecção de lacuna saem do mesmo lugar.
+
+**Quem recebe não reavalia permissão.** A permissão foi decidida quando a operação foi aceita. Refazer a conta do lado de quem recebe faria os quadros divergirem — a borracha de quem gerencia a mesa, por exemplo, seria recusada por todo mundo, e o traço apagado reapareceria só na tela dos outros. `applyOrderedOp` existe para marcar esse contrato.
+
+**Snapshot mais o que veio depois.** Entrar atrasado e reconectar são o mesmo caminho: "estou na revisão tal, me diga o que mudou". A resposta é a diferença, ou o quadro inteiro quando a pessoa ficou para trás do snapshot. Compactar troca *histórico* por snapshot — nunca traço por espaço — porque o snapshot já carrega tudo o que está visível.
+
+**Nada some sozinho.** O desenho sobre a live guarda 64 traços e descarta o mais antigo; aqui o teto recusa a operação nova com uma mensagem e preserva o que está na folha. Desfazer age sobre um objeto identificado e do próprio autor, nunca sobre "o último item da lista".
+
+No dedicado, as mesas são gravadas no arquivo do servidor (gravação adiada em um segundo, mais uma descarga no encerramento, para o último traço não cair na janela entre a mão levantar e o arquivo ser escrito). No P2P nada é gravado: quem ordena é o host, e a mesa atravessa a troca de host porque quem estava nela devolve o snapshot ao servidor novo. Essa devolução é recusada por um servidor dedicado e exige, no P2P, que quem entrega esteja na call daquele host agora.
+
 ## Atualização do aplicativo
 
 A fonte é o repositório do GitHub, e ela é a mesma para o aplicativo e para o servidor. `desktop/update-check.cjs` recebe a lista de Releases já baixada e devolve uma decisão — sem rede e sem disco, para poder ser testada inteira: qual versão oferecer, se ela foi retirada (lista embutida ou o marcador `<!-- tumacord:versao-quebrada -->` no corpo da Release), qual arquivo serve para o jeito daquela instalação (`linux-managed`, `linux-appimage`, `windows-installed`, `windows-portable`, `unknown`) e quais são as notas da versão instalada.

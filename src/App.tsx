@@ -5,6 +5,8 @@ import { profileIsNewer } from '../shared/profileVersion';
 import { Icon } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
 import { AdminPanel } from './components/AdminPanel';
+import { Whiteboard } from './components/Whiteboard';
+import { useBoards } from './lib/boards';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './components/UpdatePanel';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
@@ -210,6 +212,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     try { return JSON.parse(localStorage.getItem('tumacord.user-muted') ?? '{}') as Record<string, boolean>; } catch { return {}; }
   });
   const devices = useDevices();
+  const [boardPromptOpen, setBoardPromptOpen] = useState(false);
   const [drawing, setDrawing] = useState<DrawPreferences>(() => readDrawPreferences(session.user.profile?.accentColor));
   const changeDrawing = useCallback((patch: Partial<DrawPreferences>) => {
     setDrawing((atual) => writeDrawPreferences({ ...atual, ...patch }));
@@ -510,6 +513,25 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     return [text, voiceChannel].filter((channel): channel is Channel => Boolean(channel));
   }, [session.connectionMode, snapshot.channels]);
   const selectedChannel = visibleChannels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0];
+  // A mesa de desenho não depende de live nem de call: ela nasce vinculada a
+  // um canal, e quem enxerga o canal enxerga a mesa. A call pode estar
+  // acontecendo ao lado, e não precisa estar.
+  const boards = useBoards({
+    socket,
+    connected,
+    userId: session.user.id,
+    connectionMode: session.connectionMode ?? 'p2p',
+    channelId: selectedChannel?.id ?? 'geral',
+    voiceChannelId: voice.channelId ?? undefined,
+    onNotice: showToast,
+  });
+  const createBoard = useCallback(async (name: string) => {
+    const criada = await boards.create(name);
+    setBoardPromptOpen(false);
+    if (!criada) return;
+    boards.open(criada.id);
+    showToast(`Mesa “${criada.name}” criada. O anúncio foi para o canal.`);
+  }, [boards, showToast]);
 
   useEffect(() => {
     if (!visibleChannels.length || visibleChannels.some((channel) => channel.id === selectedChannelId)) return;
@@ -613,6 +635,10 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
   const openChannel = (channel: Channel) => {
     setSelectedChannelId(channel.id);
+    // Abrir um canal sai da mesa: o quadro continua inteiro do outro lado, e
+    // voltar para ele é um clique. Deixar a mesa por cima do canal escolhido
+    // seria mostrar uma coisa e dizer outra no topo.
+    if (boards.active) boards.close();
     if (channel.type === 'voice' && voice.channelId !== channel.id) void voice.join(channel.id);
   };
 
@@ -672,6 +698,28 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
             })}
           </div>)}
         </ChannelGroup>
+        {/* A mesa não é um canal: é uma atividade que acontece dentro de um.
+            Ela fica aqui embaixo, com o botão de criar no mesmo lugar dos
+            outros grupos, e entrar nela é uma escolha explícita. */}
+        <ChannelGroup title="Mesas de desenho" addLabel="Criar mesa" onAdd={() => setBoardPromptOpen(true)}>
+          {boards.boards.map((board) => {
+            const canal = snapshot.channels.find((candidate) => candidate.id === board.channelId);
+            return <button
+              key={board.id}
+              className={`board-entry ${boards.active?.board.id === board.id ? 'selected' : ''}`}
+              onClick={() => boards.open(board.id)}
+              title={`Entrar na mesa ${board.name}`}
+            >
+              <Icon name="board" />
+              <span className="board-entry-copy">
+                <strong>{board.name}</strong>
+                <small>{board.createdByName} · {canal ? `#${canal.name}` : 'canal removido'}{board.locked ? ' · bloqueada' : board.status === 'closed' ? ' · encerrada' : ''}</small>
+              </span>
+              {board.participants > 0 && <em className="board-entry-count">{board.participants}</em>}
+            </button>;
+          })}
+          {!boards.boards.length && <p className="channel-hint">Nenhuma mesa por aqui. Crie uma para desenhar junto — não precisa de call nem de transmissão.</p>}
+        </ChannelGroup>
       </div>
       {voice.channelId && <div className="voice-status">
         <div><strong>Voz conectada</strong><span>{currentVoiceChannel?.name}</span></div>
@@ -687,9 +735,10 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
     <section className="main-panel">
       <header className="topbar">
-        <Icon name={selectedChannel?.type === 'voice' ? 'voice' : 'hash'} />
-        <strong>{selectedChannel?.name ?? 'Tumacord'}</strong>
-        {selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
+        <Icon name={boards.active ? 'board' : selectedChannel?.type === 'voice' ? 'voice' : 'hash'} />
+        <strong>{boards.active ? boards.active.board.name : selectedChannel?.name ?? 'Tumacord'}</strong>
+        {!boards.active && selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
+        {boards.active && <span className="channel-topic">Mesa de desenho{voice.channelId ? ' · a call continua' : ''}</span>}
         <div className="topbar-spacer" />
         <span className={`connection-pill ${connected ? 'online' : ''}`} title={session.connectionMode === 'server' ? session.serverUrl : `Host dinâmico por enlace direto${networkPreferences.zeroTierEnabled ? ', rede local e ZeroTier' : ' e rede local'}`}><i />{connected ? (session.connectionMode === 'server' ? 'Servidor conectado' : 'P2P conectado') : 'Reconectando'}</span>
         {/* No navegador não há ponte de atualização: quem atualiza a versão
@@ -700,10 +749,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         <button className={memberListOpen ? 'toolbar-active' : ''} onClick={() => setMemberListOpen((value) => !value)} title="Membros"><Icon name="users" /></button>
       </header>
       <div className="content-row">
-        {selectedChannel?.type === 'voice'
+        {boards.active
+          ? <Boundary title="A mesa precisou ser redesenhada"><Whiteboard session={boards.active} api={boards} currentUserId={session.user.id} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={boards.close} /></Boundary>
+          : selectedChannel?.type === 'voice'
           ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} drawing={drawing} /></Boundary>
           : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={sendMessage} pendingAttachment={pendingAttachment} uploading={attachmentUploading} syncFiles={syncFiles} onFile={selectAttachment} onClearAttachment={() => setPendingAttachment(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} />}
-        {memberListOpen && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
+        {memberListOpen && !boards.active && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
 
@@ -715,6 +766,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
     {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
+    {boardPromptOpen && <NewBoardModal channelName={selectedChannel?.name ?? 'geral'} onCreate={createBoard} onClose={() => setBoardPromptOpen(false)} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} withAudio={shareAudio && voice.screenAudioSupport.supported !== false} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
@@ -723,8 +775,8 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   </div>;
 }
 
-function ChannelGroup({ title, onAdd, children }: { title: string; onAdd?: () => void; children: React.ReactNode }) {
-  return <section className="channel-group"><div className="group-title"><span>{title}</span>{onAdd && <button onClick={onAdd} title="Criar canal"><Icon name="plus" /></button>}</div>{children}</section>;
+function ChannelGroup({ title, onAdd, addLabel = 'Criar canal', children }: { title: string; onAdd?: () => void; addLabel?: string; children: React.ReactNode }) {
+  return <section className="channel-group"><div className="group-title"><span>{title}</span>{onAdd && <button onClick={onAdd} title={addLabel}><Icon name="plus" /></button>}</div>{children}</section>;
 }
 
 function ChannelButton({ channel, selected, connected, onClick }: { channel: Channel; selected: boolean; connected?: boolean; onClick: () => void }) {
@@ -1822,6 +1874,28 @@ function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string)
     {error && <p className="invite-status error">{error}</p>}
     <button className="primary-button" disabled={busy || !code.trim()} onClick={() => void submit()}>{busy ? 'Procurando o host…' : 'Entrar na call'}</button>
   </div></div>;
+}
+
+// Criar mesa pede duas coisas: um nome e nada mais. O quadro nasce em branco,
+// vinculado ao canal aberto, e o anúncio sai na hora para quem enxerga esse
+// canal — entrar continua sendo escolha de cada pessoa.
+function NewBoardModal({ channelName, onCreate, onClose }: { channelName: string; onCreate: (name: string) => Promise<void>; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    await onCreate(name.trim());
+    setBusy(false);
+  };
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}><form className="invite-modal" onSubmit={(event) => void submit(event)}>
+    <button type="button" className="modal-close" disabled={busy} onClick={onClose}><Icon name="close" /></button>
+    <span className="modal-eyebrow">Mesa de desenho</span>
+    <h2>Criar mesa</h2>
+    <p>Um quadro em branco para o grupo desenhar junto, dentro do app. Ele fica em <strong>#{channelName}</strong>, e quem enxerga esse canal pode entrar. Não precisa de call nem de transmissão.</p>
+    <label className="invite-field">Nome da mesa <input value={name} onChange={(event) => setName(event.target.value)} maxLength={48} autoFocus placeholder="Plano da base" /></label>
+    <button className="primary-button" disabled={busy}>{busy ? 'Criando…' : 'Criar mesa'}</button>
+  </form></div>;
 }
 
 function DeviceSelect({ label, hint, value, devices, onChange }: { label: string; hint?: string; value: string; devices: MediaDeviceInfo[]; onChange: (value: string) => void }) {

@@ -12,6 +12,15 @@ import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import { MAX_POINTS_PER_STROKE, parseDrawLifetime } from '../shared/telestration.js';
+import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  MAX_BOARD_NAME,
+  MAX_OPS_PER_BATCH,
+  MAX_POINTS_PER_BOARD_STROKE,
+  type BoardActor,
+  type BoardOp,
+} from '../shared/whiteboard.js';
 import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hashToken, normalizeInviteToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
@@ -21,6 +30,7 @@ import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, 
 import { createAuditEntry } from './audit.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
+import { Whiteboards, type StoredBoard } from './whiteboards.js';
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3927);
@@ -59,6 +69,55 @@ const httpServer = tlsEnabled
   : createHttpServer(app);
 const io = new Server(httpServer, { cors: { origin: true, credentials: false }, maxHttpBufferSize: 4e6 });
 const rooms = new VoiceRooms();
+// A identidade do grupo onde uma mesa nasce. Ela existe para uma coisa só:
+// impedir que o conteúdo de uma mesa atravesse para onde não é dele. Um
+// servidor dedicado nunca adota mesa de fora — nem de um grupo P2P, nem de
+// outro dedicado —, e no P2P a adoção da troca de host exige que quem entrega
+// esteja na mesma call agora.
+const boardOrigin = p2pMode ? 'p2p' : `server:${serverName}`;
+const whiteboards = new Whiteboards(() => scheduleBoardSave());
+let boardSaveTimer: NodeJS.Timeout | null = null;
+
+// Desenhar produz operações a poucos milissegundos de distância, e o arquivo é
+// reescrito inteiro a cada gravação. Juntar um segundo de mão andando em uma
+// gravação só é a diferença entre salvar a mesa e brigar com o disco.
+function scheduleBoardSave(): void {
+  // No P2P a mesa vive enquanto o grupo estiver reunido, e é isso que a
+  // interface promete. Gravá-la no disco de quem por acaso é o host hoje
+  // guardaria o desenho do grupo na máquina de uma pessoa, sem que ninguém
+  // tivesse pedido isso.
+  if (p2pMode || boardSaveTimer) return;
+  boardSaveTimer = setTimeout(() => {
+    boardSaveTimer = null;
+    void store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+  }, 1_000);
+  boardSaveTimer.unref?.();
+}
+
+// Desligar o servidor não pode custar o último segundo de desenho.
+//
+// A gravação é adiada de propósito, para a mão que está andando não reescrever
+// o arquivo dezenas de vezes por segundo. Isso abre uma janela: quem desliga o
+// contêiner logo depois de alguém levantar a caneta perderia aquele traço. O
+// encerramento fecha essa janela gravando antes de sair — com um prazo, para
+// um disco travado não transformar "parar o servidor" em "servidor que não
+// para".
+function flushBoards(): Promise<void> {
+  if (boardSaveTimer) {
+    clearTimeout(boardSaveTimer);
+    boardSaveTimer = null;
+  }
+  if (p2pMode) return Promise.resolve();
+  return store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+}
+
+for (const sinal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(sinal, () => {
+    const prazo = setTimeout(() => process.exit(0), 2_000);
+    prazo.unref?.();
+    void flushBoards().finally(() => process.exit(0));
+  });
+}
 const sessions = new Map<string, { userId: string; expiresAt: number }>();
 const connectedUsers = new Map<string, PublicUser>();
 const p2pTextChannelId = 'geral';
@@ -201,6 +260,70 @@ const rtcDrawSchema = z.object({
   clearAll: z.boolean().optional(),
 });
 
+// Mesa de desenho compartilhada. `id` identifica o pedaço enviado — é a chave
+// contra reentrega —, e `stroke` identifica o traço, que é o objeto que a
+// borracha apaga e o desfazer remove.
+const boardPointSchema = z.object({
+  x: z.number().finite().min(0).max(BOARD_WIDTH),
+  y: z.number().finite().min(0).max(BOARD_HEIGHT),
+});
+const boardOpIdSchema = z.string().min(1).max(64);
+const boardOpSchema = z.discriminatedUnion('kind', [
+  z.object({
+    id: boardOpIdSchema,
+    kind: z.literal('stroke'),
+    stroke: boardOpIdSchema,
+    color: z.string().regex(/^#[0-9a-f]{6}$/i),
+    width: z.number().finite().min(1).max(64),
+    points: z.array(boardPointSchema).min(1).max(MAX_POINTS_PER_BOARD_STROKE),
+    done: z.boolean().optional(),
+  }),
+  z.object({ id: boardOpIdSchema, kind: z.literal('erase'), targets: z.array(boardOpIdSchema).min(1).max(64) }),
+  z.object({ id: boardOpIdSchema, kind: z.literal('undo'), target: boardOpIdSchema }),
+]);
+const boardOpsSchema = z.object({ boardId: z.string().min(1).max(64), ops: z.array(boardOpSchema).min(1).max(MAX_OPS_PER_BATCH) });
+const boardJoinSchema = z.object({ boardId: z.string().min(1).max(64), observer: z.boolean().optional() });
+const boardSyncSchema = z.object({ boardId: z.string().min(1).max(64), since: z.number().int().min(0).max(10_000_000) });
+const boardCursorSchema = z.object({ boardId: z.string().min(1).max(64), x: z.number().finite().min(0).max(BOARD_WIDTH), y: z.number().finite().min(0).max(BOARD_HEIGHT), color: z.string().regex(/^#[0-9a-f]{6}$/i) });
+const boardManageSchema = z.object({
+  boardId: z.string().min(1).max(64),
+  action: z.enum(['lock', 'unlock', 'observers', 'clear', 'close', 'reopen', 'archive', 'rename', 'revoke', 'restore']),
+  value: z.union([z.string().max(MAX_BOARD_NAME * 4), z.boolean()]).optional(),
+});
+// A mesa que volta para o ar depois da troca de host, no P2P. O que chega aqui
+// é conteúdo de outra máquina: ele é validado como qualquer coisa vinda do
+// fio, e o servidor dedicado não aceita nenhum.
+const boardAdoptSchema = z.object({
+  board: z.object({
+    id: z.string().min(1).max(64),
+    name: z.string().max(MAX_BOARD_NAME * 4),
+    channelId: z.string().min(1).max(64),
+    origin: z.string().max(128),
+    createdBy: z.string().min(1).max(64),
+    createdByName: z.string().min(1).max(64),
+    createdAt: z.string().max(64),
+    updatedAt: z.string().max(64),
+    status: z.enum(['open', 'closed', 'archived']),
+    locked: z.boolean(),
+    allowObservers: z.boolean(),
+    revoked: z.array(z.string().min(1).max(64)).max(64),
+    snapshot: z.object({
+      revision: z.number().int().min(0).max(10_000_000),
+      strokes: z.array(z.object({
+        id: boardOpIdSchema,
+        author: z.string().min(1).max(64),
+        authorName: z.string().min(1).max(64),
+        color: z.string().regex(/^#[0-9a-f]{6}$/i),
+        width: z.number().finite().min(1).max(64),
+        points: z.array(boardPointSchema).max(MAX_POINTS_PER_BOARD_STROKE),
+        at: z.number().finite(),
+      })).max(4_000),
+    }),
+    // O histórico posterior não viaja: o snapshot já é o quadro inteiro, e
+    // reenviar as duas coisas só daria margem para elas discordarem.
+  }),
+});
+
 app.get('/api/health', (_request, response) => {
   response.json({
     ok: true,
@@ -221,6 +344,10 @@ app.get('/api/health', (_request, response) => {
       adminUsers: !p2pMode,
       adminAudit: !p2pMode,
       mediaDiagnostics: true,
+      // A mesa existe nos dois modos. O que muda é o que acontece com ela
+      // depois: o dedicado guarda, o P2P mantém enquanto o grupo durar.
+      boards: true,
+      boardPersistence: !p2pMode,
     },
   });
 });
@@ -633,6 +760,14 @@ app.delete('/api/admin/channels/:id', async (request, response) => {
     return refuse(response, 409, veredito.error ?? 'Não dá para apagar este canal.');
   }
   await store.deleteChannel(request.params.id);
+  // As mesas do canal apagado saem junto com ele. Mantê-las vivas deixaria um
+  // quadro acessível por um canal que não existe mais — e a permissão da mesa
+  // é justamente a permissão do canal ao qual ela está vinculada.
+  const mesas = whiteboards.removeChannel(request.params.id);
+  if (mesas.length) {
+    void store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+    for (const boardId of mesas) io.emit('board:closed', { boardId, reason: 'O canal desta mesa foi apagado.' });
+  }
   await audit(context.user, 'channel.delete', canal?.name ?? request.params.id);
   broadcastChannels();
   response.json({ ok: true });
@@ -1088,6 +1223,154 @@ io.on('connection', (socket) => {
     });
   });
 
+  // --- mesa de desenho compartilhada ---------------------------------------
+  //
+  // A mesa não depende de live nem de janela sobreposta: ela é desenhada
+  // dentro do app, e por isso funciona igual no Linux e no Windows. Também não
+  // depende da call — dá para desenhar com a voz ligada ou sem ela.
+  //
+  // Os dois baldes separam coisas de naturezas diferentes: a operação é
+  // durável e vai para o histórico, o cursor é enfeite que some. Um cursor
+  // frenético não pode consumir a vazão de quem está desenhando.
+  const boardBucket = new TokenBucket(120, 60);
+  const cursorBucket = new TokenBucket(20, 12);
+
+  function boardActor(): BoardActor {
+    const quem = socket.data.user as PublicUser;
+    return { userId: quem.id, username: quem.username, serverAdmin: !p2pMode && isAdministrator(roleOfSocket(socket)) };
+  }
+
+  // O anúncio vai para quem enxerga o canal da mesa. Hoje todo canal listado é
+  // visível para toda sessão autenticada, então isto é uma emissão geral; o
+  // dia em que houver permissão por canal, o filtro entra exatamente aqui — e
+  // não no cliente, que esconder botão não é autorizar.
+  function announceBoard(event: string, payload: Record<string, unknown>): void {
+    io.emit(event, payload);
+  }
+
+  socket.on('board:create', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = z.object({ channelId: z.string().min(1).max(64), name: z.string().max(MAX_BOARD_NAME * 4).optional() }).safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    // A mesa fica vinculada a um canal ao qual os participantes têm acesso: um
+    // convite para a mesa não ultrapassa a permissão desse canal.
+    if (!channelIsAvailable(parsed.data.channelId)) return acknowledge?.({ ok: false, error: 'Esse canal não existe aqui.' });
+    const created = whiteboards.create({ channelId: parsed.data.channelId, name: parsed.data.name, origin: boardOrigin, actor: boardActor() });
+    if (!created.ok) return acknowledge?.({ ok: false, error: created.error });
+    announceBoard('board:announce', { board: created.value });
+    acknowledge?.({ ok: true, board: created.value });
+  });
+
+  socket.on('board:list', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = z.object({ channelId: z.string().min(1).max(64).optional(), archived: z.boolean().optional() }).safeParse(payload ?? {});
+    if (!parsed.success) return acknowledge?.({ ok: false });
+    const canais = availableChannels().map((channel) => channel.id).filter((id) => !parsed.data.channelId || id === parsed.data.channelId);
+    acknowledge?.({ ok: true, boards: whiteboards.list(canais, parsed.data.archived === true) });
+  });
+
+  socket.on('board:join', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = boardJoinSchema.safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    const board = whiteboards.get(parsed.data.boardId);
+    if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
+    const entrou = whiteboards.join(parsed.data.boardId, socket.id, boardActor(), parsed.data.observer === true);
+    if (!entrou.ok) return acknowledge?.({ ok: false, error: entrou.error });
+    socket.join(`board:${parsed.data.boardId}`);
+    io.to(`board:${parsed.data.boardId}`).emit('board:participants', { boardId: parsed.data.boardId, participants: whiteboards.participants(parsed.data.boardId) });
+    acknowledge?.({ ok: true, ...entrou.value });
+  });
+
+  socket.on('board:leave', (payload: unknown) => {
+    const parsed = z.object({ boardId: z.string().min(1).max(64) }).safeParse(payload);
+    if (!parsed.success) return;
+    leaveBoard(socket.id, parsed.data.boardId);
+    socket.leave(`board:${parsed.data.boardId}`);
+  });
+
+  socket.on('board:ops', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = boardOpsSchema.safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Operação inválida.' });
+    const board = whiteboards.get(parsed.data.boardId);
+    if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
+    if (!board.participants.has(socket.id)) return acknowledge?.({ ok: false, error: 'Entre na mesa antes de desenhar nela.' });
+    if (!boardBucket.take()) return acknowledge?.({ ok: false, error: 'Muitas operações seguidas. Tente de novo em instantes.' });
+    const result = whiteboards.submit(parsed.data.boardId, socket.id, boardActor(), parsed.data.ops as BoardOp[]);
+    if (!result.ok) return acknowledge?.({ ok: false, error: result.error });
+    if (result.value.accepted.length) {
+      io.to(`board:${parsed.data.boardId}`).emit('board:ops', { boardId: parsed.data.boardId, ops: result.value.accepted });
+      announceBoard('board:updated', { board: whiteboards.summary(board) });
+    }
+    acknowledge?.({ ok: true, ...result.value });
+  });
+
+  // Recuperação. Quem reconectou diz até onde chegou e recebe a diferença — ou
+  // o quadro inteiro, se ficou para trás demais. É o mesmo caminho de quem
+  // percebeu uma lacuna na sequência de revisões.
+  socket.on('board:sync', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = boardSyncSchema.safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    const board = whiteboards.get(parsed.data.boardId);
+    if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
+    if (!board.participants.has(socket.id)) return acknowledge?.({ ok: false, error: 'Entre na mesa antes de sincronizá-la.' });
+    const recovered = whiteboards.recover(parsed.data.boardId, parsed.data.since);
+    if (!recovered.ok) return acknowledge?.({ ok: false, error: recovered.error });
+    acknowledge?.({ ok: true, board: whiteboards.summary(board), ...recovered.value });
+  });
+
+  socket.on('board:cursor', (payload: unknown) => {
+    const parsed = boardCursorSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const board = whiteboards.get(parsed.data.boardId);
+    if (!board?.participants.has(socket.id) || !cursorBucket.take()) return;
+    const quem = socket.data.user as PublicUser;
+    // O cursor alheio é temporário e não pertence ao histórico durável: ele
+    // não ganha revisão, não entra no log e não sobrevive a um recarregamento.
+    socket.to(`board:${parsed.data.boardId}`).emit('board:cursor', {
+      boardId: parsed.data.boardId,
+      cursor: { socketId: socket.id, userId: quem.id, username: quem.username, color: parsed.data.color, x: parsed.data.x, y: parsed.data.y, at: Date.now() },
+    });
+  });
+
+  socket.on('board:manage', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = boardManageSchema.safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    const board = whiteboards.get(parsed.data.boardId);
+    if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
+    const result = whiteboards.manage(parsed.data.boardId, boardActor(), parsed.data.action, parsed.data.value);
+    if (!result.ok) return acknowledge?.({ ok: false, error: result.error });
+    // Limpar tudo é uma operação como outra qualquer: ela chega pelo mesmo
+    // caminho, com revisão, e por isso quem reconectar depois também a vê.
+    if (result.value.op) io.to(`board:${parsed.data.boardId}`).emit('board:ops', { boardId: parsed.data.boardId, ops: [result.value.op] });
+    io.to(`board:${parsed.data.boardId}`).emit('board:state', { board: result.value.board, participants: whiteboards.participants(parsed.data.boardId) });
+    announceBoard('board:updated', { board: result.value.board });
+    void audit(socket.data.user as PublicUser, `board:${parsed.data.action}`, parsed.data.boardId).catch(() => undefined);
+    acknowledge?.({ ok: true, board: result.value.board });
+  });
+
+  // A mesa que atravessa a troca de host, no P2P.
+  //
+  // Quando o host sai, a sinalização muda de máquina e o servidor novo sobe
+  // vazio. Quem estava na mesa devolve o snapshot que tem, e o grupo continua
+  // de onde parou. Três recusas guardam este caminho: um servidor dedicado
+  // nunca adota nada vindo do fio, a origem precisa bater, e quem entrega
+  // precisa estar na call daquele canal agora — não basta ter sido do grupo
+  // algum dia.
+  socket.on('board:adopt', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    if (!p2pMode) return acknowledge?.({ ok: false, error: 'Um servidor dedicado não recebe mesas de fora.' });
+    const parsed = boardAdoptSchema.safeParse(payload);
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Mesa inválida.' });
+    const entrada = parsed.data.board;
+    if (!channelIsAvailable(entrada.channelId)) return acknowledge?.({ ok: false, error: 'Esse canal não existe aqui.' });
+    // Estar na call deste host agora é o que significa "ser do grupo que está
+    // reunido". Não é o mesmo que provar que a mesa é daqui — isso ninguém
+    // consegue provar do lado de fora —, e é por isso que a promessa do P2P é
+    // a que está escrita na tela: a mesa vive enquanto o grupo estiver junto.
+    if (!rooms.roomOf(socket.id)) return acknowledge?.({ ok: false, error: 'Entre na call do grupo antes de devolver a mesa dele.' });
+    const adotada = whiteboards.adopt({ ...entrada, log: [] } satisfies StoredBoard, boardOrigin);
+    if (!adotada.ok) return acknowledge?.({ ok: false, error: adotada.error });
+    announceBoard('board:announce', { board: adotada.value, restored: true });
+    acknowledge?.({ ok: true, board: adotada.value });
+  });
+
   socket.on('rtc:stream-meta', (payload: unknown) => {
     const parsed = rtcStreamMetaSchema.safeParse(payload);
     if (!parsed.success || !sameVoiceRoom(socket.id, parsed.data.target)) return;
@@ -1097,6 +1380,10 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     connectedUsers.delete(socket.id);
     leaveVoice(socket.id);
+    // Sair da mesa não apaga nada do que foi desenhado: some só a presença.
+    for (const board of whiteboards.leave(socket.id)) {
+      io.to(`board:${board.id}`).emit('board:participants', { boardId: board.id, participants: whiteboards.participants(board.id) });
+    }
     broadcastSnapshot();
   });
 
@@ -1104,6 +1391,12 @@ io.on('connection', (socket) => {
   // online pode devolver ao host atual mensagens que ele ainda não possua.
   io.emit('chat:sync:request');
 });
+
+function leaveBoard(socketId: string, boardId: string): void {
+  const board = whiteboards.get(boardId);
+  if (!board?.participants.delete(socketId)) return;
+  io.to(`board:${boardId}`).emit('board:participants', { boardId, participants: whiteboards.participants(boardId) });
+}
 
 function sameVoiceRoom(first: string, second: string): boolean {
   return Boolean(rooms.roomOf(first) && rooms.roomOf(first) === rooms.roomOf(second));
@@ -1150,6 +1443,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 
 storeReady.then(async () => {
   await store.pruneSessions();
+  // As mesas guardadas voltam inteiras: salvar e reabrir preserva o conteúdo,
+  // que é o que o dedicado promete. No P2P nada foi gravado, e a lista sobe
+  // vazia — a mesa de lá vive enquanto o grupo estiver reunido.
+  if (!p2pMode) whiteboards.load(store.boards);
   if (!p2pMode) {
     const migracao = await store.migrateUserRoles(adminUsername);
     if (migracao.changed) console.log(`Tumacord: papéis migrados${migracao.ownerId ? ' — dono definido' : ''}.`);

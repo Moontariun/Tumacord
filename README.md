@@ -13,6 +13,7 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - **servidor de encontro opcional**, alcançado só por conexão de saída: funciona atrás de CGNAT sem abrir porta em lugar nenhum, e com relay TURN para o caso em que nem o ICE atravessa;
 - convite em código que aponta o servidor da call e leva a chave de entrada;
 - desenho sobre a transmissão de quem está compartilhando a tela, **na live de quem está no Windows**, com a permissão sendo de quem transmite;
+- **mesas de desenho compartilhadas**: um quadro em branco dentro do app, criado por alguém e aberto a quem enxerga o canal — sem depender de live, de overlay nem de call, e igual no Linux e no Windows;
 - descoberta automática de calls na rede local, sem copiar IP;
 - ZeroTier opcional, ligado ou desligado em **Configurações › Rede e conexão**;
 - servidor completo embutido em toda instalação;
@@ -58,19 +59,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/atualizacao-no-app-v0.9.0/scripts/install-v0.9.0.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/mesa-de-desenho-v0.9.1/scripts/install-v0.9.1.sh | bash
 ```
 
-Este comando instala a v0.9.0 a partir da branch separada `release/atualizacao-no-app-v0.9.0`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.9.1 a partir da branch separada `release/mesa-de-desenho-v0.9.1`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.0, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-atualizacao-no-app-v0.9.0`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.1, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-mesa-de-desenho-v0.9.1`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/atualizacao-no-app-v0.9.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/mesa-de-desenho-v0.9.1/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 ### Atualização pelo próprio aplicativo
@@ -137,7 +138,7 @@ nenhum redistribuível do Visual C++**.
 
 ### Instalador (recomendado)
 
-Baixe `Tumacord-0.9.0-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+Baixe `Tumacord-0.9.1-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
 e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
 escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
 Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
@@ -148,7 +149,7 @@ avisa e o encerra antes de continuar.
 
 ### Portátil
 
-`Tumacord-0.9.0-portable.exe` roda sem instalar nada. É a opção para pendrive
+`Tumacord-0.9.1-portable.exe` roda sem instalar nada. É a opção para pendrive
 ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
 atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
 na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
@@ -217,7 +218,7 @@ certificado configurado — o instalador, o portátil, o executável principal e
 componente de áudio, todos com carimbo de tempo. Você pode conferir:
 
 ```powershell
-Get-AuthenticodeSignature .\Tumacord-0.9.0-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\Tumacord-0.9.1-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` precisa ser `Valid`.
@@ -304,6 +305,74 @@ Na prática:
 Um cliente anterior à 0.9.0 não declara em que sistema está, e por isso é tratado
 como quem não recebe desenho: adivinhar o sistema de alguém para pintar na área
 de trabalho dele seria a escolha errada.
+
+## Mesa de desenho compartilhada
+
+Uma pessoa clica no `+` de **Mesas de desenho**, dá um nome e recebe um quadro
+em branco. As demais veem o anúncio no canal e escolhem **entrar na mesa**.
+
+Isto é diferente de [desenhar sobre a transmissão](#desenho-sobre-a-transmissão).
+Aquilo é apontamento: mora dentro do vídeo, tem prazo e, por causa da janela
+sobreposta, só funciona na live de quem está no Windows. **A mesa é desenhada
+dentro do próprio app** — não depende de live, não depende de overlay, não
+depende nem da call estar aberta, e funciona igual no Linux e no Windows.
+
+Se a call estiver acontecendo, ela continua. Desenhar não interrompe a voz, e a
+voz não é necessária para desenhar.
+
+### O que a primeira versão oferece
+
+Caneta, sete cores e cinco espessuras; borracha que apaga o traço inteiro;
+desfazer o seu próprio traço; zoom e deslocamento da folha; lista de quem está
+na mesa; e exportação em PNG.
+
+O zoom e o deslocamento são **locais**: a folha tem coordenadas próprias, e
+aproximar para olhar um canto não move a visão de mais ninguém. Duas pessoas em
+janelas de tamanhos diferentes veem o traço no mesmo lugar do desenho.
+
+### Quem gerencia
+
+Quem criou a mesa — e, no servidor dedicado, quem administra o servidor — pode
+bloquear novos desenhos, aceitar ou recusar observadores, tirar e devolver a
+permissão de desenhar de uma pessoa, limpar o quadro, encerrar a atividade e
+arquivar a mesa guardando o conteúdo.
+
+**Limpar tudo pede confirmação**, porque apaga o trabalho do grupo. Tirar a
+permissão de alguém vale na operação seguinte, e não na próxima vez que a
+pessoa entrar.
+
+### O que a mesa não faz
+
+- **desfazer não apaga o trabalho alheio.** Ele age sobre um objeto seu e
+  identificado, não sobre o último item da lista — que quase sempre é de outra
+  pessoa. A borracha segue a mesma regra: cada um apaga os seus, e quem
+  gerencia apaga os dos outros;
+- **nada some sozinho para liberar espaço.** Ao encostar no limite de traços ou
+  de armazenamento, a mesa recusa a operação nova com uma mensagem. O que já
+  está desenhado fica;
+- **a recusa mora no servidor.** Esconder um botão é conveniência para quem
+  está olhando, não autorização: observador, mesa bloqueada e permissão
+  revogada são verificados do lado de lá.
+
+### Entrar depois, cair e voltar
+
+Quem entra no meio recebe o quadro em uma revisão conhecida mais tudo o que
+veio depois, inclusive o que aconteceu enquanto a tela carregava. Quem cai e
+volta diz até onde chegou e recebe só a diferença — ou o quadro inteiro, se
+ficou para trás demais. Cada pedaço de traço tem identidade própria, então uma
+reconexão que reenvia o que já mandou **não desenha duas vezes**.
+
+### No dedicado e no P2P
+
+No **servidor dedicado** a mesa é gravada e volta inteira quando o servidor
+reinicia. Arquivar preserva o conteúdo.
+
+No **P2P** quem ordena as operações é o host. A mesa atravessa a troca de host:
+o servidor do próximo sobe vazio e quem estava nela devolve o quadro. Ela vive
+enquanto o grupo estiver reunido — isso está escrito dentro da própria mesa,
+junto ao botão de exportar — e some quando a última pessoa sai. Ela também não
+atravessa para fora do grupo: um servidor dedicado recusa qualquer mesa vinda
+de fora.
 
 ## Enlace direto: a call sem ZeroTier
 
