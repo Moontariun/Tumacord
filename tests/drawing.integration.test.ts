@@ -63,9 +63,16 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }) {
   });
   const sockets: Socket[] = [];
   context.after(async () => {
+    // Esperar o processo sair antes de apagar o diretório. Desde a 0.9.1 o
+    // encerramento do servidor grava as mesas em disco, e apagar a pasta
+    // embaixo de quem ainda está escrevendo devolve ENOTEMPTY — falha que só
+    // aparece em máquina lenta, que é justamente onde ninguém está olhando.
     for (const socket of sockets) socket.disconnect();
-    if (child.exitCode === null) child.kill('SIGTERM');
-    await rm(root, { recursive: true, force: true });
+    if (child.exitCode === null) {
+      child.kill('SIGTERM');
+      await new Promise((resolve) => { child.once('exit', resolve); setTimeout(resolve, 5_000).unref?.(); });
+    }
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 });
   });
   await waitForServer(url, child);
 

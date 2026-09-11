@@ -18,7 +18,12 @@ interface Ambiente {
   reiniciar: () => Promise<void>;
 }
 
-function waitFor<T>(socket: Socket, event: string, predicate: (payload: T) => boolean = () => true, timeoutMs = 6_000): Promise<T> {
+// Prazos folgados de propósito. Estes testes sobem servidores de verdade, e
+// eles disputam a máquina com as outras suítes que o runner roda em paralelo:
+// uma máquina de integração contínua com quatro núcleos demora para arrancar um
+// processo que a máquina de quem escreveu o teste arranca num piscar. Um prazo
+// curto aqui não prova nada além da velocidade do computador.
+function waitFor<T>(socket: Socket, event: string, predicate: (payload: T) => boolean = () => true, timeoutMs = 20_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { socket.off(event, listener); reject(new Error(`tempo esgotado em ${event}`)); }, timeoutMs);
     const listener = (payload: T) => {
@@ -31,15 +36,21 @@ function waitFor<T>(socket: Socket, event: string, predicate: (payload: T) => bo
   });
 }
 
-function emit<T>(socket: Socket, event: string, payload: unknown, timeoutMs = 6_000): Promise<T> {
+function emit<T>(socket: Socket, event: string, payload: unknown, timeoutMs = 20_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${event} não respondeu`)), timeoutMs);
     socket.emit(event, payload, (reply: T) => { clearTimeout(timer); resolve(reply); });
   });
 }
 
+async function pararServidor(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await new Promise((resolve) => { child.once('exit', resolve); setTimeout(resolve, 5_000).unref?.(); });
+}
+
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`servidor encerrou (${child.exitCode})`);
     try { if ((await fetch(`${url}/api/health`)).ok) return; } catch { /* subindo */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -59,9 +70,13 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }, p
   let child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: 'ignore' });
   const sockets: Socket[] = [];
   context.after(async () => {
+    // Esperar o processo sair antes de apagar o diretório. Desde a 0.9.1 o
+    // encerramento do servidor grava as mesas em disco, e apagar a pasta
+    // embaixo de quem ainda está escrevendo devolve ENOTEMPTY — falha que só
+    // aparece em máquina lenta, que é justamente onde ninguém está olhando.
     for (const socket of sockets) socket.disconnect();
-    if (child.exitCode === null) child.kill('SIGTERM');
-    await rm(root, { recursive: true, force: true });
+    await pararServidor(child);
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 });
   });
   await waitForServer(url, child);
 
@@ -81,10 +96,8 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }, p
   // "salvar e reabrir" deixa de ser uma promessa e vira uma prova.
   const reiniciar = async () => {
     for (const socket of sockets) socket.disconnect();
-    child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
-    // Um instante para a gravação adiada do arquivo terminar antes da subida.
-    await new Promise((resolve) => setTimeout(resolve, 1_400));
+    // Sair grava as mesas; esperar a saída é esperar a gravação terminar.
+    await pararServidor(child);
     child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: 'ignore' });
     await waitForServer(url, child);
   };
@@ -327,9 +340,9 @@ test('salvar e reabrir no dedicado preserva o conteúdo da mesa', { timeout: 90_
   assert.deepEqual(quadro.strokes.map((stroke) => stroke.id), ['t1', 't3'], 'o que foi apagado continua apagado, e o resto continua lá');
 });
 
-test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { timeout: 60_000 }, async (context) => {
+test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { timeout: 90_000 }, async (context) => {
   // No P2P quem ordena é o host — o mesmo servidor, rodando na máquina dele.
-  const { entrar } = await ambiente(context, true);
+  const { entrar, reiniciar } = await ambiente(context, true);
   const ana = await entrar('Ana');
   const bia = await entrar('Bia');
   const criada = await criar(ana, 'Rascunho da noite', 'geral');
@@ -342,11 +355,14 @@ test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { ti
   const quadro = montar(entrou.snapshot, entrou.ops);
   assert.equal(quadro.strokes.length, 1);
 
-  // O host caiu: o servidor novo sobe vazio e quem estava na mesa devolve o
-  // que tem. Aqui isso é um servidor P2P recém-criado, que é exatamente o que
-  // a máquina do próximo host oferece.
-  const outro = await ambiente(context, true);
-  const anaNoNovo = await outro.entrar('Ana');
+  // O host caiu. O servidor que sobe no lugar dele começa vazio — no P2P nada
+  // é gravado em disco, e é isso que a interface promete —, e quem estava na
+  // mesa devolve o que tem.
+  await reiniciar();
+  const anaNoNovo = await entrar('Ana');
+  const listaVazia = await emit<{ ok: boolean; boards: BoardSummary[] }>(anaNoNovo, 'board:list', {});
+  assert.equal(listaVazia.boards.length, 0, 'o host novo sobe sem mesa nenhuma');
+
   await emit(anaNoNovo, 'voice:join', 'call-geral');
   const adotada = await emit<{ ok: boolean; error?: string; board?: BoardSummary }>(anaNoNovo, 'board:adopt', {
     board: { ...criada.board!, revoked: [], snapshot: { revision: quadro.revision, strokes: quadro.strokes } },
@@ -354,6 +370,14 @@ test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { ti
   assert.equal(adotada.ok, true, adotada.error);
   const noNovo = await entrarNaMesa(anaNoNovo, boardId);
   assert.equal(montar(noNovo.snapshot, noNovo.ops).strokes.length, 1, 'o quadro continua de pé com o host novo');
+
+  // E a devolução não vale para quem não está na call do grupo.
+  const deFora = await entrar('Dani');
+  const recusada = await emit<{ ok: boolean; error?: string }>(deFora, 'board:adopt', {
+    board: { ...criada.board!, id: 'outra-mesa', revoked: [], snapshot: { revision: 1, strokes: [] } },
+  });
+  assert.equal(recusada.ok, false);
+  assert.match(recusada.error ?? '', /call do grupo/);
 });
 
 test('um servidor dedicado não recebe mesa vinda de fora', { timeout: 60_000 }, async (context) => {
