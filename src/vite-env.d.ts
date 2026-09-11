@@ -68,6 +68,10 @@ interface TumacordUpdateState {
   applied: { restart: 'now' | 'quit' | 'manual'; message: string; folder?: string } | null;
   file: string;
   skipped: Array<{ version: string; reason: string }>;
+  /** A versão mais nova disponível, quando não é a oferecida agora. */
+  latest?: string;
+  /** Por que a versão oferecida não é a mais nova: ela é parada obrigatória. */
+  mustStop?: { version: string; reason: string } | null;
   enabled: boolean;
   lastCheck: number;
   dismissed: string;

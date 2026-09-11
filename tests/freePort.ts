@@ -1,4 +1,7 @@
+import { openSync, closeSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 // Porta livre de verdade, perguntada ao sistema — e sem repetir.
 //
@@ -31,6 +34,43 @@ const LARGURA = FIM - INICIO;
 let proxima = INICIO + ((process.pid * 2_654_435_761) % LARGURA);
 let tentativasDesteProcesso = 0;
 
+// A reserva entre processos.
+//
+// Espalhar por pid e conferir ligando resolve quase tudo, e "quase" é o
+// problema: duas suítes podem receber do sistema a mesma porta na mesma
+// janela de milissegundos entre a conferência e o servidor ligá-la. O sintoma
+// é um servidor que "encerrou antes do teste (1)" em um arquivo que ninguém
+// tocou.
+//
+// Os processos de teste compartilham o diretório temporário, e é nele que a
+// reserva mora: um arquivo por porta, criado com `wx` — que falha se já
+// existir. Quem criou o arquivo ficou com a porta, e não há empate possível.
+const RESERVAS = path.join(tmpdir(), 'tumacord-portas-de-teste');
+/** Uma reserva velha é de um processo que morreu; ela deixa de valer. */
+const RESERVA_VALIDA_MS = 10 * 60_000;
+
+function reservar(port: number): boolean {
+  try {
+    mkdirSync(RESERVAS, { recursive: true });
+    closeSync(openSync(path.join(RESERVAS, String(port)), 'wx'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function limparReservasVelhas(): void {
+  try {
+    const agora = Date.now();
+    for (const nome of readdirSync(RESERVAS)) {
+      const arquivo = path.join(RESERVAS, nome);
+      try {
+        if (agora - statSync(arquivo).mtimeMs > RESERVA_VALIDA_MS) unlinkSync(arquivo);
+      } catch { /* outro processo já limpou */ }
+    }
+  } catch { /* o diretório ainda não existe */ }
+}
+
 function podeLigar(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const sonda = createServer();
@@ -40,9 +80,12 @@ function podeLigar(port: number): Promise<boolean> {
 }
 
 export async function freePort(): Promise<number> {
+  limparReservasVelhas();
   for (let tentativa = 0; tentativa < 200; tentativa += 1) {
     tentativasDesteProcesso += 1;
     const candidata = INICIO + ((proxima + tentativasDesteProcesso * 7) % LARGURA);
+    // A reserva primeiro: se outro processo já a pegou, nem vale conferir.
+    if (!reservar(candidata)) continue;
     if (await podeLigar(candidata)) return candidata;
   }
   // Nenhuma das candidatas serviu: volta a perguntar ao sistema, que é o

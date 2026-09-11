@@ -8,6 +8,7 @@ Entrar em um servidor deixou de apagar as outras contas que você já tinha. Cad
 - Trocar de conta e sair da conta passaram a ser coisas diferentes: trocar mantém a conta guardada, sair encerra só aquela.
 - Um convite para um lugar onde você já entrou não pede senha de novo — e nunca mais derruba as suas outras contas.
 - Dá para pedir que o Tumacord lembre a chave de um servidor, separado de manter a conta conectada.
+- O botão de procurar atualização continua funcionando mesmo com uma versão já encontrada, e quem está muito atrás instala direto a mais nova.
 <!-- /tumacord:resumo -->
 
 **Uma gaveta por destino**
@@ -39,6 +40,27 @@ as quatro combinações existem e valem.
 A chave continua mascarada no campo, guardada por servidor, e desmarcar a opção
 apaga a que estiver guardada. Vale dizer que mascarar o campo não protege o que
 está no disco — armazenamento nativo protegido é um passo seguinte.
+
+**Procurar atualização continua disponível**
+
+O botão de procurar sumia assim que uma versão era encontrada — e enquanto
+ninguém aplicava, outra podia sair sem que houvesse como saber. Agora ele só
+some enquanto algo está acontecendo (procurando, baixando, aplicando), que é
+quando ele não teria o que fazer. A procura ao abrir continua como era.
+
+Procurar de novo com uma versão **já baixada** não joga o download fora: se a
+oferta continua sendo a mesma versão, o arquivo no disco continua valendo.
+
+**Pular versões, e quando não dá**
+
+Quem está muito atrás recebe direto a mais nova — sem instalar sete versões no
+caminho. Isso já era assim; o que faltava era poder procurar de novo para
+descobrir que apareceu algo mais novo.
+
+Às vezes pular não é possível: uma versão que converte dados só a partir do
+formato imediatamente anterior precisa ser instalada antes das seguintes. Essa
+versão passa a poder se declarar, e quem está abaixo dela passa por ela
+primeiro — com a tela dizendo qual é a mais nova e por que o caminho passa ali.
 
 **Convite: primeiro o destino, depois a autenticação**
 

@@ -29,6 +29,23 @@ const BROKEN_VERSIONS = new Map([
 // o aviso escrito por extenso, e o aplicativo vê a marca.
 const BROKEN_MARKER = /<!--\s*tumacord:versao-quebrada\s*-->/i;
 
+// Paradas obrigatórias.
+//
+// Pular versões é o normal e é o que se quer: quem está na 0.9.1 e encontra a
+// 0.9.9 instala a 0.9.9 direto, sem passar por sete instalações no caminho.
+//
+// Às vezes não dá. Uma versão que converte dados só a partir do formato
+// imediatamente anterior é o caso clássico: pular por cima dela deixaria a
+// conversão sem entrada que ela saiba ler. Essa versão se declara uma parada
+// obrigatória, e quem está abaixo dela passa por ela antes de seguir.
+//
+// A declaração é a mesma mecânica da versão quebrada: um marcador no corpo da
+// Release, que sai do CHANGELOG. Ele não aparece na página renderizada, e vale
+// para versões lançadas depois desta — a lista embutida, por definição, não
+// conhece o futuro.
+const REQUIRED_STOPS = new Map([]);
+const REQUIRED_MARKER = /<!--\s*tumacord:parada-obrigatoria\s*-->/i;
+
 // Como esta cópia foi instalada. Cada jeito atualiza de um jeito, e chutar
 // errado aqui significaria escrever no lugar errado da máquina de alguém.
 const INSTALL_KINDS = ['linux-managed', 'linux-appimage', 'windows-installed', 'windows-portable', 'unknown'];
@@ -58,6 +75,13 @@ function compareVersions(left, right) {
   if (!a.pre) return 1;
   if (!b.pre) return -1;
   return a.pre > b.pre ? 1 : -1;
+}
+
+function requiredStopReason(version, body) {
+  const known = REQUIRED_STOPS.get(typeof version === 'string' ? version.replace(/^v/i, '') : '');
+  if (known) return known;
+  if (typeof body === 'string' && REQUIRED_MARKER.test(body)) return 'esta versão precisa ser instalada antes das seguintes';
+  return '';
 }
 
 function brokenReason(version, body) {
@@ -125,7 +149,12 @@ function summarize(release) {
   const title = typeof release?.name === 'string' && release.name.trim() ? release.name.trim() : '';
   const body = typeof release?.body === 'string' ? release.body : '';
   const notes = body
-    .replace(/<!--[\s\S]*?-->/g, '')
+    // Os comentários saem — eles são recado para quem escreve o CHANGELOG e
+    // apareceriam como texto cru na tela. Os do resumo ficam: é por eles que a
+    // interface sabe qual pedaço mostrar para quem só quer saber o que mudou.
+    // Sem esta exceção o marcador sumia aqui e o aplicativo caía no texto
+    // inteiro, que é justamente o que ele deixou de mostrar.
+    .replace(/<!--(?!\s*\/?\s*tumacord:resumo\s*-->)[\s\S]*?-->/g, '')
     .replace(/\r\n/g, '\n')
     .trim();
   return { title, notes };
@@ -171,6 +200,9 @@ function chooseUpdate({ releases, currentVersion, kind = 'unknown', allowPrerele
 
   const skipped = [];
   let best = null;
+  // A parada obrigatória mais próxima acima da versão instalada. Se houver uma
+  // entre onde esta cópia está e a mais nova, é por ela que se passa primeiro.
+  let stop = null;
   for (const release of Array.isArray(releases) ? releases : []) {
     if (!release || release.draft) continue;
     const version = parseVersion(release.tag_name ?? release.name);
@@ -183,6 +215,8 @@ function chooseUpdate({ releases, currentVersion, kind = 'unknown', allowPrerele
       continue;
     }
     if (!best || compareVersions(version, best.version) > 0) best = { version, release };
+    const parada = requiredStopReason(version.text, release.body);
+    if (parada && (!stop || compareVersions(version, stop.version) < 0)) stop = { version, release, reason: parada };
   }
 
   // Uma versão pulada por estar quebrada continua sendo dita: é assim que
@@ -191,17 +225,25 @@ function chooseUpdate({ releases, currentVersion, kind = 'unknown', allowPrerele
   skipped.sort((left, right) => compareVersions(right.version, left.version));
   if (!best) return { ...base, status: 'up-to-date', skipped };
 
-  const asset = assetFor(kind, best.release.assets, best.version.text);
-  const { title, notes } = summarize(best.release);
+  // Por padrão, a mais nova. Com uma parada obrigatória no caminho, ela vem
+  // primeiro — e a mais nova continua sendo dita, para ninguém achar que o
+  // aplicativo deixou de ver o que a página do GitHub mostra.
+  const passaAntes = stop && compareVersions(stop.version, best.version) < 0 ? stop : null;
+  const alvo = passaAntes ?? best;
+  const asset = assetFor(kind, alvo.release.assets, alvo.version.text);
+  const { title, notes } = summarize(alvo.release);
   return {
     ...base,
     status: asset ? 'available' : 'no-asset',
-    version: best.version.text,
+    version: alvo.version.text,
     title,
     notes,
-    publishedAt: typeof best.release.published_at === 'string' ? best.release.published_at : '',
-    pageUrl: typeof best.release.html_url === 'string' ? best.release.html_url : '',
+    publishedAt: typeof alvo.release.published_at === 'string' ? alvo.release.published_at : '',
+    pageUrl: typeof alvo.release.html_url === 'string' ? alvo.release.html_url : '',
     asset,
+    // A mais nova disponível, quando ela não é a oferecida agora.
+    latest: passaAntes ? best.version.text : '',
+    mustStop: passaAntes ? { version: passaAntes.version.text, reason: passaAntes.reason } : null,
     skipped,
   };
 }
@@ -209,6 +251,8 @@ function chooseUpdate({ releases, currentVersion, kind = 'unknown', allowPrerele
 module.exports = {
   BROKEN_MARKER,
   BROKEN_VERSIONS,
+  REQUIRED_MARKER,
+  REQUIRED_STOPS,
   INSTALL_KINDS,
   assetFor,
   brokenReason,

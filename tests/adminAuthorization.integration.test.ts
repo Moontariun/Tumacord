@@ -8,15 +8,26 @@ import test from 'node:test';
 import { io, type Socket } from 'socket.io-client';
 import { freePort } from './freePort';
 
-async function waitForServer(url: string, child: ChildProcess): Promise<void> {
+// A saída de erro do servidor é capturada e vai junto na falha.
+//
+// Com `stdio: 'ignore'`, um servidor que não sobe deixava só o código de saída
+// — e "encerrou (1)" cabe em porta ocupada, exceção na carga do arquivo de
+// dados e meia dúzia de outras coisas. Quem lê a reprovação no CI precisa do
+// motivo, não do código.
+function motivo(erro: string[]): string {
+  const texto = erro.join('').trim();
+  return texto ? ` Ele disse: ${texto.split('\n').slice(-6).join(' / ')}` : '';
+}
+
+async function waitForServer(url: string, child: ChildProcess, erro: string[] = []): Promise<void> {
   for (let attempt = 0; attempt < 160; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`Servidor encerrou antes do teste (${child.exitCode}).`);
+    if (child.exitCode !== null) throw new Error(`Servidor encerrou antes do teste (${child.exitCode})${motivo(erro)}`);
     try {
       if ((await fetch(`${url}/api/health`)).ok) return;
     } catch { /* ainda subindo */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error('Servidor não iniciou a tempo.');
+  throw new Error(`Servidor não iniciou a tempo.${motivo(erro)}`);
 }
 
 async function stopServer(child: ChildProcess): Promise<void> {
@@ -66,15 +77,17 @@ async function servidorDedicado(context: { after: (fn: () => Promise<void>) => v
       TUMACORD_P2P_MODE: '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
       ADMIN_USERNAME: 'Chefe', TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
     },
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
+  const erro: string[] = [];
+  child.stderr?.on('data', (pedaco: Buffer) => { erro.push(String(pedaco)); if (erro.length > 40) erro.shift(); });
   const sockets: Socket[] = [];
   context.after(async () => {
     sockets.forEach((socket) => socket.disconnect());
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
   });
-  await waitForServer(url, child);
+  await waitForServer(url, child, erro);
   if (criarDono) await entrar(url, 'Chefe', 'senha-do-chefe');
   return { url, sockets };
 }
@@ -206,18 +219,25 @@ test('o papel sobrevive ao reinício do servidor', { timeout: 40_000 }, async (c
     TUMACORD_P2P_MODE: '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
     ADMIN_USERNAME: adminUsername, TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
   });
-  const subir = (adminUsername: string) => spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env: ambiente(adminUsername), stdio: 'ignore' });
+  // Este teste sobe o servidor duas vezes, com donos diferentes. A saída de
+  // erro é acumulada aqui para a falha dizer o motivo em qualquer uma delas.
+  const erro: string[] = [];
+  const subir = (adminUsername: string) => {
+    const processo = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env: ambiente(adminUsername), stdio: ['ignore', 'ignore', 'pipe'] });
+    processo.stderr?.on('data', (pedaco: Buffer) => { erro.push(String(pedaco)); if (erro.length > 40) erro.shift(); });
+    return processo;
+  };
 
   let child = subir('Pioneiro');
   context.after(async () => { await stopServer(child); await rm(root, { recursive: true, force: true }); });
-  await waitForServer(url, child);
+  await waitForServer(url, child, erro);
   assert.equal((await entrar(url, 'Pioneiro', 'senha-do-pioneiro')).body.user.role, 'owner');
   await entrar(url, 'Outro', 'senha-do-outro');
   await stopServer(child);
 
   // Sobe de novo com OUTRO nome na variável: o dono precisa continuar o mesmo.
   child = subir('Outro');
-  await waitForServer(url, child);
+  await waitForServer(url, child, erro);
   assert.equal((await entrar(url, 'Pioneiro', 'senha-do-pioneiro')).body.user.role, 'owner', 'trocar a variável não pode sequestrar o servidor');
   // A variável só decide papel no momento em que a conta é criada. Depois
   // disso o papel é dado, e apontá-la para uma conta existente não promove

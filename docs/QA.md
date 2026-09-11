@@ -211,6 +211,13 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Chave guardada volta ao campo mascarado | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Dois servidores dedicados no app real | REQUER TESTE MANUAL (a CSP do cliente web bloqueia origem cruzada; no desktop não há essa restrição) |
 | Armazenamento nativo protegido para a chave | FORA DESTA VERSÃO |
+| Procurar continua disponível com versão já encontrada | VALIDADO POR ANÁLISE (fases em que o botão aparece) |
+| Quem está muito atrás recebe direto a mais nova | TESTADO AUTOMATICAMENTE |
+| Parada obrigatória é oferecida antes da mais nova | TESTADO AUTOMATICAMENTE |
+| Parada já passada não segura mais ninguém | TESTADO AUTOMATICAMENTE |
+| Parada quebrada não prende num degrau ruim | TESTADO AUTOMATICAMENTE |
+| Download válido sobrevive a procurar de novo | VALIDADO POR ANÁLISE |
+| Marcador do resumo chega ao aplicativo | TESTADO AUTOMATICAMENTE (era removido antes de chegar) |
 
 ## Isolamento por origem e notas resumidas — 0.9.5
 

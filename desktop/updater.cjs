@@ -154,6 +154,8 @@ class Updater {
       applied: null,
       file: '',
       skipped: [],
+      latest: '',
+      mustStop: null,
       enabled: this.preferences.enabled,
       lastCheck: this.preferences.lastCheck,
       dismissed: this.preferences.dismissed,
@@ -217,9 +219,15 @@ class Updater {
       });
       const decision = chooseUpdate({ releases, currentVersion: this.version, kind: this.kind });
       const preferences = this.writePreferences({ lastCheck: Date.now() });
+      // Procurar de novo com uma versão já baixada não pode jogar o download
+      // fora à toa: se a oferta continua sendo a mesma versão, o arquivo que
+      // está no disco continua servindo. Só quando a oferta muda — porque
+      // apareceu uma mais nova — é que ele deixa de valer.
+      const mesmaOferta = Boolean(decision.version) && decision.version === this.snapshot.version;
+      const baixadaSegueValendo = mesmaOferta && this.snapshot.phase === 'ready' && Boolean(this.snapshot.file);
       this.log({ event: 'update-check', status: decision.status, version: decision.version ?? '', kind: this.kind, manual });
       return this.update({
-        phase: decision.status === 'available' ? 'available' : decision.status === 'no-asset' ? 'no-asset' : 'up-to-date',
+        phase: baixadaSegueValendo ? 'ready' : decision.status === 'available' ? 'available' : decision.status === 'no-asset' ? 'no-asset' : 'up-to-date',
         installedBroken: decision.installedBroken ?? '',
         // As notas da versão instalada vêm na mesma consulta. É o que a tela
         // de "o que mudou" mostra na primeira abertura depois de atualizar —
@@ -233,8 +241,11 @@ class Updater {
         publishedAt: decision.publishedAt ?? '',
         asset: decision.asset ?? null,
         skipped: decision.skipped ?? [],
+        // A mais nova disponível quando não é a oferecida agora, e o porquê.
+        latest: decision.latest ?? '',
+        mustStop: decision.mustStop ?? null,
         progress: { received: 0, total: decision.asset?.size ?? 0 },
-        file: '',
+        file: baixadaSegueValendo ? this.snapshot.file : '',
         applied: null,
         lastCheck: preferences.lastCheck,
         error: '',

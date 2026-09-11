@@ -151,3 +151,79 @@ test('uma resposta estranha da API não vira decisão', () => {
   }
   assert.equal(chooseUpdate({ releases: [release('v0.9.1')], currentVersion: 'sei lá', kind: 'windows-installed' }).status, 'unknown-version');
 });
+
+// Pular versões é o normal e é o que se quer: quem está na 0.9.1 e encontra a
+// 0.9.9 instala a 0.9.9 direto, sem sete instalações no caminho.
+test('quem está muito atrás recebe direto a versão mais nova', () => {
+  const decisao = chooseUpdate({
+    releases: [release('v0.9.2'), release('v0.9.5'), release('v0.9.9')],
+    currentVersion: '0.9.1',
+    kind: 'linux-managed',
+  });
+  assert.equal(decisao.version, '0.9.9');
+  assert.equal(decisao.mustStop, null);
+  assert.equal(decisao.latest, '');
+});
+
+// Às vezes não dá pular: uma versão que converte dados só a partir do formato
+// imediatamente anterior precisa ser instalada antes das seguintes.
+test('uma parada obrigatória no caminho é oferecida antes da mais nova', () => {
+  const parada = release('v0.9.5', { body: 'Muda o formato.\n<!-- tumacord:parada-obrigatoria -->' });
+  const decisao = chooseUpdate({
+    releases: [release('v0.9.2'), parada, release('v0.9.9')],
+    currentVersion: '0.9.1',
+    kind: 'linux-managed',
+  });
+  assert.equal(decisao.version, '0.9.5', 'passa pela parada primeiro');
+  assert.equal(decisao.latest, '0.9.9', 'e a mais nova continua sendo dita');
+  assert.match(decisao.mustStop?.reason ?? '', /antes das seguintes/);
+});
+
+test('a parada já passada não segura mais ninguém', () => {
+  const parada = release('v0.9.5', { body: '<!-- tumacord:parada-obrigatoria -->' });
+  const decisao = chooseUpdate({
+    releases: [parada, release('v0.9.9')],
+    currentVersion: '0.9.5',
+    kind: 'linux-managed',
+  });
+  assert.equal(decisao.version, '0.9.9');
+  assert.equal(decisao.mustStop, null);
+});
+
+test('entre duas paradas, a mais próxima vem primeiro', () => {
+  const decisao = chooseUpdate({
+    releases: [
+      release('v0.9.3', { body: '<!-- tumacord:parada-obrigatoria -->' }),
+      release('v0.9.7', { body: '<!-- tumacord:parada-obrigatoria -->' }),
+      release('v0.9.9'),
+    ],
+    currentVersion: '0.9.1',
+    kind: 'linux-managed',
+  });
+  assert.equal(decisao.version, '0.9.3');
+  assert.equal(decisao.latest, '0.9.9');
+});
+
+// Uma parada quebrada não pode prender ninguém num degrau que não deve ser
+// instalado: ela é pulada como qualquer versão quebrada.
+test('parada obrigatória que também está quebrada não prende ninguém', () => {
+  const decisao = chooseUpdate({
+    releases: [
+      release('v0.9.5', { body: '<!-- tumacord:parada-obrigatoria -->\n<!-- tumacord:versao-quebrada -->' }),
+      release('v0.9.9'),
+    ],
+    currentVersion: '0.9.1',
+    kind: 'linux-managed',
+  });
+  assert.equal(decisao.version, '0.9.9');
+  assert.equal(decisao.skipped[0]?.version, '0.9.5');
+});
+
+// O marcador do resumo precisa sobreviver até a interface: é por ele que o
+// aplicativo sabe qual pedaço mostrar. Os outros comentários somem.
+test('o resumo chega ao aplicativo, e os outros comentários não', () => {
+  const corpo = ['<!-- tumacord:resumo -->', 'Uma linha curta.', '<!-- /tumacord:resumo -->', '', '<!-- recado interno -->', 'Detalhe técnico.'].join('\n');
+  const decisao = chooseUpdate({ releases: [release('v0.9.9', { body: corpo })], currentVersion: '0.9.1', kind: 'linux-managed' });
+  assert.match(decisao.notes ?? '', /tumacord:resumo/);
+  assert.equal(/recado interno/.test(decisao.notes ?? ''), false);
+});

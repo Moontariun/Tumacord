@@ -8,13 +8,24 @@ import test from 'node:test';
 import { io } from 'socket.io-client';
 import { freePort } from './freePort';
 
-async function waitForServer(url: string, child: ChildProcess): Promise<void> {
+// A saída de erro do servidor é capturada e vai junto na falha.
+//
+// Com `stdio: 'ignore'`, um servidor que não sobe deixava só o código de saída
+// — e "encerrou (1)" cabe em porta ocupada, exceção na carga do arquivo de
+// dados e meia dúzia de outras coisas. Quem lê a reprovação no CI precisa do
+// motivo, não do código.
+function motivo(erro: string[]): string {
+  const texto = erro.join('').trim();
+  return texto ? ` Ele disse: ${texto.split('\n').slice(-6).join(' / ')}` : '';
+}
+
+async function waitForServer(url: string, child: ChildProcess, erro: string[] = []): Promise<void> {
   for (let attempt = 0; attempt < 160; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`Servidor encerrou (${child.exitCode}).`);
+    if (child.exitCode !== null) throw new Error(`Servidor encerrou (${child.exitCode})${motivo(erro)}`);
     try { if ((await fetch(`${url}/api/health`)).ok) return; } catch { /* subindo */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error('Servidor não iniciou a tempo.');
+  throw new Error(`Servidor não iniciou a tempo.${motivo(erro)}`);
 }
 
 async function stopServer(child: ChildProcess): Promise<void> {
@@ -34,10 +45,12 @@ async function servidor(context: { after: (fn: () => Promise<void>) => void }) {
       TUMACORD_P2P_MODE: '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
       ADMIN_USERNAME: 'Chefe', TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
     },
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
+  const erro: string[] = [];
+  child.stderr?.on('data', (pedaco: Buffer) => { erro.push(String(pedaco)); if (erro.length > 40) erro.shift(); });
   context.after(async () => { await stopServer(child); await rm(root, { recursive: true, force: true }); });
-  await waitForServer(url, child);
+  await waitForServer(url, child, erro);
   const dono = await entrar(url, 'Dono', 'senha-do-dono');
   const comum = await entrar(url, 'Fulano', 'senha-do-fulano');
   return { url, dono, comum };

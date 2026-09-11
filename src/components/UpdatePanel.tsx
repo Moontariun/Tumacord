@@ -183,6 +183,12 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
     {state.phase === 'checking' && <p className="invite-status">Procurando uma versão nova no GitHub…</p>}
     {state.phase === 'up-to-date' && <p className="invite-status">Você está na versão mais nova publicada.</p>}
 
+    {/* Pular versões é o normal: quem está muito atrás instala direto a mais
+        nova. Quando não dá, a versão que exige passagem diz isso. */}
+    {state.mustStop && <div className="quality-note">
+      <strong>Esta versão precisa ser instalada antes das seguintes</strong>
+      <span>A {state.latest || 'mais nova'} já existe, e o caminho até ela passa por aqui: {state.mustStop.reason}. Depois de aplicar esta, procure de novo para seguir.</span>
+    </div>}
     {state.skipped.length > 0 && <p className="invite-status">
       {state.skipped.map((pulada) => `A ${pulada.version} existe e não é oferecida: ${pulada.reason}.`).join(' ')}
     </p>}
@@ -222,7 +228,11 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
       {state.phase === 'applied' && state.applied && <button className="primary-button" onClick={bridge.restart}>
         {state.applied.restart === 'now' ? 'Reabrir na versão nova' : state.applied.restart === 'quit' ? 'Fechar o Tumacord' : 'Abrir a pasta'}
       </button>}
-      {(state.phase === 'idle' || state.phase === 'up-to-date' || state.phase === 'error' || state.phase === 'no-asset') && <button className="ghost" onClick={bridge.check}><Icon name="refresh" /> Procurar de novo</button>}
+      {/* Procurar continua disponível com uma versão já encontrada: enquanto
+          ninguém aplica, outra pode sair — e é ela que interessa. O botão só
+          some enquanto algo está acontecendo, que é quando ele não teria o que
+          fazer. */}
+      {state.phase !== 'checking' && state.phase !== 'downloading' && state.phase !== 'applying' && state.phase !== 'applied' && <button className="ghost" onClick={bridge.check}><Icon name="refresh" /> Procurar de novo</button>}
       {state.pageUrl && <button className="ghost" onClick={bridge.openPage}>Ver a versão no GitHub</button>}
     </div>
 
