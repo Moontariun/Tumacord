@@ -9,7 +9,7 @@ import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
-import type { AdminOverview, Channel, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
+import type { AdminOverview, Channel, ChatMessage, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import { MAX_POINTS_PER_STROKE, parseDrawLifetime } from '../shared/telestration.js';
 import {
@@ -354,6 +354,10 @@ app.get('/api/health', (_request, response) => {
     version: serverVersion,
     mode: p2pMode ? 'p2p' : 'server',
     web: serveWeb,
+    // Identidade estável desta instalação. É ela que o cliente usa para não
+    // misturar o histórico de dois servidores: nome, apelido e endereço podem
+    // coincidir ou mudar; este id não.
+    installationId: store.installationId,
     security: { accessKeyRequired: Boolean(serverAccessKey), tls: tlsEnabled, media: 'DTLS-SRTP' },
     turn: Boolean(turn),
     // O cliente pergunta o que este servidor sabe fazer, em vez de deduzir de
@@ -1005,23 +1009,36 @@ app.get('/api/peer/attachments/:id', async (request, response) => {
   await sendAttachment(parsed.data, response);
 });
 
-app.get('/api/local/sync', async (request, response) => {
+// O cache local, separado por origem.
+//
+// Ele era o mesmo armazenamento que o servidor embutido usa para hospedar: o
+// que este computador via em um servidor dedicado era espelhado aqui e passava
+// a ser servido — e republicado — como se fosse do grupo P2P desta máquina.
+// Guardar e hospedar são responsabilidades diferentes, e agora moram em
+// lugares diferentes do mesmo arquivo.
+//
+// A origem vem de quem pergunta, e é ela que delimita: o histórico de um
+// servidor só volta para aquele servidor.
+app.get('/api/local/sync', (request, response) => {
   if (!isLoopbackRequest(request)) return void response.status(403).json({ error: 'Disponível apenas localmente.' });
+  const origin = z.string().min(1).max(200).safeParse(request.query.origin);
+  if (!origin.success) return void response.status(400).json({ error: 'Informe a origem do histórico.' });
+  const guardado = store.mirrorFor(origin.data);
   response.json({
-    channels: availableChannels(),
-    messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
-    profiles: store.profiles,
-    availableAttachmentIds: await store.availableAttachmentIds(),
+    channels: guardado.channels,
+    messages: guardado.messages.slice(-500),
+    profiles: guardado.profiles,
+    availableAttachmentIds: [],
   });
 });
 
 app.post('/api/local/sync', async (request, response) => {
   if (!isLoopbackRequest(request)) return void response.status(403).json({ error: 'Disponível apenas localmente.' });
+  const origin = z.string().min(1).max(200).safeParse((request.body as { origin?: unknown } | undefined)?.origin);
+  if (!origin.success) return void response.status(400).json({ error: 'Informe a origem do histórico.' });
   const parsed = syncBundleSchema.safeParse(request.body);
   if (!parsed.success) return void response.status(400).json({ error: 'Histórico inválido.' });
-  if (!p2pMode) await store.mergeChannels(parsed.data.channels);
-  await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
-  await store.mergeProfiles(parsed.data.profiles);
+  await store.mergeMirror(origin.data, parsed.data);
   response.json({ ok: true });
 });
 
@@ -1085,7 +1102,7 @@ io.on('connection', (socket) => {
 
   socket.on('chat:history', (channelId: unknown, acknowledge: (messages: unknown[]) => void) => {
     if (typeof channelId !== 'string') return acknowledge([]);
-    acknowledge(channelIsAvailable(channelId, 'text') ? store.messages.filter((message) => message.channelId === channelId).slice(-500) : []);
+    acknowledge(channelIsAvailable(channelId, 'text') ? readableMessages(socket).filter((message) => message.channelId === channelId).slice(-500) : []);
   });
 
   socket.on('chat:send', async (payload: unknown) => {
@@ -1127,7 +1144,7 @@ io.on('connection', (socket) => {
     acknowledge?.({
       ok: true,
       channels: availableChannels(),
-      messages: store.messages.filter((message) => channelIsAvailable(message.channelId)).slice(-500),
+      messages: readableMessages(socket).filter((message) => channelIsAvailable(message.channelId)).slice(-500),
       profiles: store.profiles,
       availableAttachmentIds: await store.availableAttachmentIds(),
     });
@@ -1465,6 +1482,24 @@ function leaveBoard(socketId: string, boardId: string): void {
   const board = whiteboards.get(boardId);
   if (!board?.participants.delete(socketId)) return;
   io.to(`board:${boardId}`).emit('board:participants', { boardId, participants: whiteboards.participants(boardId) });
+}
+
+// O histórico anterior à separação por origem.
+//
+// Antes da 0.9.5 o cache local e o armazenamento de hospedagem eram o mesmo
+// lugar: o que esta máquina viu em um servidor dedicado foi espelhado aqui.
+// Esse material está misturado e não dá para saber de onde veio cada linha —
+// então ele não é apagado nem publicado. Quem continua vendo é quem está nesta
+// máquina; para quem chega de fora, ele não existe.
+function isLoopbackSocket(socket: { handshake: { address: string } }): boolean {
+  const address = String(socket.handshake.address ?? '').replace(/^::ffff:/, '');
+  return address === '::1' || address.startsWith('127.');
+}
+
+function readableMessages(socket: { handshake: { address: string } }): readonly ChatMessage[] {
+  const corte = store.legacyHistoryUntil;
+  if (!corte || isLoopbackSocket(socket)) return store.messages;
+  return store.messages.filter((message) => message.createdAt > corte);
 }
 
 function sameVoiceRoom(first: string, second: string): boolean {

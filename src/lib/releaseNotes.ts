@@ -15,6 +15,33 @@ export interface NoteBlock {
   text: string;
 }
 
+// O que o aplicativo mostra, e o que fica na página da versão.
+//
+// O CHANGELOG deste projeto conta a história inteira: por que a decisão foi
+// tomada, o que estava errado antes, onde o defeito aparecia. Isso é escrito
+// para quem lê o repositório — e é demais para uma janela que abre sozinha
+// dizendo "o que mudou". Quem só quer usar o aplicativo não precisa saber o
+// nome do arquivo que mudou nem por que a referência era esquecida no meio do
+// arrasto.
+//
+// Então cada versão traz, no começo da própria seção, um resumo entre
+// marcadores. O aplicativo mostra o resumo; a página de Releases continua
+// mostrando tudo, porque os marcadores são comentários e não aparecem lá.
+// Versão sem resumo cai no texto inteiro, que é como era antes.
+const RESUMO = /<!--\s*tumacord:resumo\s*-->([\s\S]*?)<!--\s*\/tumacord:resumo\s*-->/i;
+
+export function readReleaseSummary(markdown: unknown): NoteBlock[] {
+  if (typeof markdown !== 'string') return [];
+  const trecho = RESUMO.exec(markdown)?.[1];
+  return trecho ? readReleaseNotes(trecho) : [];
+}
+
+/** O resumo quando ele existe; o texto inteiro quando não. */
+export function readReleaseHighlights(markdown: unknown): { blocks: NoteBlock[]; summarized: boolean } {
+  const resumo = readReleaseSummary(markdown);
+  return resumo.length ? { blocks: resumo, summarized: true } : { blocks: readReleaseNotes(markdown), summarized: false };
+}
+
 // `**forte**`, `*ênfase*`, `` `código` `` e `[texto](endereço)` viram o texto
 // que eles marcam. O endereço do link fica junto, entre parênteses: ele é
 // informação, e escondê-lo tiraria de quem lê a chance de digitá-lo.
@@ -73,6 +100,21 @@ export function readReleaseNotes(markdown: unknown): NoteBlock[] {
     // Linha de separação (`---`) não carrega texto nenhum.
     if (/^([-*_])\1{2,}$/.test(linha.replace(/\s/g, ''))) {
       fecharParagrafo();
+      continue;
+    }
+    // Comentário do Markdown é recado para quem escreve, não para quem lê: os
+    // marcadores deste projeto viajam assim, e antes disso apareciam na tela
+    // como um parágrafo de texto cru.
+    if (/^<!--[\s\S]*-->$/.test(linha)) {
+      fecharParagrafo();
+      continue;
+    }
+    // Um item de lista escrito em mais de uma linha continua sendo um item.
+    // Sem isto, a segunda linha virava um parágrafo solto embaixo dele — e a
+    // margem de 80 colunas deste CHANGELOG faz isso o tempo todo.
+    const ultimo = blocos[blocos.length - 1];
+    if (!paragrafo.length && ultimo?.kind === 'item') {
+      ultimo.text = inline(`${ultimo.text} ${linha}`);
       continue;
     }
     paragrafo.push(linha);

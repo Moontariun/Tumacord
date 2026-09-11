@@ -4,14 +4,37 @@ import { safeAttachmentName } from '../../shared/attachmentName';
 
 const LOCAL_SERVER = 'http://127.0.0.1:3927';
 
+// De onde veio o histórico.
+//
+// Guardar tudo num pote só fazia a conversa de um servidor dedicado voltar
+// como se fosse do grupo P2P desta máquina — e ser republicada nele. Nome de
+// servidor, apelido e o literal "p2p" não delimitam nada: dois servidores
+// podem se chamar igual, e um apelido muda.
+//
+// No dedicado a origem é a identidade que a instalação declara, que não muda
+// nem quando o endereço muda. No P2P é a chave do convite, que é o que
+// identifica o grupo mesmo quando o host troca de máquina; um grupo só de rede
+// local, sem convite, tem a sua própria.
+export function originFor(input: { connectionMode?: 'p2p' | 'server'; installationId?: string; serverUrl?: string; directKey?: string }): string {
+  if (input.connectionMode === 'server') {
+    const identidade = (input.installationId ?? '').trim();
+    // Sem identidade declarada — servidor anterior à 0.9.5 —, o endereço é o
+    // que resta. Ele é pior (muda quando o servidor muda de casa), e ainda
+    // assim separa dois servidores diferentes, que é o que importa aqui.
+    return identidade ? `servidor:${identidade}` : `endereco:${(input.serverUrl ?? '').trim().toLowerCase()}`;
+  }
+  const chave = (input.directKey ?? '').trim();
+  return chave ? `grupo:${chave.slice(0, 64)}` : 'grupo:rede-local';
+}
+
 function emptyBundle(): ChatSyncBundle {
   return { channels: [], messages: [], profiles: [], availableAttachmentIds: [] };
 }
 
-export async function loadLocalSyncBundle(): Promise<ChatSyncBundle> {
-  if (!window.tumacordDesktop) return emptyBundle();
+export async function loadLocalSyncBundle(origin: string): Promise<ChatSyncBundle> {
+  if (!window.tumacordDesktop || !origin) return emptyBundle();
   try {
-    const response = await fetch(`${LOCAL_SERVER}/api/local/sync`);
+    const response = await fetch(`${LOCAL_SERVER}/api/local/sync?origin=${encodeURIComponent(origin)}`);
     if (!response.ok) return emptyBundle();
     const bundle = await response.json() as Partial<ChatSyncBundle>;
     return { channels: bundle.channels ?? [], messages: bundle.messages ?? [], profiles: bundle.profiles ?? [], availableAttachmentIds: bundle.availableAttachmentIds ?? [] };
@@ -20,12 +43,12 @@ export async function loadLocalSyncBundle(): Promise<ChatSyncBundle> {
   }
 }
 
-export async function mirrorLocally(channels: Channel[], messages: ChatMessage[], profiles: ReplicatedProfile[] = []): Promise<void> {
-  if (!window.tumacordDesktop || (!channels.length && !messages.length && !profiles.length)) return;
+export async function mirrorLocally(origin: string, channels: Channel[], messages: ChatMessage[], profiles: ReplicatedProfile[] = []): Promise<void> {
+  if (!window.tumacordDesktop || !origin || (!channels.length && !messages.length && !profiles.length)) return;
   await fetch(`${LOCAL_SERVER}/api/local/sync`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ channels, messages, profiles, availableAttachmentIds: [] }),
+    body: JSON.stringify({ origin, channels, messages, profiles, availableAttachmentIds: [] }),
   }).catch(() => undefined);
 }
 

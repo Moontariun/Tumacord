@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Channel, ChatAttachment, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
@@ -58,6 +58,27 @@ interface StoredData {
   boards: StoredBoard[];
   /** Ids de mesas excluídas. É o que impede uma delas de voltar do nada. */
   deletedBoards: string[];
+  // Identidade estável desta instalação. Nome de servidor, apelido e o literal
+  // "p2p" não delimitam origem: dois servidores podem se chamar igual, e um
+  // apelido muda. Este id nasce na primeira subida e não muda mais.
+  installationId?: string;
+  // O cache local, separado por origem.
+  //
+  // Ele era o mesmo armazenamento que o servidor embutido usa para hospedar:
+  // a conversa de um servidor dedicado era espelhada aqui e passava a ser
+  // servida — e republicada — como se fosse do grupo P2P desta máquina. São
+  // duas responsabilidades diferentes que moravam no mesmo lugar.
+  mirrors?: Record<string, MirroredHistory>;
+  // Até onde vai o histórico anterior à separação. O que veio antes está
+  // misturado e não dá para saber de onde: ele não é apagado nem publicado.
+  legacyHistoryUntil?: string;
+}
+
+export interface MirroredHistory {
+  channels: Channel[];
+  messages: ChatMessage[];
+  profiles: ReplicatedProfile[];
+  updatedAt: string;
 }
 
 type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
@@ -79,6 +100,7 @@ const initialData = (): StoredData => ({
   auditLog: [],
   boards: [],
   deletedBoards: [],
+  mirrors: {},
 });
 
 function profileKey(username: string): string {
@@ -101,6 +123,7 @@ export class JsonStore {
     await mkdir(this.attachmentsDirectory, { recursive: true });
     try {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<StoredData>;
+      let migratedInstallation = false;
       let migratedLegacySessions = false;
       const sessions = (parsed.sessions ?? []).flatMap((session) => {
         if (session.tokenHash) return [session];
@@ -154,10 +177,28 @@ export class JsonStore {
         auditLog: parsed.auditLog ?? [],
         boards: parsed.boards ?? [],
         deletedBoards: parsed.deletedBoards ?? [],
+        installationId: parsed.installationId,
+        mirrors: parsed.mirrors ?? {},
+        legacyHistoryUntil: parsed.legacyHistoryUntil,
       };
-      if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
+      // A instalação ganha identidade na primeira subida, e a linha de corte
+      // do histórico antigo é traçada junto: daqui em diante o que chegar tem
+      // origem conhecida, e o que já estava aqui fica marcado como anterior.
+      if (!this.data.installationId) {
+        this.data.installationId = randomUUID();
+        migratedInstallation = true;
+      }
+      if (this.data.legacyHistoryUntil === undefined) {
+        const ultima = this.data.messages.at(-1)?.createdAt ?? '';
+        this.data.legacyHistoryUntil = ultima;
+        migratedInstallation = true;
+      }
+      if (migratedInstallation || migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Instalação nova: identidade agora, e nenhum histórico anterior.
+      this.data.installationId = randomUUID();
+      this.data.legacyHistoryUntil = '';
       await this.save();
     }
   }
@@ -290,6 +331,50 @@ export class JsonStore {
   get auditLog(): readonly AuditEntry[] { return this.data.auditLog; }
   get boards(): readonly StoredBoard[] { return this.data.boards ?? (this.data.boards = []); }
   get deletedBoards(): readonly string[] { return this.data.deletedBoards ?? (this.data.deletedBoards = []); }
+  get installationId(): string { return this.data.installationId ?? ''; }
+  /** Vazio quando não há histórico anterior à separação por origem. */
+  get legacyHistoryUntil(): string { return this.data.legacyHistoryUntil ?? ''; }
+
+  /**
+   * O cache de uma origem. Ele não é servido a ninguém: é o que este
+   * computador viu naquele servidor ou naquele grupo, e só volta para lá.
+   */
+  mirrorFor(origin: string): MirroredHistory {
+    const mirrors = this.data.mirrors ?? (this.data.mirrors = {});
+    return mirrors[origin] ?? { channels: [], messages: [], profiles: [], updatedAt: '' };
+  }
+
+  async mergeMirror(origin: string, incoming: { channels?: readonly Channel[]; messages?: readonly ChatMessage[]; profiles?: readonly ReplicatedProfile[] }): Promise<void> {
+    const mirrors = this.data.mirrors ?? (this.data.mirrors = {});
+    const atual = this.mirrorFor(origin);
+    const canais = new Map(atual.channels.map((channel) => [channel.id, channel]));
+    for (const channel of incoming.channels ?? []) canais.set(channel.id, channel);
+    const mensagens = new Map(atual.messages.map((message) => [message.id, message]));
+    for (const message of incoming.messages ?? []) mensagens.set(message.id, message);
+    const perfis = new Map(atual.profiles.map((entry) => [profileKey(entry.username), entry]));
+    for (const entry of incoming.profiles ?? []) {
+      const chave = profileKey(entry.username);
+      const anterior = perfis.get(chave);
+      if (!anterior || profileIsNewer(entry.profile, anterior.profile)) perfis.set(chave, entry);
+    }
+    const ordenadas = [...mensagens.values()].sort((first, second) => first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id));
+    mirrors[origin] = {
+      channels: [...canais.values()],
+      // O mesmo teto do histórico do servidor: o cache de uma origem não pode
+      // crescer sem fim só porque ninguém o apaga.
+      messages: ordenadas.slice(-2000),
+      profiles: [...perfis.values()],
+      updatedAt: new Date().toISOString(),
+    };
+    // Um teto de origens também: quem visita muitos servidores não devia ver
+    // este arquivo crescer para sempre. A menos usada sai primeiro.
+    const origens = Object.entries(mirrors);
+    if (origens.length > 24) {
+      const [maisAntiga] = origens.sort((a, b) => (a[1].updatedAt || '').localeCompare(b[1].updatedAt || ''));
+      if (maisAntiga && maisAntiga[0] !== origin) delete mirrors[maisAntiga[0]];
+    }
+    await this.save();
+  }
 
   // As mesas vão para o disco inteiras, e não por operação: o arquivo já é
   // reescrito por completo a cada gravação, e um caminho incremental aqui só

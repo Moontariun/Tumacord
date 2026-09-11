@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { copyText } from '../lib/clipboard';
-import { describePublished, formatBytes, readReleaseNotes } from '../lib/releaseNotes';
+import { describePublished, formatBytes, readReleaseHighlights } from '../lib/releaseNotes';
 
 const REPOSITORY = 'Moontariun/Tumacord';
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
@@ -125,10 +125,13 @@ export function UpdateButton({ state, onOpen }: { state: TumacordUpdateState | n
 // da rede, e isso não. O meio-termo é ler os blocos e desenhá-los com os
 // elementos daqui — nada do que chega vira tag.
 function ReleaseNotes({ markdown }: { markdown: string }) {
-  const blocos = readReleaseNotes(markdown);
-  if (!blocos.length) return <div className="release-notes"><p>Esta versão foi publicada sem notas.</p></div>;
+  // O aplicativo mostra o resumo da versão. O texto inteiro — o porquê de cada
+  // decisão, o que estava errado antes — é escrito para quem lê o repositório,
+  // e continua inteiro na página da versão.
+  const { blocks } = readReleaseHighlights(markdown);
+  if (!blocks.length) return <div className="release-notes"><p>Esta versão foi publicada sem notas.</p></div>;
   return <div className="release-notes">
-    {blocos.map((bloco, indice) => bloco.kind === 'heading'
+    {blocks.map((bloco, indice) => bloco.kind === 'heading'
       ? <strong key={indice}>{bloco.text}</strong>
       : <p key={indice} className={bloco.kind === 'item' ? 'note-item' : bloco.kind === 'quote' ? 'note-quote' : undefined}>{bloco.text}</p>)}
   </div>;

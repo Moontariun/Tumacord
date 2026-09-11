@@ -193,6 +193,24 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Isolamento por origem e notas resumidas — 0.9.5
+
+| Item | Estado |
+| --- | --- |
+| Dois servidores dedicados não compartilham cache | TESTADO AUTOMATICAMENTE (servidor real) |
+| Dedicado e P2P não compartilham cache | TESTADO AUTOMATICAMENTE (identidade e servidor real) |
+| Cache local não é servido como histórico do grupo | TESTADO AUTOMATICAMENTE (servidor real) |
+| Cache exige origem: sem ela nada entra nem sai | TESTADO AUTOMATICAMENTE (servidor real) |
+| Instalação declara identidade estável e única | TESTADO AUTOMATICAMENTE (dois servidores reais) |
+| Identidade sobrevive à troca de endereço | TESTADO AUTOMATICAMENTE |
+| Grupo P2P continua o mesmo na troca de host | TESTADO AUTOMATICAMENTE |
+| Histórico anterior não é apagado | VALIDADO POR ANÁLISE (nada remove `store.messages`) |
+| Histórico anterior não chega a quem vem de fora | VALIDADO POR ANÁLISE (`readableMessages` filtra por origem da conexão) |
+| Histórico anterior continua visível nesta máquina | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Aviso de versão mostra resumo curto | TESTADO AUTOMATICAMENTE (leitor) + conferido no texto da 0.9.5 |
+| Versão sem resumo mostra o texto inteiro | TESTADO AUTOMATICAMENTE |
+| Troca P2P → dedicado → outro dedicado → P2P no app real | IMPLEMENTADO — REQUER TESTE MANUAL |
+
 ## Autoridade do servidor dedicado — 0.9.4
 
 | Item | Estado |

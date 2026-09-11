@@ -1,5 +1,49 @@
 # Histórico de versões
 
+## 0.9.5 — cada conversa fica no lugar dela
+
+<!-- tumacord:resumo -->
+O que você conversa em um servidor agora fica guardado só para aquele servidor.
+Antes, o histórico de todos os lugares ia para o mesmo canto do seu computador
+— e podia reaparecer no grupo errado.
+
+- Conversas de servidores diferentes não se misturam mais, nem com as do P2P.
+- O histórico que já estava guardado antes desta versão continua aí para você,
+  e deixa de ser enviado a outras pessoas.
+- O aviso de versão nova agora mostra um resumo curto; os detalhes ficam na
+  página da versão.
+<!-- /tumacord:resumo -->
+
+**O que este computador guarda, e de onde veio**
+
+O Tumacord guarda no seu computador uma cópia do que você viu: é o que faz o
+histórico aparecer rápido e sobreviver quando o host de um grupo P2P sai.
+
+Essa cópia era guardada no mesmo lugar que o servidor embutido usa para
+hospedar — um pote só, sem etiqueta. Na prática: a conversa de um servidor
+dedicado era espelhada ali e passava a ser servida, e republicada, como se
+fosse do grupo P2P desta máquina. Guardar e hospedar são responsabilidades
+diferentes, e agora moram em lugares diferentes.
+
+Cada cópia passa a levar a origem de onde veio, e a origem é uma identidade
+estável — não o nome nem o endereço, que mudam e coincidem. Um servidor
+dedicado declara a própria identidade, que continua a mesma se ele mudar de
+endereço; um grupo P2P é identificado pelo convite, que continua o mesmo quando
+o host troca de máquina.
+
+**O histórico anterior a esta versão**
+
+Ele está misturado e não há como saber de onde veio cada linha. Por isso ele
+**não é apagado nem publicado**: quem continua vendo é quem está nesta máquina,
+e para quem chega de fora ele não existe.
+
+**O aviso de versão nova ficou curto**
+
+A janela que abre dizendo o que mudou passa a mostrar um resumo de poucas
+linhas. O texto completo — por que cada decisão foi tomada, o que estava errado
+antes — continua inteiro na página da versão, que é onde ele serve para alguma
+coisa.
+
 ## 0.9.4 — no dedicado, quem responde é o servidor
 
 Esta versão sai da **0.9.3** e fecha três buracos de autoridade no servidor

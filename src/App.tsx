@@ -13,7 +13,7 @@ import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type Scree
 import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
-import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
+import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectReport, requestShortInvite, resolveAnyInvite, type DirectReport } from './lib/directLink';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
@@ -217,6 +217,37 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   const changeDrawing = useCallback((patch: Partial<DrawPreferences>) => {
     setDrawing((atual) => writeDrawPreferences({ ...atual, ...patch }));
   }, []);
+  // De onde vem o que este computador guarda.
+  //
+  // No P2P a resposta é imediata: a chave do convite identifica o grupo, e ela
+  // já está na sessão. No dedicado é preciso perguntar ao servidor quem ele é
+  // — endereço e nome não servem, porque mudam e coincidem.
+  const [origin, setOrigin] = useState(() => (session.connectionMode === 'server' ? '' : originFor({ connectionMode: 'p2p', directKey: session.directKey })));
+  const originRef = useRef(origin);
+  originRef.current = origin;
+  useEffect(() => {
+    if (session.connectionMode !== 'server') {
+      setOrigin(originFor({ connectionMode: 'p2p', directKey: session.directKey }));
+      return;
+    }
+    let cancelado = false;
+    // Enquanto não se sabe de quem é o histórico, nada é guardado: um pote
+    // errado é pior do que pote nenhum.
+    setOrigin('');
+    void fetch(`${session.serverUrl}/api/health`)
+      .then((resposta) => resposta.json())
+      .then((corpo: { installationId?: string }) => {
+        if (cancelado) return;
+        setOrigin(originFor({ connectionMode: 'server', installationId: corpo?.installationId, serverUrl: session.serverUrl }));
+      })
+      .catch(() => {
+        // Servidor anterior à 0.9.5 ou fora do ar: o endereço separa menos
+        // bem, mas ainda separa dois servidores diferentes.
+        if (!cancelado) setOrigin(originFor({ connectionMode: 'server', serverUrl: session.serverUrl }));
+      });
+    return () => { cancelado = true; };
+  }, [session.connectionMode, session.directKey, session.serverUrl]);
+
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const toastTimer = useRef<number | null>(null);
@@ -402,7 +433,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       setMessages((current) => [...new Map([...current, ...visible].map((item) => [item.id, item])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));
     };
     const storeIncoming = (incoming: ChatMessage[]) => {
-      void mirrorLocally([], incoming);
+      void mirrorLocally(originRef.current, [], incoming);
       mergeVisible(incoming);
       if (syncFilesRef.current) for (const item of incoming) if (item.attachment) void cacheAttachment(next, item.attachment, session.serverUrl, session.token).catch(() => undefined);
     };
@@ -412,11 +443,11 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       // imagem ausente. Baixamos os arquivos antes de persistir o JSON para
       // não perder o perfil durante uma migração de host.
       void cacheProfileMedia(bundle, session.serverUrl)
-        .then(() => mirrorLocally([], [], bundle.profiles ?? []))
+        .then(() => mirrorLocally(originRef.current, [], [], bundle.profiles ?? []))
         .catch(() => undefined);
     };
     const mergeBundle = (bundle: ChatSyncBundle) => {
-      void mirrorLocally(bundle.channels, bundle.messages);
+      void mirrorLocally(originRef.current, bundle.channels, bundle.messages);
       mirrorProfilesAfterMedia(bundle);
       mergeVisible(bundle.messages);
     };
@@ -427,7 +458,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
       // o servidor então guardava e distribuía a todo mundo conectado.
       // Ninguém espera que trocar de modo publique conversa antiga.
       if (session.connectionMode === 'server') return;
-      const local = await loadLocalSyncBundle();
+      const local = await loadLocalSyncBundle(originRef.current);
       await publishProfileMedia(local, session.serverUrl, session.token);
       next.emit('chat:sync:push', local, (result: ChatSyncBundle & { ok?: boolean }) => { if (result?.ok !== false && result?.messages) mergeBundle(result); });
     };
@@ -462,7 +493,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     next.on('server:snapshot', (incoming: ServerSnapshot) => {
       setSnapshot(incoming);
       const profiles = incoming.onlineUsers.filter((user) => user.profile?.updatedAt).map((user) => ({ username: user.username, profile: user.profile! }));
-      void mirrorLocally(incoming.channels, []);
+      void mirrorLocally(originRef.current, incoming.channels, []);
       mirrorProfilesAfterMedia({ channels: [], messages: [], profiles, availableAttachmentIds: [] });
       const currentSession = sessionRef.current;
       const freshSelf = incoming.onlineUsers.find((user) => user.id === currentSession.user.id);
@@ -595,7 +626,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     socket.emit('chat:history', selectedChannel.id, (history: ChatMessage[]) => {
       const sorted = [...new Map(history.map((item) => [item.id, item])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
       setMessages(sorted);
-      void mirrorLocally([], sorted);
+      void mirrorLocally(originRef.current, [], sorted);
       if (syncFilesRef.current) for (const item of sorted) if (item.attachment) void cacheAttachment(socket, item.attachment, session.serverUrl, session.token).catch(() => undefined);
     });
   }, [selectedChannel?.id, selectedChannel?.type, session.serverUrl, session.token, socket]);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describePublished, formatBytes, readReleaseNotes } from '../src/lib/releaseNotes';
+import { describePublished, formatBytes, readReleaseHighlights, readReleaseNotes } from '../src/lib/releaseNotes';
 
 // O texto vem da página de Releases do GitHub, que é texto escrito por nós mas
 // que chega pela rede. Ele é lido em blocos e desenhado como texto: a regra que
@@ -72,4 +72,48 @@ test('a data da versão vira o que ela significa para quem está decidindo', () 
   assert.equal(describePublished('2026-09-01T09:00:00Z', agora), 'publicada há 9 dias');
   assert.match(describePublished('2026-01-01T09:00:00Z', agora), /^publicada em /);
   assert.equal(describePublished('data inventada', agora), '');
+});
+
+// O aplicativo mostra o resumo; a página da versão continua com tudo. O
+// marcador é comentário de Markdown, então ele não aparece no GitHub — e não
+// pode aparecer na tela do aplicativo como um parágrafo de texto cru.
+test('o resumo entre marcadores é o que o aplicativo mostra', () => {
+  const markdown = [
+    '<!-- tumacord:resumo -->',
+    'O traço voltou a funcionar quando você arrasta.',
+    '',
+    '- Dá para excluir uma mesa de vez.',
+    '<!-- /tumacord:resumo -->',
+    '',
+    '**Por que isso acontecia**',
+    '',
+    'Duas coisas moravam na mesma referência, e a confirmação do servidor',
+    'apagava uma delas no meio do arrasto.',
+  ].join('\n');
+
+  const { blocks, summarized } = readReleaseHighlights(markdown);
+  assert.equal(summarized, true);
+  assert.deepEqual(blocks.map((bloco) => bloco.text), [
+    'O traço voltou a funcionar quando você arrasta.',
+    'Dá para excluir uma mesa de vez.',
+  ]);
+  assert.equal(blocks.some((bloco) => bloco.text.includes('referência')), false, 'o porquê fica na página da versão');
+});
+
+test('versão sem resumo continua mostrando o texto inteiro', () => {
+  const { blocks, summarized } = readReleaseHighlights('**O que mudou**\n\nUma coisa e outra.');
+  assert.equal(summarized, false);
+  assert.deepEqual(blocks.map((bloco) => bloco.text), ['O que mudou', 'Uma coisa e outra.']);
+});
+
+test('comentário de Markdown não vira parágrafo na tela', () => {
+  const blocos = readReleaseNotes('<!-- tumacord:versao-quebrada -->\n\nNão instale esta versão.');
+  assert.deepEqual(blocos.map((bloco) => bloco.text), ['Não instale esta versão.']);
+});
+
+// A margem de 80 colunas do CHANGELOG quebra item de lista em duas linhas o
+// tempo todo. A segunda linha virava um parágrafo solto embaixo do item.
+test('item de lista escrito em duas linhas continua sendo um item', () => {
+  const blocos = readReleaseNotes('- O histórico que já estava guardado continua aí,\n  e deixa de ser enviado a outras pessoas.');
+  assert.deepEqual(blocos, [{ kind: 'item', text: 'O histórico que já estava guardado continua aí, e deixa de ser enviado a outras pessoas.' }]);
 });

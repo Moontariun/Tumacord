@@ -247,3 +247,74 @@ test('apagar um canal de voz tira da call quem estava dentro', { timeout: 60_000
   );
   assert.equal((snapshot.voiceRooms[canal.channel.id] ?? []).length, 0);
 });
+
+// O cache local, separado por origem.
+//
+// Até a 0.9.4 ele era o mesmo armazenamento que o servidor embutido usa para
+// hospedar: o que este computador via em um servidor dedicado era espelhado
+// ali e passava a ser servido — e republicado — como se fosse do grupo P2P
+// desta máquina. Guardar e hospedar viraram lugares diferentes.
+test('o histórico guardado de um servidor não volta como sendo de outro', { timeout: 60_000 }, async (context) => {
+  const { url } = await servidor(context, true);
+  const daCasa = { id: '44444444-4444-4444-8444-444444444444', channelId: 'geral', author: { id: 'a', username: 'Ana' }, body: 'conversa do servidor da casa', createdAt: '2026-09-01T10:00:00.000Z' };
+  const doTrabalho = { id: '55555555-5555-4555-8555-555555555555', channelId: 'geral', author: { id: 'b', username: 'Bia' }, body: 'conversa do servidor do trabalho', createdAt: '2026-09-01T11:00:00.000Z' };
+
+  const guardar = (origin: string, messages: unknown[]) => fetch(`${url}/api/local/sync`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ origin, channels: [], messages, profiles: [], availableAttachmentIds: [] }),
+  });
+  const ler = async (origin: string) => (await (await fetch(`${url}/api/local/sync?origin=${encodeURIComponent(origin)}`)).json()) as { messages: Array<{ id: string }> };
+
+  assert.equal((await guardar('servidor:casa', [daCasa])).status, 200);
+  assert.equal((await guardar('servidor:trabalho', [doTrabalho])).status, 200);
+
+  const casa = await ler('servidor:casa');
+  assert.deepEqual(casa.messages.map((mensagem) => mensagem.id), [daCasa.id]);
+  const trabalho = await ler('servidor:trabalho');
+  assert.deepEqual(trabalho.messages.map((mensagem) => mensagem.id), [doTrabalho.id]);
+  // E um grupo P2P não enxerga nem um nem outro.
+  assert.deepEqual((await ler('grupo:rede-local')).messages, []);
+});
+
+test('o cache local exige a origem: sem ela, nada entra e nada sai', { timeout: 60_000 }, async (context) => {
+  const { url } = await servidor(context, true);
+  const semOrigem = await fetch(`${url}/api/local/sync`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ channels: [], messages: [], profiles: [], availableAttachmentIds: [] }),
+  });
+  assert.equal(semOrigem.status, 400);
+  assert.equal((await fetch(`${url}/api/local/sync`)).status, 400);
+});
+
+// O que este computador guardou de um servidor não é servido a mais ninguém:
+// o cache é dele, e a hospedagem é outra coisa.
+test('o que está no cache local não é servido como histórico do grupo', { timeout: 60_000 }, async (context) => {
+  const { url, sockets } = await servidor(context, true);
+  await fetch(`${url}/api/local/sync`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      origin: 'servidor:casa', channels: [], profiles: [], availableAttachmentIds: [],
+      messages: [{ id: '66666666-6666-4666-8666-666666666666', channelId: 'geral', author: { id: 'a', username: 'Ana' }, body: 'isto é de outro lugar', createdAt: '2026-09-01T10:00:00.000Z' }],
+    }),
+  });
+
+  const ana = await entrar(url, 'Ana');
+  const socketAna = await connect(url, ana.token);
+  sockets.push(socketAna);
+  const historico = await new Promise<Array<{ id: string }>>((resolve) => socketAna.emit('chat:history', 'geral', resolve));
+  assert.equal(historico.some((mensagem) => mensagem.id === '66666666-6666-4666-8666-666666666666'), false);
+});
+
+// A instalação precisa de uma identidade que não mude: é ela que o cliente usa
+// para não confundir dois servidores com o mesmo nome ou o mesmo endereço.
+test('a instalação declara uma identidade estável', { timeout: 60_000 }, async (context) => {
+  const { url } = await servidor(context);
+  const primeira = await (await fetch(`${url}/api/health`)).json() as { installationId?: string };
+  assert.match(primeira.installationId ?? '', /^[0-9a-f-]{36}$/, 'a identidade nasce na primeira subida');
+  const segunda = await (await fetch(`${url}/api/health`)).json() as { installationId?: string };
+  assert.equal(segunda.installationId, primeira.installationId, 'e não muda a cada consulta');
+
+  const outra = await servidor(context);
+  const vizinha = await (await fetch(`${outra.url}/api/health`)).json() as { installationId?: string };
+  assert.notEqual(vizinha.installationId, primeira.installationId, 'duas instalações não compartilham identidade');
+});

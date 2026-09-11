@@ -131,7 +131,10 @@ gravado é apagado pela mudança.
 Depois dela, em ordem: limite de voz aplicado na entrada e canal apagado sem
 deixar call órfã — ambos confirmados acima e de escopo pequeno.
 
-**Atualização:** as três coisas acima foram entregues na 0.9.4. A próxima
-etapa recomendada passa a ser a **Prioridade 1-A**, o isolamento do cache local
-por origem: hoje o histórico guardado no computador não distingue de qual
-servidor ou grupo ele veio.
+**Atualização:** as três coisas acima foram entregues na 0.9.4, e a
+**Prioridade 1-A** — isolamento do cache local por origem — na 0.9.5.
+
+A próxima etapa recomendada passa a ser a **Prioridade 1-C/D/E**: credenciais e
+chave do servidor separadas por destino, e convite que resolve o destino antes
+de escolher a autenticação. Depois dela, a **Prioridade 2-I**, a live por
+escolha explícita.
