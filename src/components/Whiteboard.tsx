@@ -111,6 +111,11 @@ export function Whiteboard({ session, api, currentUserId, connectionMode, onNoti
     ctx.setTransform(densidade, 0, 0, densidade, 0, 0);
     ctx.clearRect(0, 0, caixa.width, caixa.height);
     desenharFolha(ctx, caixa.width, caixa.height, view);
+    // O quadro é o que quem ordena confirmou. O traço em andamento é
+    // desenhado por cima dele enquanto a resposta não volta: ou ele ainda nem
+    // existe no quadro (entra no fim), ou ele já existe com menos pontos do
+    // que a mão já andou (a versão local manda). Como os dois têm o mesmo id,
+    // a mesma cor e a mesma espessura, a troca é invisível.
     const visiveis = api.draft && !state.strokes.some((stroke) => stroke.id === api.draft!.id)
       ? [...state.strokes, api.draft]
       : state.strokes.map((stroke) => (api.draft && stroke.id === api.draft.id && api.draft.points.length > stroke.points.length ? api.draft : stroke));

@@ -77,38 +77,55 @@ const rooms = new VoiceRooms();
 const boardOrigin = p2pMode ? 'p2p' : `server:${serverName}`;
 const whiteboards = new Whiteboards(() => scheduleBoardSave());
 let boardSaveTimer: NodeJS.Timeout | null = null;
+let lastBoardSaveAt = 0;
+/** Intervalo mínimo entre duas gravações do arquivo por causa das mesas. É
+ *  também o tamanho da janela que uma queda sem aviso pode levar embora. */
+const BOARD_SAVE_INTERVAL_MS = 500;
 
+// A primeira mudança grava na hora; as seguintes esperam.
+//
 // Desenhar produz operações a poucos milissegundos de distância, e o arquivo é
-// reescrito inteiro a cada gravação. Juntar um segundo de mão andando em uma
+// reescrito inteiro a cada gravação — juntar um segundo de mão andando em uma
 // gravação só é a diferença entre salvar a mesa e brigar com o disco.
+//
+// Mas adiar *também* a primeira seria apostar num encerramento gracioso que nem
+// todo sistema oferece: no Windows um processo encerrado por `kill` morre na
+// hora, sem passar por manipulador nenhum. Gravar na borda de subida fecha essa
+// janela: a mesa chega ao disco na primeira operação, sem esperar a mão parar,
+// e o pior caso de uma queda sem aviso é meio segundo de traço em cima de uma
+// mesa que já está gravada — não a mesa inteira.
 function scheduleBoardSave(): void {
   // No P2P a mesa vive enquanto o grupo estiver reunido, e é isso que a
   // interface promete. Gravá-la no disco de quem por acaso é o host hoje
   // guardaria o desenho do grupo na máquina de uma pessoa, sem que ninguém
   // tivesse pedido isso.
   if (p2pMode || boardSaveTimer) return;
+  const desde = Date.now() - lastBoardSaveAt;
+  if (desde >= BOARD_SAVE_INTERVAL_MS) return void saveBoardsNow();
   boardSaveTimer = setTimeout(() => {
     boardSaveTimer = null;
-    void store.saveBoards(whiteboards.toStored()).catch(() => undefined);
-  }, 1_000);
+    void saveBoardsNow();
+  }, BOARD_SAVE_INTERVAL_MS - desde);
   boardSaveTimer.unref?.();
 }
 
-// Desligar o servidor não pode custar o último segundo de desenho.
-//
-// A gravação é adiada de propósito, para a mão que está andando não reescrever
-// o arquivo dezenas de vezes por segundo. Isso abre uma janela: quem desliga o
-// contêiner logo depois de alguém levantar a caneta perderia aquele traço. O
-// encerramento fecha essa janela gravando antes de sair — com um prazo, para
-// um disco travado não transformar "parar o servidor" em "servidor que não
-// para".
+function saveBoardsNow(): Promise<void> {
+  lastBoardSaveAt = Date.now();
+  return store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+}
+
+// Onde existe encerramento gracioso — Linux, contêiner, `docker compose down` —
+// o último traço é gravado antes da saída, e nem aquele segundo se perde. Onde
+// não existe, a gravação na borda de subida já garantiu que a mesa está em
+// disco. O prazo evita que um disco travado transforme "parar o servidor" em
+// "servidor que não para".
 function flushBoards(): Promise<void> {
   if (boardSaveTimer) {
     clearTimeout(boardSaveTimer);
     boardSaveTimer = null;
   }
   if (p2pMode) return Promise.resolve();
-  return store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+  return saveBoardsNow();
 }
 
 for (const sinal of ['SIGTERM', 'SIGINT'] as const) {

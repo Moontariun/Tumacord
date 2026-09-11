@@ -69,9 +69,10 @@ reconexão que reenvia o que já tinha enviado **não desenha duas vezes**.
 
 **No servidor dedicado, a mesa fica**
 
-Ela é gravada no arquivo do servidor e volta inteira quando ele reinicia.
-Desligar o servidor grava antes de sair, para o último traço não se perder na
-janela entre a mão levantar e o arquivo ser escrito.
+Ela é gravada no arquivo do servidor e volta inteira quando ele reinicia. A
+gravação acontece já na primeira operação e não espera a mão parar, então a
+mesa não depende de o servidor ser desligado com educação — e quando ele é,
+ele grava antes de sair.
 
 **No P2P, a mesa dura enquanto o grupo durar**
 

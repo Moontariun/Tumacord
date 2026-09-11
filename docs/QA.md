@@ -209,6 +209,7 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Bloquear a mesa impede todo mundo, menos quem gerencia | TESTADO AUTOMATICAMENTE (servidor real) |
 | Limpar tudo chega a quem reconecta depois | TESTADO AUTOMATICAMENTE (servidor real) |
 | Salvar e reabrir no dedicado preserva o conteúdo | TESTADO AUTOMATICAMENTE (servidor reiniciado de verdade) |
+| A mesa chega ao disco sem encerramento gracioso | TESTADO AUTOMATICAMENTE (processo derrubado por SIGKILL) |
 | P2P: a mesa sobrevive à troca de host | TESTADO AUTOMATICAMENTE (dois servidores P2P reais) |
 | Servidor dedicado recusa mesa vinda de fora | TESTADO AUTOMATICAMENTE (servidor real) |
 | Lacuna de revisão vira pedido de recuperação | TESTADO AUTOMATICAMENTE (modelo) |

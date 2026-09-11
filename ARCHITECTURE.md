@@ -115,7 +115,7 @@ A mesa é o oposto do desenho sobre a live em quase tudo. Aquilo é apontamento 
 
 **Nada some sozinho.** O desenho sobre a live guarda 64 traços e descarta o mais antigo; aqui o teto recusa a operação nova com uma mensagem e preserva o que está na folha. Desfazer age sobre um objeto identificado e do próprio autor, nunca sobre "o último item da lista".
 
-No dedicado, as mesas são gravadas no arquivo do servidor (gravação adiada em um segundo, mais uma descarga no encerramento, para o último traço não cair na janela entre a mão levantar e o arquivo ser escrito). No P2P nada é gravado: quem ordena é o host, e a mesa atravessa a troca de host porque quem estava nela devolve o snapshot ao servidor novo. Essa devolução é recusada por um servidor dedicado e exige, no P2P, que quem entrega esteja na call daquele host agora.
+No dedicado, as mesas são gravadas no arquivo do servidor. A gravação é na borda de subida — a primeira mudança vai ao disco na hora, e as seguintes são juntadas numa janela de meio segundo —, mais uma descarga no encerramento. Adiar também a primeira seria apostar num encerramento gracioso que nem todo sistema oferece: no Windows um processo morto por `kill` não passa por manipulador nenhum. Assim, o pior caso de uma queda sem aviso é meio segundo de traço em cima de uma mesa já gravada, e não a mesa inteira. No P2P nada é gravado: quem ordena é o host, e a mesa atravessa a troca de host porque quem estava nela devolve o snapshot ao servidor novo. Essa devolução é recusada por um servidor dedicado e exige, no P2P, que quem entrega esteja na call daquele host agora.
 
 ## Atualização do aplicativo
 

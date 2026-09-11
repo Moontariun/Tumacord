@@ -15,7 +15,8 @@ import { freePort } from './freePort';
 interface Ambiente {
   url: string;
   entrar: (username: string) => Promise<Socket>;
-  reiniciar: () => Promise<void>;
+  /** `abrupto` derruba o processo sem encerramento gracioso, como o Windows faz. */
+  reiniciar: (abrupto?: boolean) => Promise<void>;
 }
 
 // Prazos folgados de propósito. Estes testes sobem servidores de verdade, e
@@ -43,9 +44,9 @@ function emit<T>(socket: Socket, event: string, payload: unknown, timeoutMs = 20
   });
 }
 
-async function pararServidor(child: ChildProcess): Promise<void> {
+async function pararServidor(child: ChildProcess, sinal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
   if (child.exitCode !== null) return;
-  child.kill('SIGTERM');
+  child.kill(sinal);
   await new Promise((resolve) => { child.once('exit', resolve); setTimeout(resolve, 5_000).unref?.(); });
 }
 
@@ -94,10 +95,17 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }, p
 
   // Derrubar e subir de novo com o mesmo diretório de dados: é assim que
   // "salvar e reabrir" deixa de ser uma promessa e vira uma prova.
-  const reiniciar = async () => {
+  const reiniciar = async (abrupto = false) => {
     for (const socket of sockets) socket.disconnect();
-    // Sair grava as mesas; esperar a saída é esperar a gravação terminar.
-    await pararServidor(child);
+    // O servidor junta as gravações das mesas numa janela curta. Esperar essa
+    // janela é esperar o disco, não esperar o desligamento: sem isso o teste
+    // mediria a cortesia do sistema operacional na hora de matar o processo —
+    // que no Windows não existe — em vez de medir a durabilidade da mesa.
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    // Sair grava as mesas; esperar a saída é esperar a gravação terminar. Com
+    // `abrupto` não há gravação nenhuma na saída — é o que sobra quando o
+    // sistema não oferece encerramento gracioso.
+    await pararServidor(child, abrupto ? 'SIGKILL' : 'SIGTERM');
     child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: 'ignore' });
     await waitForServer(url, child);
   };
@@ -338,6 +346,30 @@ test('salvar e reabrir no dedicado preserva o conteúdo da mesa', { timeout: 90_
   const entrou = await entrarNaMesa(depois, boardId);
   const quadro = montar(entrou.snapshot, entrou.ops);
   assert.deepEqual(quadro.strokes.map((stroke) => stroke.id), ['t1', 't3'], 'o que foi apagado continua apagado, e o resto continua lá');
+});
+
+// O encerramento gracioso grava o último traço antes de sair — mas ele não
+// existe em todo lugar: no Windows um processo morto por `kill` não passa por
+// manipulador nenhum. Por isso a mesa vai para o disco enquanto o desenho
+// acontece, e não só quando o servidor é desligado com educação. Aqui ela é
+// derrubada sem cerimônia, depois da janela de coalescência que o servidor
+// documenta, e o que foi desenhado continua lá.
+test('a mesa chega ao disco sem depender de um encerramento gracioso', { timeout: 90_000 }, async (context) => {
+  const { entrar, reiniciar } = await ambiente(context);
+  const ana = await entrar('Ana');
+  const criada = await criar(ana, 'Quadro sem rede');
+  const boardId = criada.board!.id;
+  await entrarNaMesa(ana, boardId);
+  await desenhar(ana, boardId, [traco('t1', 10, 10), traco('t2', 20, 20)]);
+
+  await reiniciar(true);
+
+  const depois = await entrar('Ana');
+  const lista = await emit<{ ok: boolean; boards: BoardSummary[] }>(depois, 'board:list', {});
+  const mesa = lista.boards.find((board) => board.id === boardId);
+  assert.ok(mesa, 'a mesa estava em disco antes de o processo morrer');
+  const entrou = await entrarNaMesa(depois, boardId);
+  assert.deepEqual(montar(entrou.snapshot, entrou.ops).strokes.map((stroke) => stroke.id), ['t1', 't2']);
 });
 
 test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { timeout: 90_000 }, async (context) => {

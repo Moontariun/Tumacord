@@ -52,10 +52,22 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      # `bash` aqui de propósito: é o mesmo passo do runner Linux, com a mesma
+      # rede de segurança. O log completo de uma execução exige login no
+      # GitHub, e uma reprovação que só diz "exit code 1" obriga uma ida ao
+      # navegador autenticado para descobrir qual teste caiu. As anotações são
+      # públicas, então o nome do teste passa a aparecer ao lado da falha.
       - name: Validar projeto
+        shell: bash
         run: |
           npm run typecheck
-          npm test
+          set -o pipefail
+          if ! npm test 2>&1 | tee "$RUNNER_TEMP/testes.log"; then
+            grep -E "^not ok |^ +error:" "$RUNNER_TEMP/testes.log" | head -40 | while IFS= read -r linha; do
+              echo "::error::${linha}"
+            done
+            exit 1
+          fi
 
       - name: Compilar interface e servidor
         run: npm run build
