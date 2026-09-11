@@ -302,36 +302,43 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     };
   }, [recover, socket, userId]);
 
-  // --- reconexão e troca de host --------------------------------------------
+  // --- reconexão --------------------------------------------------------------
+  //
+  // Só o que muda quando a conexão volta: a lista e a própria presença na mesa.
+  // Entrar em uma call não é reconectar, e misturar as duas coisas num efeito
+  // só fazia a mesa piscar "abrindo…" toda vez que alguém entrava na voz.
   useEffect(() => {
     if (!socket || !connected) return;
     refresh();
-    // No P2P, o servidor que ordena é a máquina do host. Quando o host sai, o
-    // servidor novo sobe vazio — e quem estava na mesa devolve o que tem. A
-    // devolução é recusada por um servidor dedicado e por um canal diferente;
-    // aqui a tentativa é barata e o pior caso é um "já está aqui".
-    if (connectionMode === 'p2p' && voiceChannelId) {
-      for (const guardada of heldRef.current.values()) {
-        // Mesa vazia não vale uma devolução: ela não tem conteúdo a salvar, e
-        // recriar uma folha em branco é um clique.
-        if (!guardada.state.strokes.length) continue;
-        socket.emit('board:adopt', {
-          board: {
-            ...guardada.board,
-            revoked: [],
-            snapshot: { revision: guardada.state.revision, strokes: guardada.state.strokes },
-          },
-        }, (reply: { ok: boolean }) => {
-          if (reply?.ok) refresh();
-        });
-      }
+    if (!activeIdRef.current) return;
+    // Entrar de novo devolve a presença e o papel; a diferença do quadro vem
+    // logo depois, a partir da revisão que já se tem.
+    joinBoard(activeIdRef.current, observerRef.current);
+  }, [connected, joinBoard, refresh, socket]);
+
+  // --- troca de host, no P2P --------------------------------------------------
+  //
+  // No P2P o servidor que ordena é a máquina do host. Quando o host sai, o
+  // servidor novo sobe vazio — e quem estava na mesa devolve o que tem. A
+  // devolução é recusada por um servidor dedicado e por quem não está na call
+  // do grupo; aqui a tentativa é barata, e o pior caso é um "já está aqui".
+  useEffect(() => {
+    if (!socket || !connected || connectionMode !== 'p2p' || !voiceChannelId) return;
+    for (const guardada of heldRef.current.values()) {
+      // Mesa vazia não vale uma devolução: ela não tem conteúdo a salvar, e
+      // recriar uma folha em branco é um clique.
+      if (!guardada.state.strokes.length) continue;
+      socket.emit('board:adopt', {
+        board: {
+          ...guardada.board,
+          revoked: [],
+          snapshot: { revision: guardada.state.revision, strokes: guardada.state.strokes },
+        },
+      }, (reply: { ok: boolean }) => {
+        if (reply?.ok) refresh();
+      });
     }
-    if (activeIdRef.current) {
-      // Entrar de novo devolve a presença e o papel; a diferença do quadro vem
-      // logo depois, a partir da revisão que já se tem.
-      joinBoard(activeIdRef.current, observerRef.current);
-    }
-  }, [connected, connectionMode, joinBoard, refresh, socket, voiceChannelId]);
+  }, [connected, connectionMode, refresh, socket, voiceChannelId]);
 
   // --- fila de saída ---------------------------------------------------------
   useEffect(() => {
