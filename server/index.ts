@@ -1292,7 +1292,11 @@ io.on('connection', (socket) => {
     const board = whiteboards.get(parsed.data.boardId);
     if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
     if (!board.participants.has(socket.id)) return acknowledge?.({ ok: false, error: 'Entre na mesa antes de desenhar nela.' });
-    if (!boardBucket.take()) return acknowledge?.({ ok: false, error: 'Muitas operações seguidas. Tente de novo em instantes.' });
+    // `retry` separa "espere um instante" de "não, e não adianta insistir". Sem
+    // essa distinção o cliente teria de escolher entre perder o traço de quem
+    // desenhou rápido demais e reenviar para sempre o que foi recusado por
+    // permissão.
+    if (!boardBucket.take()) return acknowledge?.({ ok: false, retry: true, error: 'Muitas operações seguidas. Espere um instante.' });
     const result = whiteboards.submit(parsed.data.boardId, socket.id, boardActor(), parsed.data.ops as BoardOp[]);
     if (!result.ok) return acknowledge?.({ ok: false, error: result.error });
     if (result.value.accepted.length) {

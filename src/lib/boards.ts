@@ -271,6 +271,10 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
         return { ...atual, cursors: [...outros, { ...payload.cursor!, at: agora }] };
       });
     };
+    // Um pedido em voo quando a conexão cai nunca recebe resposta. Sem soltar
+    // esta trava, a fila ficaria parada para sempre e a mesa deixaria de
+    // aceitar traço até a pessoa recarregar o aplicativo.
+    const onDisconnect = () => { inFlightRef.current = false; };
     const onClosed = (payload: { boardId?: string; reason?: string }) => {
       if (!payload?.boardId) return;
       heldRef.current.delete(payload.boardId);
@@ -285,6 +289,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     socket.on('board:participants', onParticipants);
     socket.on('board:cursor', onCursor);
     socket.on('board:closed', onClosed);
+    socket.on('disconnect', onDisconnect);
     return () => {
       socket.off('board:announce', onAnnounce);
       socket.off('board:updated', onUpdated);
@@ -293,6 +298,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
       socket.off('board:participants', onParticipants);
       socket.off('board:cursor', onCursor);
       socket.off('board:closed', onClosed);
+      socket.off('disconnect', onDisconnect);
     };
   }, [recover, socket, userId]);
 
@@ -334,17 +340,20 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
       if (inFlightRef.current || !queueRef.current.length || !activeIdRef.current || !socket.connected) return;
       const lote = queueRef.current.slice(0, MAX_OPS_PER_BATCH);
       inFlightRef.current = true;
-      socket.emit('board:ops', { boardId: activeIdRef.current, ops: lote }, (reply: { ok: boolean; error?: string; rejected?: Array<{ id: string; error: string }> }) => {
+      socket.emit('board:ops', { boardId: activeIdRef.current, ops: lote }, (reply: { ok: boolean; retry?: boolean; error?: string; rejected?: Array<{ id: string; error: string }> }) => {
         inFlightRef.current = false;
         if (!reply?.ok) {
-          // O pedido não passou. Os pedaços continuam na fila: eles serão
-          // reenviados com os mesmos ids, e o outro lado sabe reconhecê-los.
-          if (reply?.error) {
-            queueRef.current = [];
-            draftRef.current = null;
-            setDraft(null);
-            setActive((atual) => (atual ? { ...atual, notice: reply.error! } : atual));
-          }
+          // "Espere um instante" deixa os pedaços na fila: eles voltam com os
+          // mesmos ids, e o outro lado sabe reconhecê-los. Perder o traço de
+          // quem desenhou rápido demais seria apagar trabalho por causa de um
+          // limite de vazão.
+          if (reply?.retry) return;
+          // Qualquer outra recusa é definitiva — mesa encerrada, permissão
+          // revogada, observador. Insistir só repetiria a mesma resposta.
+          queueRef.current = [];
+          draftRef.current = null;
+          setDraft(null);
+          if (reply?.error) setActive((atual) => (atual ? { ...atual, notice: reply.error! } : atual));
           return;
         }
         const enviados = new Set(lote.map((op) => op.id));

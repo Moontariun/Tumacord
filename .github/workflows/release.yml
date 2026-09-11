@@ -53,7 +53,17 @@ jobs:
       - name: Validar projeto
         run: |
           npm run typecheck
-          npm test
+          # O log completo de uma execução exige login no GitHub, e uma versão
+          # reprovada sem motivo visível custa uma ida ao navegador toda vez.
+          # As anotações, ao contrário, são públicas: o nome do teste que
+          # reprovou passa a aparecer ali, ao lado do "exit code 1".
+          set -o pipefail
+          if ! npm test 2>&1 | tee "$RUNNER_TEMP/testes.log"; then
+            grep -E "^not ok |^ +error:" "$RUNNER_TEMP/testes.log" | head -40 | while IFS= read -r linha; do
+              echo "::error::${linha}"
+            done
+            exit 1
+          fi
 
       - name: Validar servidor de encontro e relay
         env:
