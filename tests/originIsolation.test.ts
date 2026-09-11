@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { originFor } from '../src/lib/chatSync';
+import { originFor } from '../src/lib/origin';
 
 // A origem é o que impede a conversa de um lugar de voltar como se fosse de
 // outro. O documento do projeto é explícito sobre o que não serve: nome de
@@ -27,26 +27,26 @@ test('servidor que não declara identidade cai no endereço, e ainda separa', ()
 
 test('dedicado e P2P nunca caem no mesmo pote', () => {
   const dedicado = originFor({ connectionMode: 'server', installationId: 'aaaa-1111' });
-  const grupo = originFor({ connectionMode: 'p2p', directKey: 'aaaa-1111' });
+  const grupo = originFor({ connectionMode: 'p2p', inviteKey: 'aaaa-1111' });
   assert.notEqual(dedicado, grupo, 'a mesma cadeia de caracteres em papéis diferentes não é a mesma origem');
 });
 
 test('dois grupos P2P com convites diferentes não compartilham histórico', () => {
-  const grupo = originFor({ connectionMode: 'p2p', directKey: 'convite-do-grupo-a' });
-  const outro = originFor({ connectionMode: 'p2p', directKey: 'convite-do-grupo-b' });
+  const grupo = originFor({ connectionMode: 'p2p', inviteKey: 'convite-do-grupo-a' });
+  const outro = originFor({ connectionMode: 'p2p', inviteKey: 'convite-do-grupo-b' });
   assert.notEqual(grupo, outro);
 });
 
 // O grupo é o mesmo quando o host troca de máquina: é a chave do convite que o
 // identifica, e não quem por acaso está hospedando agora.
 test('o grupo continua o mesmo quando o host troca', () => {
-  const comHost = originFor({ connectionMode: 'p2p', directKey: 'convite-do-grupo-a', serverUrl: 'http://192.168.0.10:3927' });
-  const comOutroHost = originFor({ connectionMode: 'p2p', directKey: 'convite-do-grupo-a', serverUrl: 'http://192.168.0.77:3927' });
+  const comHost = originFor({ connectionMode: 'p2p', inviteKey: 'convite-do-grupo-a', serverUrl: 'http://192.168.0.10:3927' });
+  const comOutroHost = originFor({ connectionMode: 'p2p', inviteKey: 'convite-do-grupo-a', serverUrl: 'http://192.168.0.77:3927' });
   assert.equal(comHost, comOutroHost);
 });
 
 test('um grupo só de rede local tem a própria origem, e não a de ninguém', () => {
   const redeLocal = originFor({ connectionMode: 'p2p' });
   assert.equal(redeLocal, 'grupo:rede-local');
-  assert.notEqual(redeLocal, originFor({ connectionMode: 'p2p', directKey: 'convite' }));
+  assert.notEqual(redeLocal, originFor({ connectionMode: 'p2p', inviteKey: 'convite' }));
 });

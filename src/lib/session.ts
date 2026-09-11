@@ -1,22 +1,68 @@
+// A sessão, ligada ao armazenamento do navegador.
+//
+// A decisão de o que lembrar e o que esquecer mora em `keyring.ts`, pura e
+// testável. Aqui fica só a parte que depende de `localStorage`: ler, escrever
+// e a migração da gaveta única que existia até a 0.9.5.
+
 import type { SessionResponse } from '../../shared/types';
+import { originFor } from './origin';
+import {
+  activeSession as chaveiroAtivo,
+  destinations as chaveiroDestinos,
+  emptyKeyring,
+  endSession,
+  forgetDestination,
+  forgetEverything,
+  keyAt,
+  migrateSingleSession,
+  putSession,
+  rememberKey,
+  sessionAt,
+  switchTo,
+  type Keyring,
+  type SavedSession,
+} from './keyring';
 
-const SESSION_KEY = 'tumacord.session';
+export type { SavedSession } from './keyring';
+
+const KEYRING_KEY = 'tumacord.keyring';
 const SERVER_KEY = 'tumacord.server';
+/** A gaveta única de até a 0.9.5. Lida para migrar, nunca escrita de novo. */
+const LEGACY_SESSION_KEY = 'tumacord.session';
 
-export interface SavedSession {
-  serverUrl: string;
-  token: string;
-  user: SessionResponse['user'];
-  serverName: string;
-  password?: string;
-  resumeChannelId?: string;
-  connectionMode?: 'p2p' | 'server';
-  rememberMe?: boolean;
-  // Chave usada para entrar neste servidor: no modo P2P é a do convite do
-  // host; no modo servidor é a chave de acesso dele. Precisa sobreviver à
-  // sessão porque toda reconexão e toda troca de host repetem o login, e é
-  // dela que sai o convite que este computador oferece aos outros.
-  directKey?: string;
+export function destinationOf(session: SavedSession): string {
+  return originFor({
+    connectionMode: session.connectionMode ?? 'p2p',
+    installationId: session.installationId,
+    serverUrl: session.serverUrl,
+    inviteKey: session.inviteKey ?? session.directKey,
+  });
+}
+
+function parse(raw: string | null): Partial<Keyring> {
+  try { return raw ? JSON.parse(raw) as Partial<Keyring> : {}; } catch { return {}; }
+}
+
+function readLegacy(): SavedSession | null {
+  const raw = localStorage.getItem(LEGACY_SESSION_KEY) ?? sessionStorage.getItem(LEGACY_SESSION_KEY);
+  try { return raw ? JSON.parse(raw) as SavedSession : null; } catch { return null; }
+}
+
+export function readKeyring(): Keyring {
+  const persistido = parse(localStorage.getItem(KEYRING_KEY));
+  const daAbertura = parse(sessionStorage.getItem(KEYRING_KEY));
+  const chaveiro: Keyring = {
+    remembered: persistido.remembered ?? {},
+    ephemeral: daAbertura.ephemeral ?? {},
+    keys: persistido.keys ?? {},
+    active: daAbertura.active || persistido.active || '',
+  };
+  return migrateSingleSession(chaveiro, readLegacy(), destinationOf);
+}
+
+function writeKeyring(keyring: Keyring): void {
+  localStorage.setItem(KEYRING_KEY, JSON.stringify({ remembered: keyring.remembered, keys: keyring.keys, active: keyring.active }));
+  sessionStorage.setItem(KEYRING_KEY, JSON.stringify({ ephemeral: keyring.ephemeral, active: keyring.active }));
 }
 
 export function defaultServerUrl(): string {
@@ -25,31 +71,102 @@ export function defaultServerUrl(): string {
 }
 
 export function loadSession(): SavedSession | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY) ?? sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const saved = JSON.parse(raw) as SavedSession;
-    return { ...saved, rememberMe: saved.rememberMe ?? Boolean(localStorage.getItem(SESSION_KEY)) };
-  } catch {
-    return null;
-  }
+  return chaveiroAtivo(readKeyring());
+}
+
+/** Os destinos que dá para retomar sem digitar nada. */
+export function rememberedDestinations(): Array<{ destination: string; session: SavedSession }> {
+  return chaveiroDestinos(readKeyring());
+}
+
+export function sessionFor(destination: string): SavedSession | null {
+  return sessionAt(readKeyring(), destination);
 }
 
 export function saveSession(session: SavedSession): void {
-  const persistent = session.rememberMe ?? true;
-  const target = persistent ? localStorage : sessionStorage;
-  const other = persistent ? sessionStorage : localStorage;
-  target.setItem(SESSION_KEY, JSON.stringify({ ...session, rememberMe: persistent }));
-  other.removeItem(SESSION_KEY);
+  const chaveiro = readKeyring();
+  writeKeyring(putSession(chaveiro, destinationOf(session), session));
   localStorage.setItem(SERVER_KEY, session.serverUrl);
 }
 
+/** Sair da conta: encerra a sessão aberta e deixa as outras onde estão. */
 export function clearSession(): void {
-  localStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(SESSION_KEY);
+  const chaveiro = readKeyring();
+  writeKeyring(chaveiro.active ? endSession(chaveiro, chaveiro.active) : chaveiro);
 }
 
-async function authenticate(path: 'login' | 'register', serverUrl: string, username: string, password: string, resumeChannelId?: string, allowCreate = false, connectionMode: 'p2p' | 'server' = 'p2p', rememberMe = true, serverKey = ''): Promise<SavedSession> {
+/**
+ * Trocar de conta ou de servidor sem encerrar nada.
+ *
+ * Fecha a gaveta aberta e deixa a sessão dentro dela. É o que faltava para o
+ * chaveiro servir para alguma coisa: até aqui, o único caminho de volta à tela
+ * de entrada era sair da conta — e sair encerra.
+ */
+export function suspendActive(): void {
+  const chaveiro = readKeyring();
+  writeKeyring(switchTo(chaveiro, ''));
+}
+
+export function forgetThisDestination(destination: string): void {
+  writeKeyring(forgetDestination(readKeyring(), destination));
+}
+
+export function forgetAllDestinations(): void {
+  writeKeyring(forgetEverything());
+}
+
+export function useDestination(destination: string): SavedSession | null {
+  const chaveiro = switchTo(readKeyring(), destination);
+  writeKeyring(chaveiro);
+  return sessionAt(chaveiro, destination);
+}
+
+// A chave do servidor, guardada só quando a pessoa pede.
+//
+// Mascarar o campo na tela não é proteger o que está no disco, e isto aqui é o
+// disco: guardar continua sendo uma escolha explícita, separada de manter a
+// sessão. Um armazenamento nativo protegido é o passo seguinte e não muda esta
+// interface.
+export function rememberServerKey(destination: string, key: string): void {
+  writeKeyring(rememberKey(readKeyring(), destination, key));
+}
+
+export function savedServerKey(destination: string): string {
+  return keyAt(readKeyring(), destination);
+}
+
+/**
+ * O destino de um endereço, antes de qualquer autenticação.
+ *
+ * É o que permite a um convite reaproveitar a sessão que já existe para aquele
+ * lugar em vez de pedir senha — ou derrubar tudo, que era o que acontecia.
+ */
+export async function resolveDestination(serverUrl: string, connectionMode: 'p2p' | 'server', inviteKey = ''): Promise<{ destination: string; serverName: string; installationId: string }> {
+  const normalizado = serverUrl.trim().replace(/\/$/, '');
+  let installationId = '';
+  let serverName = '';
+  try {
+    const corpo = await (await fetch(`${normalizado}/api/health`)).json() as { installationId?: string; name?: string };
+    installationId = typeof corpo?.installationId === 'string' ? corpo.installationId : '';
+    serverName = typeof corpo?.name === 'string' ? corpo.name : '';
+  } catch {
+    // Servidor fora do ar ou anterior à 0.9.5: o endereço vira a identidade,
+    // que separa pior e ainda separa.
+  }
+  return { destination: originFor({ connectionMode, installationId, serverUrl: normalizado, inviteKey }), serverName, installationId };
+}
+
+async function authenticate(
+  path: 'login' | 'register',
+  serverUrl: string,
+  username: string,
+  password: string,
+  resumeChannelId?: string,
+  allowCreate = false,
+  connectionMode: 'p2p' | 'server' = 'p2p',
+  rememberMe = true,
+  serverKey = '',
+): Promise<SavedSession> {
   const normalizedUrl = serverUrl.trim().replace(/\/$/, '');
   const response = await fetch(`${normalizedUrl}/api/auth/${path}`, {
     method: 'POST',
@@ -58,10 +175,24 @@ async function authenticate(path: 'login' | 'register', serverUrl: string, usern
   });
   const body = await response.json() as SessionResponse & { error?: string };
   if (!response.ok) throw new Error(body.error || 'Não foi possível entrar.');
+  const { installationId } = await resolveDestination(normalizedUrl, connectionMode, serverKey);
   // A senha só precisa acompanhar a sessão no modo dinâmico: ela permite
   // autenticar automaticamente no novo host durante a troca P2P. No servidor
   // dedicado o token persistente é suficiente, então não guardamos a senha.
-  const saved = { serverUrl: normalizedUrl, token: body.token, user: body.user, serverName: body.serverName, password: connectionMode === 'p2p' ? password : undefined, resumeChannelId, connectionMode, rememberMe, directKey: serverKey.trim() || undefined };
+  const saved: SavedSession = {
+    serverUrl: normalizedUrl,
+    token: body.token,
+    user: body.user,
+    serverName: body.serverName,
+    password: connectionMode === 'p2p' ? password : undefined,
+    resumeChannelId,
+    connectionMode,
+    rememberMe,
+    // Cada chave no seu lugar: convite identifica grupo, chave de acesso abre
+    // servidor. Guardá-las no mesmo campo era o que fazia uma valer pela outra.
+    inviteKey: connectionMode === 'p2p' ? (serverKey.trim() || undefined) : undefined,
+    installationId: installationId || undefined,
+  };
   saveSession(saved);
   return saved;
 }

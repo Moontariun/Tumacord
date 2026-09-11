@@ -1357,3 +1357,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   .board-side { display: none; }
   .board-identity small { display: none; }
 }
+
+/* --- contas lembradas por destino --------------------------------------- */
+.saved-destinations { display: grid; gap: 6px; margin: 14px 0 0; }
+.saved-destinations .group-title { padding: 0; height: auto; }
+.saved-destination { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 12px; background: #101117; color: #c9cad4; text-align: left; }
+.saved-destination:hover { border-color: rgba(125,92,255,.55); background: #181925; color: white; }
+.saved-destination span { min-width: 0; display: grid; gap: 2px; }
+.saved-destination strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.saved-destination small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #83859a; font-size: 10px; }

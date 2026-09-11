@@ -11,7 +11,8 @@ import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './components/UpdatePanel';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
-import { clearSession, defaultServerUrl, loadSession, login, register, saveSession, type SavedSession } from './lib/session';
+import { describeOrigin } from './lib/origin';
+import { clearSession, defaultServerUrl, destinationOf, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
@@ -72,9 +73,12 @@ function App() {
   // e mudar a sessão é o que acontece ao salvar o perfil. O efeito então
   // derrubava o socket, o hook de voz perdia a conexão e a call inteira era
   // refeita porque alguém trocou o próprio avatar.
+  // Sair encerra a sessão aberta; trocar apenas a fecha. As duas voltam para
+  // a tela de entrada, e só uma delas custa a conta.
   const logout = useCallback(() => { clearSession(); forgetTurnServers(); setSession(null); }, []);
+  const trocarDeConta = useCallback(() => { suspendActive(); forgetTurnServers(); setSession(null); }, []);
   if (!session) return <Login onLogin={setSession} />;
-  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={logout} /></Boundary>;
+  return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={logout} onSwitchAccount={trocarDeConta} /></Boundary>;
 }
 
 function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
@@ -91,8 +95,35 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   const [error, setError] = useState('');
   const [connectionMode, setConnectionMode] = useState<'p2p' | 'server'>(() => window.tumacordDesktop ? 'p2p' : 'server');
   const [rememberMe, setRememberMe] = useState(true);
+  // Lembrar a sessão e lembrar a chave são escolhas diferentes, e as quatro
+  // combinações existem: dá para querer voltar sem digitar a senha e ainda
+  // assim digitar a chave toda vez, e o contrário também.
+  const [rememberKey, setRememberKey] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
+  const [lembradas] = useState(() => rememberedDestinations().filter((entrada) => entrada.session.token));
   const isDesktop = Boolean(window.tumacordDesktop);
+
+  // A chave guardada daquele servidor volta para o campo assim que o endereço
+  // é reconhecido. Ela continua mascarada: o campo nunca mostra o que guarda.
+  useEffect(() => {
+    if (connectionMode !== 'server' || !serverUrl.trim()) return;
+    let cancelado = false;
+    void resolveDestination(serverUrl, 'server').then(({ destination }) => {
+      if (cancelado) return;
+      const guardada = savedServerKey(destination);
+      if (!guardada) return;
+      setServerKey(guardada);
+      setRememberKey(true);
+    }).catch(() => undefined);
+    return () => { cancelado = true; };
+  }, [connectionMode, serverUrl]);
+
+  // Retomar um destino lembrado não passa por autenticação nenhuma: a sessão
+  // já existe, e o que muda é qual gaveta está aberta.
+  const retomar = (destination: string) => {
+    const retomada = useDestination(destination);
+    if (retomada) onLogin(retomada);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -135,6 +166,9 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
         ? await register(target, username, password, resumeCall, effectiveMode, rememberMe, inviteKey || serverKey)
         : await login(target, username, password, resumeCall, effectiveMode === 'server' || Boolean(inviteKey), effectiveMode, rememberMe, inviteKey || serverKey);
       if (inviteKey && effectiveMode === 'p2p') await adoptDirectKey(inviteKey);
+      // A chave é guardada só se a pessoa pediu, e no destino a que ela
+      // pertence: a chave de um servidor não abre outro.
+      if (effectiveMode === 'server') rememberServerKey(destinationOf(authenticated), rememberKey ? serverKey : '');
       onLogin(authenticated);
       playSound('connect');
     }
@@ -155,12 +189,23 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       {connectionMode === 'server' && <div className="server-login-fields">
         <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
         <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
+        <label className="remember-login"><input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} /><span><strong>Lembrar a chave deste servidor</strong><small>Ela fica guardada neste computador, só para este servidor, e o campo continua mascarado. Desmarcar apaga a que estiver guardada.</small></span></label>
         <p className="server-security-note"><Icon name="shield" /><span><strong>Conexão protegida</strong><small>HTTPS/WSS quando configurado; voz, câmera e tela usam WebRTC criptografado.</small></span></p>
       </div>}
       <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Seu nome de usuário" required /></label>
       <label>Senha <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••" required /></label>
       {mode === 'register' && <label>Confirmar senha <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Repita a senha" required /></label>}
       <label className="remember-login"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span><strong>Continuar conectado</strong><small>Reabre o Tumacord nesta conta sem pedir login novamente.</small></span></label>
+      {/* As contas que este computador já lembra, por destino. Trocar de modo
+          ou entrar em outro servidor deixou de custar as outras: elas ficam
+          aqui, e voltar para qualquer uma é um clique. */}
+      {lembradas.length > 0 && <div className="saved-destinations">
+        <span className="group-title"><span>Continuar em</span></span>
+        {lembradas.map(({ destination, session: guardada }) => <button key={destination} type="button" className="saved-destination" onClick={() => retomar(destination)}>
+          <Avatar name={guardada.user.username} profile={guardada.user.profile} small />
+          <span><strong>{guardada.user.username}</strong><small>{describeOrigin(destination, guardada.serverName)}</small></span>
+        </button>)}
+      </div>}
       {error && <div className="form-error">{error}</div>}
       <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar no Tumacord'}</button>
       <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
@@ -170,7 +215,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   </main>;
 }
 
-function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSession; onSessionChange: (session: SavedSession) => void; onLogout: () => void }) {
+function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { session: SavedSession; onSessionChange: (session: SavedSession) => void; onLogout: () => void; onSwitchAccount: () => void }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [snapshot, setSnapshot] = useState<ServerSnapshot>({ serverName: session.serverName, channels: [], onlineUsers: [], voiceRooms: {} });
   const [selectedChannelId, setSelectedChannelId] = useState('geral');
@@ -222,12 +267,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
   // No P2P a resposta é imediata: a chave do convite identifica o grupo, e ela
   // já está na sessão. No dedicado é preciso perguntar ao servidor quem ele é
   // — endereço e nome não servem, porque mudam e coincidem.
-  const [origin, setOrigin] = useState(() => (session.connectionMode === 'server' ? '' : originFor({ connectionMode: 'p2p', directKey: session.directKey })));
+  const [origin, setOrigin] = useState(() => (session.connectionMode === 'server' ? '' : originFor({ connectionMode: 'p2p', inviteKey: session.inviteKey ?? session.directKey })));
   const originRef = useRef(origin);
   originRef.current = origin;
   useEffect(() => {
     if (session.connectionMode !== 'server') {
-      setOrigin(originFor({ connectionMode: 'p2p', directKey: session.directKey }));
+      setOrigin(originFor({ connectionMode: 'p2p', inviteKey: session.inviteKey ?? session.directKey }));
       return;
     }
     let cancelado = false;
@@ -246,7 +291,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         if (!cancelado) setOrigin(originFor({ connectionMode: 'server', serverUrl: session.serverUrl }));
       });
     return () => { cancelado = true; };
-  }, [session.connectionMode, session.directKey, session.serverUrl]);
+  }, [session.connectionMode, session.directKey, session.inviteKey, session.serverUrl]);
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -384,23 +429,47 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     }
   }, [onLogout, onSessionChange, session.password, session.rememberMe, session.user.username, showToast]);
 
-  const enterInvitedCall = useCallback(async (code: string) => {
-    if (!session.password) {
-      onLogout();
-      return false;
-    }
+  // Entrar por convite: primeiro o destino, depois a autenticação.
+  //
+  // Antes era o contrário. O convite exigia a senha guardada e, sem ela,
+  // derrubava a sessão — inclusive as contas que nada tinham a ver com aquele
+  // convite. Agora o destino é resolvido primeiro: se já existe uma sessão
+  // para ele, ela é reaproveitada e ninguém digita nada.
+  const enterInvitedCall = useCallback(async (code: string): Promise<'entrou' | 'precisa-entrar' | 'falhou'> => {
     // O código curto (TUMA2) é o formato atual; o TUMA1 continua sendo lido
     // para não invalidar convite que já circulou.
     const resolved = await resolveAnyInvite(code);
-    if (!resolved) return false;
-    try {
-      const migrated = await login(resolved.url, session.user.username, session.password, resolved.invite.callId, true, resolved.mode, session.rememberMe ?? true, resolved.invite.key);
-      onSessionChange(migrated);
-      return true;
-    } catch {
-      return false;
+    if (!resolved) return 'falhou';
+    const { destination } = await resolveDestination(resolved.url, resolved.mode, resolved.invite.key);
+
+    const guardada = sessionFor(destination);
+    if (guardada?.token) {
+      const retomada = { ...guardada, resumeChannelId: resolved.invite.callId, serverUrl: resolved.url };
+      saveSession(retomada);
+      useDestination(destination);
+      onSessionChange(retomada);
+      return 'entrou';
     }
-  }, [onLogout, onSessionChange, session.password, session.rememberMe, session.user.username]);
+
+    // Mesmo destino de agora: a sessão aberta serve, e o convite só aponta a
+    // call. Isso cobre o convite que circula dentro do próprio grupo.
+    if (destination === destinationOf(session) && session.token) {
+      const mesma = { ...session, resumeChannelId: resolved.invite.callId, serverUrl: resolved.url };
+      saveSession(mesma);
+      onSessionChange(mesma);
+      return 'entrou';
+    }
+
+    // Destino novo, e nenhuma conta aberta nele. Quem chama leva a pessoa para
+    // a entrada sem apagar as sessões lembradas dos outros destinos — que era
+    // o que acontecia antes, e por isso um convite custava todas elas.
+    //
+    // Todo convite resolve hoje para `mode: 'server'`: o código aponta um
+    // servidor de encontro. Se usar esse caminho deve significar entrar na
+    // experiência inteira do modo dedicado é outra pergunta, anotada na
+    // auditoria e ainda em aberto.
+    return 'precisa-entrar';
+  }, [onSessionChange, session]);
 
   const handleHostHandoff = useCallback((host: VoiceState, channelId: string, abrupt: boolean) => {
     if (session.connectionMode === 'server') return;
@@ -799,9 +868,9 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
 
     {updateOpen && <UpdateModal bridge={update} onClose={() => setUpdateOpen(false)} onNotice={showToast} />}
     {update.state?.installedRelease && update.state.notesSeen !== update.state.installed && <WhatsNewModal release={update.state.installedRelease} onClose={() => update.markNotesSeen(update.state?.installed ?? '')} onOpenPage={update.openPage} />}
-    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} />}
+    {settingsOpen && <SettingsModal devices={devices} quality={voice.quality} setQuality={voice.setQuality} soundEnabled={soundEnabled} setSoundEnabled={changeSoundPreference} soundVolume={soundVolume} setSoundVolume={changeSoundVolume} networkPreferences={networkPreferences} onNetworkPreferences={(patch) => { void updateNetworkPreferences(patch).then(setNetworkPreferences); }} mediaSnapshot={voice.mediaSnapshot} audioSupport={voice.screenAudioSupport} connectionMode={session.connectionMode ?? 'p2p'} drawing={drawing} onDrawing={changeDrawing} onNotice={showToast} onClose={() => setSettingsOpen(false)} onLogout={onLogout} onSwitchAccount={onSwitchAccount} />}
     {inviteOpen && <InviteModal callId={voice.channelId ?? currentVoiceChannel?.id ?? 'call-geral'} callName={currentVoiceChannel?.name ?? 'Call do grupo'} hostUsername={session.user.username} server={session.connectionMode === 'server' ? session.serverUrl : undefined} serverToken={session.token} serverKey={session.directKey} onClose={() => setInviteOpen(false)} onNotice={showToast} />}
-    {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
+    {joinInviteOpen && <JoinInviteModal onJoin={enterInvitedCall} onNeedsLogin={() => { setJoinInviteOpen(false); onLogout(); }} onClose={() => setJoinInviteOpen(false)} onNotice={showToast} />}
     {boardPromptOpen && <NewBoardModal channelName={selectedChannel?.name ?? 'geral'} onCreate={createBoard} onClose={() => setBoardPromptOpen(false)} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
@@ -1652,13 +1721,13 @@ function screenAudioExplanation(support: ScreenAudioSupport): string {
   return 'Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.';
 }
 
-function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
+function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, drawing, onDrawing, onNotice, onClose, onLogout, onSwitchAccount }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; drawing: DrawPreferences; onDrawing: (patch: Partial<DrawPreferences>) => void; onSwitchAccount: () => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
   const [tab, setTab] = useState<'media' | 'drawing' | 'network' | 'diagnostics'>('media');
   function update<K extends keyof typeof devices.preferences>(key: K, value: (typeof devices.preferences)[K]): void {
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
-    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
+    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onSwitchAccount} title="Volta para a entrada mantendo esta conta guardada">Trocar de conta</button><button onClick={onLogout} title="Encerra esta sessão; as outras contas guardadas continuam">Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
     {tab === 'drawing' && <DrawingSettings drawing={drawing} onChange={onDrawing} onClose={onClose} />}
     {tab === 'network' && <NetworkSettings preferences={networkPreferences} onChange={onNetworkPreferences} onClose={onClose} />}
     {tab === 'diagnostics' && <MediaDiagnostics snapshot={mediaSnapshot} preferences={networkPreferences} connectionMode={connectionMode} onNotice={onNotice} onClose={onClose} />}
@@ -1882,13 +1951,15 @@ function InviteModal({ callId, callName, hostUsername, server, serverToken, serv
   </div></div>;
 }
 
-function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string) => Promise<boolean>; onClose: () => void; onNotice: (message: string) => void }) {
+function JoinInviteModal({ onJoin, onNeedsLogin, onClose, onNotice }: { onJoin: (code: string) => Promise<'entrou' | 'precisa-entrar' | 'falhou'>; onNeedsLogin: () => void; onClose: () => void; onNotice: (message: string) => void }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [precisaEntrar, setPrecisaEntrar] = useState(false);
   const submit = async () => {
     setBusy(true);
     setError('');
+    setPrecisaEntrar(false);
     // A conferência local só olha o formato. Reconhecer apenas o `TUMA1` aqui
     // era o que fazia o convite curto da 0.8.4 — o único que o servidor emite —
     // ser recusado sem nunca chegar a ser tentado.
@@ -1897,9 +1968,10 @@ function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string)
       setBusy(false);
       return;
     }
-    const joined = await onJoin(code);
+    const resultado = await onJoin(code);
     setBusy(false);
-    if (!joined) return setError('O convite é válido, mas nenhum dos caminhos respondeu. O host pode ter fechado o app ou trocado de rede.');
+    if (resultado === 'falhou') return setError('O convite é válido, mas nenhum dos caminhos respondeu. O host pode ter fechado o app ou trocado de rede.');
+    if (resultado === 'precisa-entrar') return setPrecisaEntrar(true);
     onNotice('Entrando na call pelo convite…');
     onClose();
   };
@@ -1910,7 +1982,13 @@ function JoinInviteModal({ onJoin, onClose, onNotice }: { onJoin: (code: string)
     <p>Cole o código que você recebeu. Os caminhos são tentados em paralelo e o primeiro que responder é usado.</p>
     <textarea className="invite-code" value={code} rows={4} spellCheck={false} placeholder="TUMA2~…" onChange={(event) => setCode(event.target.value)} />
     {error && <p className="invite-status error">{error}</p>}
-    <button className="primary-button" disabled={busy || !code.trim()} onClick={() => void submit()}>{busy ? 'Procurando o host…' : 'Entrar na call'}</button>
+    {precisaEntrar && <div className="quality-note">
+      <strong>Este convite é de um lugar onde você ainda não entrou</strong>
+      <span>Você precisa entrar com uma conta desse servidor. <strong>As contas que você já tem guardadas continuam guardadas</strong> — nenhuma delas é apagada por causa disto, e você volta para qualquer uma pela tela de entrada.</span>
+    </div>}
+    {precisaEntrar
+      ? <button className="primary-button" onClick={onNeedsLogin}>Ir para a entrada</button>
+      : <button className="primary-button" disabled={busy || !code.trim()} onClick={() => void submit()}>{busy ? 'Procurando o host…' : 'Entrar na call'}</button>}
   </div></div>;
 }
 

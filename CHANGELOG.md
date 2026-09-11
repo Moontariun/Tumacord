@@ -1,5 +1,52 @@
 # Histórico de versões
 
+## 0.9.6 — suas contas param de se atropelar
+
+<!-- tumacord:resumo -->
+Entrar em um servidor deixou de apagar as outras contas que você já tinha. Cada uma fica guardada no seu lugar, e voltar para qualquer uma é um clique na tela de entrada.
+
+- Trocar de conta e sair da conta passaram a ser coisas diferentes: trocar mantém a conta guardada, sair encerra só aquela.
+- Um convite para um lugar onde você já entrou não pede senha de novo — e nunca mais derruba as suas outras contas.
+- Dá para pedir que o Tumacord lembre a chave de um servidor, separado de manter a conta conectada.
+<!-- /tumacord:resumo -->
+
+**Uma gaveta por destino**
+
+Até aqui havia uma gaveta só. Entrar em um servidor dedicado escrevia por cima
+do que o modo P2P lembrava; voltar para o P2P escrevia por cima do servidor. E
+um convite para um destino diferente derrubava tudo — inclusive contas que nada
+tinham a ver com aquele convite.
+
+Agora cada destino tem a própria gaveta, endereçada pela mesma identidade
+estável que separa o histórico: a instalação, no dedicado; o convite do grupo,
+no P2P. A tela de entrada mostra as contas guardadas, e retomar qualquer uma
+não passa por autenticação nenhuma.
+
+**Quatro ações, quatro efeitos**
+
+- **trocar de conta** fecha a gaveta e deixa a conta dentro dela;
+- **sair da conta** encerra a sessão deste destino e não toca nas outras;
+- **esquecer este destino** apaga a sessão e a chave dele;
+- **esquecer tudo** esvazia o chaveiro.
+
+**A chave do servidor ficou separada da sessão**
+
+Elas eram a mesma coisa guardada no mesmo campo — e, pior, o mesmo campo
+servia para a chave de acesso de um servidor e para a chave de convite de um
+grupo P2P. Agora cada uma tem o seu lugar, e lembrar uma não é lembrar a outra:
+as quatro combinações existem e valem.
+
+A chave continua mascarada no campo, guardada por servidor, e desmarcar a opção
+apaga a que estiver guardada. Vale dizer que mascarar o campo não protege o que
+está no disco — armazenamento nativo protegido é um passo seguinte.
+
+**Convite: primeiro o destino, depois a autenticação**
+
+O convite era resolvido depois de decidir a autenticação, e exigia a senha
+guardada. Sem ela, derrubava a sessão. Agora o destino é resolvido primeiro: se
+já existe conta aberta nele, ela é reaproveitada; se não existe, a tela explica
+e leva à entrada **sem apagar nenhuma das contas guardadas**.
+
 ## 0.9.5 — cada conversa fica no lugar dela
 
 <!-- tumacord:resumo -->

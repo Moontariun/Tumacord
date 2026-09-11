@@ -193,6 +193,25 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Chaveiro de contas e convites — 0.9.6
+
+| Item | Estado |
+| --- | --- |
+| Entrar em um destino não apaga o que os outros lembram | TESTADO AUTOMATICAMENTE (chaveiro) |
+| Trocar de conta mantém a conta guardada | TESTADO NO APLICATIVO (aparece em "Continuar em") |
+| Retomar conta guardada sem digitar nada | TESTADO NO APLICATIVO |
+| Sair da conta encerra só aquela | TESTADO NO APLICATIVO + chaveiro |
+| Esquecer um destino leva sessão e chave dele | TESTADO AUTOMATICAMENTE (chaveiro) |
+| As quatro combinações de lembrar sessão e chave | TESTADO AUTOMATICAMENTE (chaveiro) |
+| Chave de servidor separada da chave de convite P2P | TESTADO AUTOMATICAMENTE (migração do campo antigo) |
+| Sessão da gaveta única anterior é convertida, não perdida | TESTADO AUTOMATICAMENTE |
+| Convite reaproveita sessão do destino, sem senha | VALIDADO POR ANÁLISE (`enterInvitedCall`) |
+| Convite para destino novo não apaga contas guardadas | VALIDADO POR ANÁLISE + login falho não esvaziou o chaveiro no app |
+| Login falho não esvazia o chaveiro | TESTADO NO APLICATIVO |
+| Chave guardada volta ao campo mascarado | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Dois servidores dedicados no app real | REQUER TESTE MANUAL (a CSP do cliente web bloqueia origem cruzada; no desktop não há essa restrição) |
+| Armazenamento nativo protegido para a chave | FORA DESTA VERSÃO |
+
 ## Isolamento por origem e notas resumidas — 0.9.5
 
 | Item | Estado |

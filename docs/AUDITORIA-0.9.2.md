@@ -134,7 +134,16 @@ deixar call órfã — ambos confirmados acima e de escopo pequeno.
 **Atualização:** as três coisas acima foram entregues na 0.9.4, e a
 **Prioridade 1-A** — isolamento do cache local por origem — na 0.9.5.
 
-A próxima etapa recomendada passa a ser a **Prioridade 1-C/D/E**: credenciais e
-chave do servidor separadas por destino, e convite que resolve o destino antes
-de escolher a autenticação. Depois dela, a **Prioridade 2-I**, a live por
-escolha explícita.
+A **Prioridade 1-C/D/E** saiu na 0.9.6: chaveiro por destino, chave do servidor
+separada da chave de convite, e convite que resolve o destino antes de escolher
+a autenticação.
+
+Uma pergunta ficou aberta no caminho e está anotada aqui para não se perder:
+**todo convite resolve hoje para `mode: 'server'`** (`ResolvedInvite` em
+`src/lib/directLink.ts`). O código aponta um servidor de encontro, e entrar por
+ele coloca a pessoa na experiência inteira do modo dedicado. Se o encontro
+deveria ser só um caminho de rede — e não uma mudança de modo — é a pergunta
+que a Prioridade 1-E levanta e que esta versão não responde.
+
+A próxima etapa recomendada é a **Prioridade 2-I**: a live por escolha
+explícita, com "Assistir" e sem recebimento de mídia antes dessa escolha.
