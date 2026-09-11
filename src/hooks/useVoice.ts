@@ -70,6 +70,12 @@ interface PeerConnectionState {
   lastScreenDecodeRecoveryAt: number;
   lastVoiceRecoveryAt: number;
   remoteStreams: Map<string, MediaStream>;
+  // Se esta pessoa pediu para assistir à minha transmissão, e a qual delas.
+  //
+  // Enquanto ela não pedir, as faixas da tela não entram neste enlace: é a
+  // inscrição que controla o recebimento, e não um elemento de vídeo escondido
+  // — esconder não impede os bytes de atravessarem a rede de quem não pediu.
+  watchingStream: string;
   screenTuning: Promise<void>;
   screenTuningPending: boolean;
   // Qual mídia local cada sender carrega. `RTCRtpSender` não tem identidade
@@ -664,6 +670,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // todos por aqui — a fonte é o que existe agora, não o histórico.
   const syncLocalMediaToPeer = useCallback((target: string, state: PeerConnectionState) => {
     for (const [kind, stream] of [...localStreams.current]) {
+      // A tela só entra no enlace de quem pediu para assistir. O anúncio vai
+      // de qualquer jeito, logo abaixo: quem chega no meio de uma live precisa
+      // saber que ela existe para poder escolher.
+      if (kind === 'screen' && state.watchingStream !== stream.id) {
+        sendStreamMeta(target, stream, 'screen');
+        continue;
+      }
       // Uma faixa encerrada que ainda não foi recolhida enviaria ao enlace
       // novo um sender morto, que nunca produz mídia e ainda assim aparece
       // como "transmitindo" para quem olha o estado.
@@ -791,6 +804,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       lastScreenDecodeRecoveryAt: 0,
       lastVoiceRecoveryAt: 0,
       remoteStreams: new Map(),
+      watchingStream: '',
       screenTuning: Promise.resolve(),
       screenTuningPending: localStreams.current.has('screen'),
       senderMedia: new Map<RTCRtpSender, LocalMediaKind>(),
@@ -1097,11 +1111,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     localStreams.current.set(kind, stream);
     for (const [peerId, state] of peers.current) {
       if (captureGeneration !== mediaCaptureGeneration.current[kind] || !channelRef.current || localStreams.current.get(kind) !== stream) break;
-      for (const track of stream.getTracks()) {
-        const sender = state.pc.addTrack(track, stream);
-        if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
+      // A tela só é enviada a quem pediu para assistir. O anúncio vai para
+      // todo mundo; a mídia, não. A câmera continua como era — ela é parte da
+      // conversa, e não uma transmissão que alguém escolhe abrir.
+      const assinou = kind !== 'screen' || state.watchingStream === stream.id;
+      if (assinou) {
+        for (const track of stream.getTracks()) {
+          const sender = state.pc.addTrack(track, stream);
+          if (kind === 'camera' && track.kind === 'video') void tuneCameraSender(sender);
+        }
       }
       sendStreamMeta(peerId, stream, kind);
+      if (!assinou) continue;
       if (kind === 'screen') {
         const videoTrack = stream.getVideoTracks()[0];
         const sender = state.pc.getSenders().find((candidate) => candidate.track === videoTrack);
@@ -1572,6 +1593,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const onMeta = ({ from, meta }: { from: string; meta: StreamMeta }) => {
       if (!meta || (meta.kind !== 'camera' && meta.kind !== 'screen') || typeof meta.streamId !== 'string' || !meta.streamId) return;
       streamMeta.current.set(streamMetadataKey(from, meta.streamId), meta.kind);
+      // O anúncio de uma live chega mesmo sem nenhuma faixa: é ele que dá à
+      // pessoa a que dizer sim. Uma live nova troca o id, e por isso o "sim"
+      // da anterior não a alcança.
+      if (meta.kind === 'screen') setLiveOffers((atual) => (atual[from] === meta.streamId ? atual : { ...atual, [from]: meta.streamId }));
       refreshRemote();
     };
     const onStreamHealth = ({ from, frozen }: { from: string; frozen?: boolean }) => {
@@ -1615,6 +1640,42 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // Sem isto o cliente continuaria achando que está numa sala que não existe
     // mais: a interface mostraria "voz conectada" para um canal sumido, e sair
     // exigiria clicar em um canal que já não aparece em lugar nenhum.
+    // Alguém pediu para assistir — ou pediu para parar.
+    //
+    // É aqui que a inscrição vira mídia de verdade: as faixas da tela entram
+    // neste enlace quando o pedido chega, e saem quando ele é desfeito. O
+    // `stream` no pedido diz a *qual* transmissão o consentimento se refere:
+    // um "sim" dado a uma live encerrada não vale para a próxima.
+    const onWatch = (payload: { from?: string; stream?: string; watching?: boolean }) => {
+      const peerId = payload?.from;
+      const state = peerId ? peers.current.get(peerId) : undefined;
+      if (!peerId || !state) return;
+      const tela = localStreams.current.get('screen');
+      const querAssistir = payload.watching === true && Boolean(tela) && payload.stream === tela?.id;
+      if (querAssistir === Boolean(state.watchingStream)) {
+        state.watchingStream = querAssistir ? (tela?.id ?? '') : '';
+        return;
+      }
+      state.watchingStream = querAssistir ? (tela?.id ?? '') : '';
+      if (!tela) return;
+      if (querAssistir) {
+        for (const track of tela.getTracks()) {
+          if (state.pc.getSenders().some((candidate) => candidate.track === track)) continue;
+          state.pc.addTrack(track, tela);
+        }
+        sendStreamMeta(peerId, tela, 'screen');
+      } else {
+        for (const track of tela.getTracks()) {
+          const sender = state.pc.getSenders().find((candidate) => candidate.track === track);
+          if (sender) {
+            try { state.pc.removeTrack(sender); } catch { /* o enlace já foi encerrado */ }
+          }
+        }
+      }
+      void negotiateRef.current(peerId);
+    };
+    socket.on('rtc:watch', onWatch);
+
     const onEvicted = (payload: { channelId?: string; reason?: string }) => {
       if (!payload?.channelId || channelRef.current !== payload.channelId) return;
       leaveRef.current();
@@ -1634,6 +1695,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket.on('voice:host-handoff', onHandoff);
     socket.on('disconnect', onDisconnect);
     return () => {
+      socket.off('rtc:watch', onWatch);
       socket.off('voice:evicted', onEvicted);
       socket.off('voice:members', onMembers);
       socket.off('voice:peer-joined', onPeerJoined);
@@ -1653,6 +1715,53 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // Enviar é só empurrar; o servidor é quem confere se aquela transmissão
   // aceita desenho. Esconder o botão do outro lado é conveniência, não
   // permissão — a mesma regra que vale no painel de administração.
+  // As lives anunciadas por cada peer, mesmo sem nenhuma mídia ter chegado.
+  //
+  // O anúncio é o `rtc:stream-meta`: ele diz que existe uma transmissão e qual
+  // é ela. Sem isso não haveria a que consentir — o "sim" precisa se referir a
+  // uma live específica, senão ele sobreviveria ao fim dela.
+  const [liveOffers, setLiveOffers] = useState<Record<string, string>>({});
+
+  // As lives que esta pessoa escolheu assistir, por transmissão.
+  //
+  // A chave é o par (quem transmite, qual transmissão). Guardar só quem
+  // transmite faria o "sim" dado a uma live encerrada valer para a próxima que
+  // a mesma pessoa abrisse — e ninguém consente com uma tela que ainda não
+  // existia.
+  const [watching, setWatching] = useState<Record<string, string>>({});
+  const watchingRef = useRef(watching);
+  watchingRef.current = watching;
+
+  const watchLive = useCallback((peerId: string, streamId: string) => {
+    if (!peerId || !streamId) return;
+    setWatching((atual) => (atual[peerId] === streamId ? atual : { ...atual, [peerId]: streamId }));
+    socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
+  }, [socket]);
+
+  const stopWatchingLive = useCallback((peerId: string) => {
+    const streamId = watchingRef.current[peerId];
+    setWatching((atual) => {
+      if (!(peerId in atual)) return atual;
+      const proximo = { ...atual };
+      delete proximo[peerId];
+      return proximo;
+    });
+    if (streamId) socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: false });
+  }, [socket]);
+
+  // Quem parou de transmitir deixa de ter inscrição. Sem isto, o "sim" ficaria
+  // pendurado e a próxima live começaria já assistida.
+  useEffect(() => {
+    const transmitindo = new Set(members.filter((member) => member.screen).map((member) => member.socketId));
+    setWatching((atual) => {
+      const chaves = Object.keys(atual).filter((peerId) => !transmitindo.has(peerId));
+      if (!chaves.length) return atual;
+      const proximo = { ...atual };
+      for (const peerId of chaves) delete proximo[peerId];
+      return proximo;
+    });
+  }, [members]);
+
   const sendDraw = useCallback((message: DrawMessage) => {
     if (!socket || !channelRef.current) return;
     socket.emit('rtc:draw', message);
@@ -2490,6 +2599,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     drawings, sendDraw, screenSource,
+    watching, watchLive, stopWatchingLive, liveOffers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
     showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource, screenAudioSupport,

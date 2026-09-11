@@ -268,6 +268,10 @@ const rtcIceSchema = z.object({
   }),
 });
 const rtcResyncSchema = z.object({ target: rtcTargetSchema });
+// Assinatura de uma live. `stream` identifica *qual* transmissão: sem isso, o
+// consentimento dado a uma live encerrada valeria para a próxima que a mesma
+// pessoa abrisse.
+const rtcWatchSchema = z.object({ target: rtcTargetSchema, stream: z.string().min(1).max(128), watching: z.boolean() });
 const rtcStreamHealthSchema = z.object({ target: rtcTargetSchema, frozen: z.boolean() });
 const rtcStreamMetaSchema = z.object({ target: rtcTargetSchema, meta: z.object({ streamId: z.string().min(1).max(256), kind: z.enum(['camera', 'screen']) }) });
 // Desenho sobre a transmissão de alguém. `target` é quem transmite: é dele a
@@ -1251,6 +1255,9 @@ io.on('connection', (socket) => {
     'rtc:ice': rtcIceSchema,
     'rtc:resync': rtcResyncSchema,
     'rtc:stream-health': rtcStreamHealthSchema,
+    // Quem assiste avisa quem transmite. O encaminhamento é o mesmo dos
+    // outros: só dentro da mesma call, e só para o alvo.
+    'rtc:watch': rtcWatchSchema,
   } as const;
   for (const event of Object.keys(rtcSchemas) as Array<keyof typeof rtcSchemas>) {
     socket.on(event, (payload: unknown) => {

@@ -59,19 +59,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/chaveiro-e-convites-v0.9.6/scripts/install-v0.9.6.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-por-escolha-v0.9.7/scripts/install-v0.9.7.sh | bash
 ```
 
-Este comando instala a v0.9.6 a partir da branch separada `release/chaveiro-e-convites-v0.9.6`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.9.7 a partir da branch separada `release/live-por-escolha-v0.9.7`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.6, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-chaveiro-e-convites-v0.9.6`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.7, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-live-por-escolha-v0.9.7`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/chaveiro-e-convites-v0.9.6/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-por-escolha-v0.9.7/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 ### Atualização pelo próprio aplicativo
@@ -138,7 +138,7 @@ nenhum redistribuível do Visual C++**.
 
 ### Instalador (recomendado)
 
-Baixe `Tumacord-0.9.6-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+Baixe `Tumacord-0.9.7-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
 e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
 escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
 Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
@@ -149,7 +149,7 @@ avisa e o encerra antes de continuar.
 
 ### Portátil
 
-`Tumacord-0.9.6-portable.exe` roda sem instalar nada. É a opção para pendrive
+`Tumacord-0.9.7-portable.exe` roda sem instalar nada. É a opção para pendrive
 ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
 atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
 na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
@@ -218,7 +218,7 @@ certificado configurado — o instalador, o portátil, o executável principal e
 componente de áudio, todos com carimbo de tempo. Você pode conferir:
 
 ```powershell
-Get-AuthenticodeSignature .\Tumacord-0.9.6-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\Tumacord-0.9.7-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` precisa ser `Valid`.

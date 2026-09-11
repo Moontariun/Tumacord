@@ -273,3 +273,40 @@ test('inundação de traços é cortada, e a mão normal continua passando', { t
   assert.ok(recebidos > 0, 'o começo do jorro passa');
   assert.ok(recebidos < 400, `o balde precisa cortar a inundação; passaram ${recebidos}`);
 });
+
+// A live por escolha explícita.
+//
+// O pedido de assistir é sinalização como qualquer outra: ele só atravessa
+// dentro da mesma call, e só chega a quem transmite. Sem essa conferência,
+// alguém de fora poderia pedir mídia de uma transmissão da qual não participa.
+test('o pedido de assistir só chega a quem transmite, e só dentro da call', { timeout: 40_000 }, async (context) => {
+  const { entrar, juntar } = await ambiente(context);
+  const transmite = await entrar('Host');
+  const assiste = await entrar('Amiga');
+  const deFora = await entrar('Estranho');
+  const eu = await juntar(transmite);
+  await juntar(assiste);
+
+  const chegou = waitFor<{ from: string; stream: string; watching: boolean }>(transmite, 'rtc:watch');
+  assiste.emit('rtc:watch', { target: eu.selfId, stream: 'transmissao-1', watching: true });
+  const pedido = await chegou;
+  assert.equal(pedido.stream, 'transmissao-1');
+  assert.equal(pedido.watching, true);
+
+  // Quem não está na call não alcança quem transmite.
+  const silencio = naoChega(transmite, 'rtc:watch');
+  deFora.emit('rtc:watch', { target: eu.selfId, stream: 'transmissao-1', watching: true });
+  assert.equal(await silencio, true, 'quem não está na call não pede mídia de quem está');
+});
+
+test('parar de assistir também é dito a quem transmite', { timeout: 40_000 }, async (context) => {
+  const { entrar, juntar } = await ambiente(context);
+  const transmite = await entrar('Host');
+  const assiste = await entrar('Amiga');
+  const eu = await juntar(transmite);
+  await juntar(assiste);
+
+  const chegou = waitFor<{ watching: boolean }>(transmite, 'rtc:watch', (payload) => payload.watching === false);
+  assiste.emit('rtc:watch', { target: eu.selfId, stream: 'transmissao-1', watching: false });
+  assert.equal((await chegou).watching, false);
+});

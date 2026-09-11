@@ -1,5 +1,40 @@
 # Histórico de versões
 
+## 0.9.7 — a live só começa quando você diz que quer
+
+<!-- tumacord:resumo -->
+Uma transmissão que começa não aparece mais sozinha na sua tela. Ela se anuncia, e você escolhe assistir.
+
+- Enquanto você não escolhe, a imagem nem sai da máquina de quem transmite — não é só o vídeo que fica escondido.
+- Parar de assistir encerra aquela transmissão para você e mantém a voz da call normal.
+- Entrar numa call onde já existe uma live mostra o aviso do mesmo jeito.
+<!-- /tumacord:resumo -->
+
+**Assistir virou uma escolha, e a escolha vale de verdade**
+
+Antes, a transmissão de alguém começava a chegar assim que era aberta: a mídia
+atravessava a rede e a tela aparecia sozinha. Quem não queria assistir podia
+esconder o quadro — mas os bytes continuavam vindo.
+
+Agora quem transmite **anuncia** e não envia. As faixas da tela só entram no
+enlace de quem pediu para assistir, e saem quando o pedido é desfeito. Esconder
+um elemento de vídeo nunca foi controlar o recebimento; a inscrição é.
+
+A voz continua igual em qualquer caso. Assistir ou não assistir não interrompe
+a conversa, e a câmera também não muda: ela é parte da conversa, não uma
+transmissão que alguém abre.
+
+**Cada transmissão é uma transmissão**
+
+O "sim" se refere àquela live, e não à pessoa. Se quem transmite encerrar e
+abrir outra, o aviso volta a aparecer — ninguém consente com uma tela que ainda
+não existia.
+
+**Entrar no meio de uma live**
+
+Quem chega depois recebe o mesmo aviso, porque o anúncio é enviado a todo mundo
+que entra na call. O que não é enviado é a imagem.
+
 ## 0.9.6 — suas contas param de se atropelar
 
 <!-- tumacord:resumo -->

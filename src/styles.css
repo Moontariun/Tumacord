@@ -1366,3 +1366,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .saved-destination span { min-width: 0; display: grid; gap: 2px; }
 .saved-destination strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .saved-destination small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #83859a; font-size: 10px; }
+
+/* --- a live que se anuncia antes de tocar -------------------------------- */
+.stream-offer-card { border-color: rgba(255,77,79,.3); background: linear-gradient(180deg, rgba(255,77,79,.09), #15161e); }
+.stream-offer-card .live-dot { margin-bottom: 4px; }
+.stream-offer-card button { background: linear-gradient(135deg, var(--tomato), #ff6c4e); color: white; font-weight: 800; }
+.stream-offer-card button:hover { filter: brightness(1.08); }

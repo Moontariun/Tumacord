@@ -145,5 +145,12 @@ ele coloca a pessoa na experiência inteira do modo dedicado. Se o encontro
 deveria ser só um caminho de rede — e não uma mudança de modo — é a pergunta
 que a Prioridade 1-E levanta e que esta versão não responde.
 
-A próxima etapa recomendada é a **Prioridade 2-I**: a live por escolha
-explícita, com "Assistir" e sem recebimento de mídia antes dessa escolha.
+A **Prioridade 2-I** saiu na 0.9.7, com uma ressalva dita: a sinalização foi
+provada contra um servidor de verdade, e a metade de mídia — as faixas entrando
+e saindo do enlace conforme a inscrição — depende de duas máquinas e continua
+pendente.
+
+A próxima etapa recomendada é a **Prioridade 3-J**: retirar trabalho sem
+finalidade. Hoje a eleição de host, a descoberta na rede local e o mapeamento
+de porta rodam sem olhar o modo — um servidor dedicado não precisa de nada
+disso, e é o suspeito mais direto do relato de desempenho no Linux.

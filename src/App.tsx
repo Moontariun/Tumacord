@@ -940,6 +940,12 @@ interface VoiceViewModel {
   screenOn: boolean;
   remoteMedia: RemoteMedia[];
   peerHealth: Record<string, PeerHealth>;
+  /** As lives anunciadas por cada peer, com o id daquela transmissão. */
+  liveOffers: Record<string, string>;
+  /** A qual live desta pessoa eu disse sim, por peer. */
+  watching: Record<string, string>;
+  watchLive: (peerId: string, streamId: string) => void;
+  stopWatchingLive: (peerId: string) => void;
   drawings: Record<string, DrawStroke[]>;
   sendDraw: (message: { target: string; strokeId: string; color: string; points: DrawPoint[]; done?: boolean; clear?: boolean; clearAll?: boolean }) => void;
   recoverPeer: (peerId: string, reason?: string, notifyRemote?: boolean) => void;
@@ -959,7 +965,6 @@ interface VoiceViewModel {
 
 function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, onProfile, onNotice, drawing }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void; drawing: DrawPreferences }) {
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
-  const [hiddenScreenUsers, setHiddenScreenUsers] = useState<Set<string>>(() => new Set());
   // Ampliar outro quadro desmontava o quadro solto, e com ele ia a janela
   // flutuante junto. Quem está solto continua montado.
   const [detachedKeys, setDetachedKeys] = useState<Set<string>>(() => new Set());
@@ -974,12 +979,17 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
   }, []);
   const inThisCall = voice.channelId === channel.id;
   const videoMedia = voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length > 0);
-  const visibleVideoMedia = videoMedia.filter((media) => media.kind !== 'screen' || !hiddenScreenUsers.has(media.user?.id ?? media.peerId));
+  const visibleVideoMedia = videoMedia;
   const audioMedia = voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0);
   const tiles = inThisCall ? voice.members : members;
   const expectedRemoteStreams = voice.members.filter((member) => member.id !== voice.user.id && member.screen);
-  const missingStreams = expectedRemoteStreams.filter((member) => !videoMedia.some((media) => media.kind === 'screen' && (media.user?.id === member.id || media.peerId === member.socketId)));
-  const hiddenStreams = expectedRemoteStreams.filter((member) => hiddenScreenUsers.has(member.id) && videoMedia.some((media) => media.kind === 'screen' && (media.user?.id === member.id || media.peerId === member.socketId)));
+  // Quem está transmitindo e ainda não recebeu um "sim" desta pessoa. A mídia
+  // não chega enquanto isso: a inscrição controla o recebimento, e não um
+  // elemento de vídeo escondido.
+  const naoAssinadas = expectedRemoteStreams.filter((member) => !voice.watching[member.socketId] && Boolean(voice.liveOffers[member.socketId]));
+  const semMidia = expectedRemoteStreams.filter((member) => !videoMedia.some((media) => media.kind === 'screen' && (media.user?.id === member.id || media.peerId === member.socketId)));
+  // "Ainda não chegou" só faz sentido para quem pediu para assistir.
+  const missingStreams = semMidia.filter((member) => Boolean(voice.watching[member.socketId]));
   const watchingLive = visibleVideoMedia.some((media) => media.kind === 'screen');
   const volumeFor = (userId?: string) => userId ? Math.max(0, Math.min(2, userVolumes[userId] ?? 1)) : 1;
   const mutedFor = (userId?: string) => Boolean(userId && mutedUsers[userId]);
@@ -988,13 +998,6 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-  useEffect(() => {
-    const active = new Set(voice.members.filter((member) => member.screen).map((member) => member.id));
-    setHiddenScreenUsers((current) => {
-      const next = new Set([...current].filter((id) => active.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [voice.members]);
   useEffect(() => {
     if (!theaterMediaKey) return;
     const validKeys = new Set([
@@ -1028,15 +1031,23 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
       ...(ehMinha ? { canClearAll: true, onClearAll: () => voice.sendDraw({ target, strokeId: 'clear', color: drawing.drawColor, points: [], clearAll: true }) } : {}),
     };
   };
-  const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length + hiddenStreams.length;
+  const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length + naoAssinadas.length;
   return <main className="call-view">
     <div className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''}`}>
       {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} drawing={tileDrawing(meuSocket, undefined, true)} />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} drawing={screen ? tileDrawing(media.peerId, voice.members.find((member) => member.socketId === media.peerId), false) : undefined} onClose={screen ? () => { setTheaterMediaKey(null); setHiddenScreenUsers((current) => new Set(current).add(media.user?.id ?? media.peerId)); } : undefined} />; })}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} drawing={screen ? tileDrawing(media.peerId, voice.members.find((member) => member.socketId === media.peerId), false) : undefined} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} />; })}
+      {/* Uma live que começou não começa a tocar sozinha: ela se anuncia, e
+          quem quiser assistir escolhe. Antes desse "sim" a mídia nem sai da
+          máquina de quem transmite. */}
+      {!theaterMediaKey && naoAssinadas.map((member) => <div className="stream-recovery-card stream-offer-card" key={`oferta-${member.id}`}>
+        <span className="live-dot" /><strong>{member.username} está transmitindo</strong>
+        <p>Você ainda não está recebendo esta transmissão.</p>
+        <small>A voz da call continua normalmente, assistindo ou não.</small>
+        <button onClick={() => { voice.watchLive(member.socketId, voice.liveOffers[member.socketId] ?? ''); }}>Assistir</button>
+      </div>)}
       {!theaterMediaKey && missingStreams.map((member) => <div className="stream-recovery-card" key={`missing-${member.id}`}><span className="live-dot" /><strong>{member.username} está AO VIVO</strong><p>A transmissão está se reconectando automaticamente.</p><small>{voice.peerHealth[member.socketId] === 'recovering' ? 'Recuperando conexão…' : 'Aguardando a faixa de vídeo…'}</small><button onClick={() => voice.recoverPeer(member.socketId, 'tentativa manual da interface', true)}>Tentar agora</button></div>)}
-      {!theaterMediaKey && hiddenStreams.map((member) => <div className="stream-recovery-card stream-hidden-card" key={`hidden-${member.id}`}><Icon name="screen" /><strong>Live de {member.username} ocultada</strong><p>Você saiu desta transmissão, mas continua na call.</p><button onClick={() => setHiddenScreenUsers((current) => { const next = new Set(current); next.delete(member.id); return next; })}>Assistir novamente</button></div>)}
-      {!visibleVideoMedia.length && !missingStreams.length && !hiddenStreams.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
+      {!visibleVideoMedia.length && !missingStreams.length && !naoAssinadas.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
         {tiles.length ? tiles.map((member) => <ParticipantTile key={member.socketId} member={member} serverUrl={serverUrl} onProfile={onProfile} />) : <div className="empty-call"><img src={logoUrl} alt="" /><h2>A call está quietinha</h2><p>Entre e seja o host. Quem chegar depois conecta direto com você.</p></div>}
       </div>}
     </div>

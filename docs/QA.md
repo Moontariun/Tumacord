@@ -193,6 +193,26 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Live por escolha explícita — 0.9.7
+
+| Item | Estado |
+| --- | --- |
+| Pedido de assistir só atravessa dentro da mesma call | TESTADO AUTOMATICAMENTE (servidor real) |
+| Quem está fora da call não alcança quem transmite | TESTADO AUTOMATICAMENTE (servidor real) |
+| Parar de assistir é dito a quem transmite | TESTADO AUTOMATICAMENTE (servidor real) |
+| Consentimento é por transmissão, não por pessoa | VALIDADO POR ANÁLISE (a comparação é pelo id da transmissão) |
+| Quem entra no meio da live recebe o anúncio | VALIDADO POR ANÁLISE (`syncLocalMediaToPeer` envia a meta sem as faixas) |
+| Inscrição some quando a transmissão termina | VALIDADO POR ANÁLISE |
+| **Mídia não sai da máquina de quem transmite antes do "sim"** | **REQUER TESTE EM DUAS MÁQUINAS** |
+| Renegociação ao assinar e ao cancelar | REQUER TESTE EM DUAS MÁQUINAS |
+| Áudio da live separado da voz depois da mudança | REQUER TESTE EM DUAS MÁQUINAS |
+| Reconexão no meio de uma live assinada | REQUER TESTE EM DUAS MÁQUINAS |
+
+Nada nesta tabela marcado como testado envolve WebRTC entre computadores: o que
+foi exercitado aqui é a sinalização, contra um servidor de verdade. A metade de
+mídia — as faixas entrando e saindo do enlace — depende de duas máquinas e está
+dita como pendente.
+
 ## Chaveiro de contas e convites — 0.9.6
 
 | Item | Estado |
@@ -211,6 +231,7 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Chave guardada volta ao campo mascarado | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Dois servidores dedicados no app real | REQUER TESTE MANUAL (a CSP do cliente web bloqueia origem cruzada; no desktop não há essa restrição) |
 | Armazenamento nativo protegido para a chave | FORA DESTA VERSÃO |
+| Instabilidade conhecida: "revogar bloqueia as próximas operações" reprovou 1 vez em 4 rodadas da suíte completa, e passa sempre isolado | EM OBSERVAÇÃO |
 | Procurar continua disponível com versão já encontrada | VALIDADO POR ANÁLISE (fases em que o botão aparece) |
 | Quem está muito atrás recebe direto a mais nova | TESTADO AUTOMATICAMENTE |
 | Parada obrigatória é oferecida antes da mais nova | TESTADO AUTOMATICAMENTE |
