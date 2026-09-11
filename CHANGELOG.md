@@ -1,5 +1,49 @@
 # Histórico de versões
 
+## 0.9.4 — no dedicado, quem responde é o servidor
+
+Esta versão sai da **0.9.3** e fecha três buracos de autoridade no servidor
+dedicado. Nenhum deles aparecia no uso normal; os três apareciam para quem
+fosse procurar.
+
+**Mensagem assinada por outra pessoa**
+
+A sincronização entre computadores existe para o P2P: quando o host troca de
+máquina, cada participante devolve ao host novo o que tem, e a mensagem vem
+assinada por quem a escreveu — porque é mesmo de outra pessoa.
+
+No dedicado esse mesmo caminho estava aberto, e o autor vinha do pacote e não
+da sessão. **Qualquer conta autenticada podia inserir no histórico uma mensagem
+assinada por qualquer outra.** Junto vinha a segunda metade do problema: a
+conversa inteira de um grupo P2P podia ser despejada dentro da comunidade.
+
+Agora o dedicado não mescla pacote de replicação nenhum. Ali quem responde pelo
+histórico e pelos perfis é o servidor, e ele já tem os dois: a mensagem chega
+por `chat:send` e o perfil por `PUT /api/profile`, cada um com o autor
+conferido. A outra metade da sincronização — **receber** o que o servidor tem —
+continua igual nos dois modos, porque ela sempre foi legítima.
+
+No P2P nada muda: a replicação continua sendo o que segura o histórico e os
+perfis na troca de host, inclusive a regra de que uma cópia antiga não
+substitui uma mais nova.
+
+**O limite de pessoas da call não era aplicado**
+
+O painel guardava o limite e a entrada nunca o consultava: a call aceitava todo
+mundo, e quem o configurou não tinha como saber. Agora ele vale no servidor,
+que é quem admite na sala.
+
+Quem já está dentro não é expulso por um limite que baixou depois, e a
+administração entra assim mesmo — um canal cheio não pode trancar do lado de
+fora quem precisa mediar o que está acontecendo lá dentro.
+
+**Canal apagado deixava gente na call**
+
+Apagar um canal de voz com gente dentro deixava essas pessoas em uma sala de um
+canal que já não existe: a interface não mostrava mais o canal, e sair dele
+virava um problema. Agora elas são tiradas da call, avisadas do motivo, e a
+sala fica vazia de verdade.
+
 ## 0.9.3 — o traço volta a ser um traço
 
 Esta versão sai da **0.9.2** e conserta o que estava quebrado na mesa.

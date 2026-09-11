@@ -114,17 +114,38 @@ test('sinalização preserva live ao reconectar e permite reconstruir o enlace',
       updatedAt: '2026-09-02T12:00:00.000Z',
     },
   };
-  const profileSnapshot = waitForEvent<{ onlineUsers: Array<{ username: string; profile?: { bio: string } }> }>(viewer, 'server:snapshot', (snapshot) => snapshot.onlineUsers.some((member) => member.username === 'Streamer QA' && member.profile?.bio === 'perfil sincronizado'));
-  streamer.emit('chat:sync:push', { channels: [], messages: [], profiles: [firstProfile], availableAttachmentIds: [profileMediaId] });
-  await profileSnapshot;
-  const replicatedMedia = await fetch(`${url}/api/profile/media/${profileMediaId}`);
-  assert.equal(replicatedMedia.status, 200);
-
-  const olderProfile = { ...firstProfile, profile: { ...firstProfile.profile, bio: 'perfil antigo', updatedAt: '2026-09-02T11:00:00.000Z' } };
-  const syncResult = await new Promise<{ profiles: Array<{ username: string; profile: { bio: string } }> }>((resolve) => {
-    viewer.emit('chat:sync:push', { channels: [], messages: [], profiles: [olderProfile], availableAttachmentIds: [] }, resolve);
+  // O dedicado não aceita perfil por replicação.
+  //
+  // Até a 0.9.3 aceitava, e este teste guardava esse caminho: o `updatedAt`
+  // era a única coisa entre o perfil de alguém e qualquer conta autenticada
+  // que resolvesse empurrar um mais novo. Aqui o perfil é do servidor e chega
+  // por `PUT /api/profile`, com o autor conferido pela sessão — a garantia de
+  // que uma cópia antiga não substitui uma nova mudou de lugar e vale no P2P,
+  // onde a replicação entre pessoas é a política (`serverAuthority`).
+  const ignorado = await new Promise<{ profiles: Array<{ username: string }> }>((resolve) => {
+    streamer.emit('chat:sync:push', { channels: [], messages: [], profiles: [firstProfile], availableAttachmentIds: [profileMediaId] }, resolve);
   });
-  assert.equal(syncResult.profiles.find((entry) => entry.username === 'Streamer QA')?.profile.bio, 'perfil sincronizado', 'uma cópia antiga não pode substituir avatar ou perfil novos');
+  assert.equal(ignorado.profiles.some((entry) => entry.username === 'Streamer QA'), false, 'o pacote de replicação não define perfil no dedicado');
+
+  // A mídia sozinha não é servida: ela só passa a existir para quem olha
+  // quando um perfil a referencia. E o caminho que referencia é o do dedicado,
+  // com a sessão dizendo de quem é o perfil.
+  assert.equal((await fetch(`${url}/api/profile/media/${profileMediaId}`)).status, 404, 'mídia sem dono não é servida');
+  // A espera é armada antes do pedido: o retrato é enviado durante ele, e
+  // escutar depois é perder o que já passou.
+  const retrato = waitForEvent<{ onlineUsers: Array<{ username: string; profile?: { bio: string } }> }>(
+    viewer,
+    'server:snapshot',
+    (snapshot) => snapshot.onlineUsers.some((member) => member.username === 'Streamer QA' && member.profile?.bio === 'perfil sincronizado'),
+  );
+  const perfilPeloCaminhoCerto = await fetch(`${url}/api/profile`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${streamerToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify(firstProfile.profile),
+  });
+  assert.equal(perfilPeloCaminhoCerto.status, 200);
+  assert.equal((await fetch(`${url}/api/profile/media/${profileMediaId}`)).status, 200);
+  await retrato;
 
   const streamerJoin = await join(streamer, 'call-geral');
   assert.equal(streamerJoin.ok, true);

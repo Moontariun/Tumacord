@@ -1611,6 +1611,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       handoffStarted.current = true;
       onHostHandoff(candidate, activeChannel, true);
     };
+    // O servidor tirou esta pessoa da call — hoje porque o canal foi apagado.
+    // Sem isto o cliente continuaria achando que está numa sala que não existe
+    // mais: a interface mostraria "voz conectada" para um canal sumido, e sair
+    // exigiria clicar em um canal que já não aparece em lugar nenhum.
+    const onEvicted = (payload: { channelId?: string; reason?: string }) => {
+      if (!payload?.channelId || channelRef.current !== payload.channelId) return;
+      leaveRef.current();
+      if (payload.reason) onError(payload.reason);
+    };
+    socket.on('voice:evicted', onEvicted);
     socket.on('voice:members', onMembers);
     socket.on('voice:peer-joined', onPeerJoined);
     socket.on('voice:peer-left', onPeerLeft);
@@ -1624,6 +1634,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket.on('voice:host-handoff', onHandoff);
     socket.on('disconnect', onDisconnect);
     return () => {
+      socket.off('voice:evicted', onEvicted);
       socket.off('voice:members', onMembers);
       socket.off('voice:peer-joined', onPeerJoined);
       socket.off('voice:peer-left', onPeerLeft);
@@ -1637,7 +1648,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       socket.off('voice:host-handoff', onHandoff);
       socket.off('disconnect', onDisconnect);
     };
-  }, [createPeer, dynamicHosting, flushPendingCandidates, onHostHandoff, publishState, recoverPeer, refreshRemote, socket, updatePeerHealth]);
+  }, [createPeer, dynamicHosting, flushPendingCandidates, onError, onHostHandoff, publishState, recoverPeer, refreshRemote, socket, updatePeerHealth]);
 
   // Enviar é só empurrar; o servidor é quem confere se aquela transmissão
   // aceita desenho. Esconder o botão do outro lado é conveniência, não

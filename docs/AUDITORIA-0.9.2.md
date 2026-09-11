@@ -75,9 +75,9 @@ P2P — mais a conferência no aplicativo, com a mesa saindo da lista.
 
 | Item | Estado | Evidência |
 | --- | --- | --- |
-| Replicação de mensagens com autoria vinda do cliente | **CONFIRMADO** | `replicatedMessageSchema` aceita `author` do payload, e `chat:sync:push` chama `store.mergeMessages` nos dois modos |
-| Limite de participantes salvo, mas não aplicado na entrada | **CONFIRMADO** | `userLimit` é validado e gravado no painel; `voice:join` não o consulta em nenhum ponto |
-| Exclusão de canal ocupado deixando chamada órfã | **CONFIRMADO** | `DELETE /api/admin/channels/:id` não consulta `rooms`; quem estava na call fica em uma sala de um canal que já não existe |
+| Replicação de mensagens com autoria vinda do cliente | **CONFIRMADO — corrigido na 0.9.4** | `replicatedMessageSchema` aceitava `author` do payload e `chat:sync:push` mesclava nos dois modos; a mesclagem passou a ser só do P2P |
+| Limite de participantes salvo, mas não aplicado na entrada | **CONFIRMADO — corrigido na 0.9.4** | `userLimit` era validado e gravado no painel e `voice:join` não o consultava |
+| Exclusão de canal ocupado deixando chamada órfã | **CONFIRMADO — corrigido na 0.9.4** | `DELETE /api/admin/channels/:id` não consultava `rooms`; agora tira as pessoas e avisa antes de apagar |
 | Inventário de anexos excedendo o limite do pacote | **CONFIRMADO no contrato, sem efeito hoje** | o servidor responde `availableAttachmentIds()` sem teto e o esquema aceita no máximo 500; o cliente envia lista vazia (`src/lib/chatSync.ts`), então o limite não é atingido pelo caminho atual |
 | Duplicação de áudio após recuperação parcial | NÃO REVALIDADO | — |
 | Trocas rápidas de câmera aplicando dispositivo desatualizado | NÃO REVALIDADO | — |
@@ -130,3 +130,8 @@ gravado é apagado pela mudança.
 
 Depois dela, em ordem: limite de voz aplicado na entrada e canal apagado sem
 deixar call órfã — ambos confirmados acima e de escopo pequeno.
+
+**Atualização:** as três coisas acima foram entregues na 0.9.4. A próxima
+etapa recomendada passa a ser a **Prioridade 1-A**, o isolamento do cache local
+por origem: hoje o histórico guardado no computador não distingue de qual
+servidor ou grupo ele veio.

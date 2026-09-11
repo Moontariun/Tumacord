@@ -193,6 +193,24 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Autoridade do servidor dedicado — 0.9.4
+
+| Item | Estado |
+| --- | --- |
+| Conta comum não insere mensagem assinada por outra | TESTADO AUTOMATICAMENTE (servidor real) |
+| Conversa de grupo P2P não entra no dedicado | TESTADO AUTOMATICAMENTE (servidor real) |
+| Perfil não é definido por pacote de replicação no dedicado | TESTADO AUTOMATICAMENTE (servidor real) |
+| Perfil pelo caminho certo (`PUT /api/profile`) continua chegando a todos | TESTADO AUTOMATICAMENTE (servidor real) |
+| Mídia de perfil sem dono não é servida | TESTADO AUTOMATICAMENTE (servidor real) |
+| P2P: replicação preserva histórico na troca de host | TESTADO AUTOMATICAMENTE (servidor P2P real) |
+| P2P: cópia antiga de perfil não substitui a nova | TESTADO AUTOMATICAMENTE (servidor P2P real) |
+| Limite da call aplicado na entrada | TESTADO AUTOMATICAMENTE (servidor real) |
+| Administração entra em call cheia | TESTADO AUTOMATICAMENTE (servidor real) |
+| Vaga liberada quando alguém sai | TESTADO AUTOMATICAMENTE (servidor real) |
+| Canal apagado tira da call quem estava dentro | TESTADO AUTOMATICAMENTE (servidor real) |
+| Aviso de remoção chegando na interface | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Cache local separado por origem (Prioridade 1-A) | FORA DESTA VERSÃO |
+
 ## Traço e exclusão de mesas — 0.9.3
 
 | Item | Estado |

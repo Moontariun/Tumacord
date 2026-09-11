@@ -31,7 +31,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/traco-e-exclusao-v0.9.3}"
+alvo="${1:-release/autoridade-do-servidor-v0.9.4}"
 repositorio="${TUMACORD_REPO:-Moontariun/Tumacord}"
 projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$projeto"
@@ -96,7 +96,7 @@ if [[ "$alvo" == "ultima" || "$alvo" == "--ultima" ]]; then
   alvo="$(consultar_releases ultima || true)"
   if [[ -z "$alvo" ]]; then
     echo "Não consegui descobrir a versão mais nova no GitHub." >&2
-    echo "Rode de novo com a referência: ./scripts/update-server.sh release/traco-e-exclusao-v0.9.3" >&2
+    echo "Rode de novo com a referência: ./scripts/update-server.sh release/autoridade-do-servidor-v0.9.4" >&2
     exit 1
   fi
   echo "   versão publicada: $alvo"
@@ -217,7 +217,7 @@ echo "Ver o que aconteceu:" >&2
 echo "  docker compose logs --tail 80 tumacord-server" >&2
 echo >&2
 echo "Voltar para a versão anterior:" >&2
-echo "  git checkout release/bandeja-e-correcoes-v0.9.2 && docker compose up -d --build" >&2
+echo "  git checkout release/traco-e-exclusao-v0.9.3 && docker compose up -d --build" >&2
 echo >&2
 echo "Restaurar o backup (só se necessário; substitui os dados atuais):" >&2
 echo "  docker compose down" >&2

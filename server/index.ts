@@ -781,6 +781,13 @@ app.delete('/api/admin/channels/:id', async (request, response) => {
     await audit(context.user, 'channel.delete', canal?.name ?? request.params.id, 'denied', veredito.error);
     return refuse(response, 409, veredito.error ?? 'Não dá para apagar este canal.');
   }
+  // Apagar o canal sem tirar quem estava na call deixava gente numa sala de um
+  // canal que já não existe: a lista de membros continuava chegando, e a
+  // pessoa não conseguia sair por um canal que a interface não mostra mais.
+  for (const member of rooms.members(request.params.id)) {
+    io.to(member.socketId).emit('voice:evicted', { channelId: request.params.id, reason: 'Este canal foi apagado.' });
+    leaveVoice(member.socketId);
+  }
   await store.deleteChannel(request.params.id);
   // As mesas do canal apagado saem junto com ele. Mantê-las vivas deixaria um
   // quadro acessível por um canal que não existe mais — e a permissão da mesa
@@ -1092,16 +1099,28 @@ io.on('connection', (socket) => {
     io.emit('chat:message', message);
   });
 
+  // A replicação entre pessoas é do P2P, e só dele.
+  //
+  // No P2P ela é o que segura o histórico quando o host troca de máquina: cada
+  // participante devolve ao host novo o que tem, e o autor vem no pacote
+  // porque é mesmo a mensagem de outra pessoa.
+  //
+  // No dedicado esse mesmo caminho era um buraco. O servidor mesclava o pacote
+  // como se fosse verdade, e com ele vinham duas coisas que não deveriam
+  // entrar: mensagem assinada como qualquer um — o autor vinha do pacote, não
+  // da sessão — e a conversa de um grupo P2P inteiro, despejada dentro da
+  // comunidade. Ali quem responde pelo histórico e pelos perfis é o servidor,
+  // e ele já tem os dois: a mensagem chega por `chat:send` e o perfil por
+  // `PUT /api/profile`, cada um com o autor conferido.
+  //
+  // A resposta continua igual para os dois modos, porque a outra metade da
+  // sincronização — receber o que o servidor tem — é legítima em qualquer um.
   socket.on('chat:sync:push', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
     const parsed = syncBundleSchema.safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
-    // A sincronização era um segundo caminho para criar canal: qualquer
-    // usuário empurrava um pacote com canais novos e eles entravam. Fora do
-    // P2P, só a administração define a lista de canais.
-    const mayDefineChannels = !p2pMode && canManageChannels(roleOfSocket(socket));
-    const addedChannels = mayDefineChannels ? await store.mergeChannels(parsed.data.channels) : [];
-    const addedMessages = await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId)));
-    const changedProfiles = await store.mergeProfiles(parsed.data.profiles);
+    const addedChannels = p2pMode ? await store.mergeChannels(parsed.data.channels) : [];
+    const addedMessages = p2pMode ? await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId))) : [];
+    const changedProfiles = p2pMode ? await store.mergeProfiles(parsed.data.profiles) : [];
     if (changedProfiles.length) refreshProfilePresence(new Set(changedProfiles.map((entry) => normalizeUsername(entry.username))));
     else if (addedChannels.length) broadcastSnapshot();
     if (addedMessages.length) io.emit('chat:sync:messages', addedMessages);
@@ -1154,6 +1173,19 @@ io.on('connection', (socket) => {
       io.to(`voice:${previous}`).emit('voice:members', rooms.members(previous));
     }
     const existingPeers = rooms.members(channelId);
+    // O limite de pessoas era guardado pelo painel e nunca consultado aqui: a
+    // call aceitava todo mundo, e quem o configurou não tinha como saber. Ele
+    // vale no servidor porque é ele quem admite na sala — esconder o botão de
+    // entrar seria pedir a cooperação de quem quer entrar.
+    //
+    // Quem já está dentro não é expulso por um limite que baixou depois, e a
+    // administração entra assim mesmo: um canal cheio não pode trancar do lado
+    // de fora quem precisa mediar o que está acontecendo lá.
+    const limite = availableChannels().find((channel) => channel.id === channelId)?.userLimit ?? 0;
+    const jaEstava = existingPeers.some((member) => member.socketId === socket.id);
+    if (limite > 0 && !jaEstava && existingPeers.length >= limite && !isAdministrator(roleOfSocket(socket))) {
+      return acknowledge?.({ ok: false, error: `Esta call está cheia: ela aceita ${limite} ${limite === 1 ? 'pessoa' : 'pessoas'}.` });
+    }
     socket.join(`voice:${channelId}`);
     const reachability = z.number().finite().min(0).max(100).safeParse((input as { reachability?: unknown } | null)?.reachability).data ?? 0;
     rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address), reachability });
