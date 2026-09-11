@@ -423,6 +423,35 @@ test('um servidor dedicado não recebe mesa vinda de fora', { timeout: 60_000 },
   assert.match(recusada.error ?? '', /dedicado não recebe/);
 });
 
+// O cursor é enfeite de tempo real: ele chega a quem está na mesa e não deixa
+// rastro nenhum no histórico. Se entrasse, cada mexida de mouse viraria uma
+// revisão, e quem reconectasse baixaria o passeio do ponteiro alheio.
+test('o cursor alheio chega a quem está na mesa e não entra no histórico', { timeout: 60_000 }, async (context) => {
+  const { entrar } = await ambiente(context);
+  const ana = await entrar('Ana');
+  const bia = await entrar('Bia');
+  const criada = await criar(ana);
+  const boardId = criada.board!.id;
+  await entrarNaMesa(ana, boardId);
+  const entrouBia = await entrarNaMesa(bia, boardId);
+  const revisaoAntes = entrouBia.revision ?? 0;
+
+  const chegando = waitFor<{ boardId: string; cursor: { username: string; x: number; y: number } }>(bia, 'board:cursor');
+  ana.emit('board:cursor', { boardId, x: 640, y: 360, color: '#5cc8ff' });
+  const recebido = await chegando;
+  assert.equal(recebido.boardId, boardId);
+  assert.equal(recebido.cursor.username, 'Ana');
+  assert.equal(recebido.cursor.x, 640);
+
+  // Ninguém desenhou: a revisão não pode ter andado, e quem chega agora não
+  // recebe cursor nenhum junto com o quadro.
+  const dani = await entrar('Dani');
+  const entrouDani = await entrarNaMesa(dani, boardId);
+  assert.equal(entrouDani.revision, revisaoAntes);
+  assert.equal((entrouDani.ops ?? []).length, 0);
+  assert.equal(montar(entrouDani.snapshot, entrouDani.ops).strokes.length, 0);
+});
+
 test('a mesa entra e sai da lista sem levar o desenho junto', { timeout: 60_000 }, async (context) => {
   const { entrar } = await ambiente(context);
   const ana = await entrar('Ana');

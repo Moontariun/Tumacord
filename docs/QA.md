@@ -219,7 +219,8 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Bloquear rebaixa o outro cliente na hora | TESTADO NO APLICATIVO (dois clientes no mesmo servidor) |
 | Exportação em PNG | TESTADO NO APLICATIVO (imagem gerada, 44 KB) |
 | Pausa da pintura com a janela em segundo plano | TESTADO NO APLICATIVO |
-| Cursor de outra pessoa aparecendo e sumindo | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Cursor alheio chega e não entra no histórico | TESTADO AUTOMATICAMENTE (servidor real) |
+| Cursor sumindo da tela depois que a pessoa para | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Caneta com pressão / tela sensível ao toque | FORA DESTA VERSÃO |
 | Desenhar em uma mesa aberta durante uma call real | IMPLEMENTADO — REQUER TESTE MANUAL |
 

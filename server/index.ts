@@ -85,7 +85,7 @@ const BOARD_SAVE_INTERVAL_MS = 500;
 // A primeira mudança grava na hora; as seguintes esperam.
 //
 // Desenhar produz operações a poucos milissegundos de distância, e o arquivo é
-// reescrito inteiro a cada gravação — juntar um segundo de mão andando em uma
+// reescrito inteiro a cada gravação — juntar meio segundo de mão andando em uma
 // gravação só é a diferença entre salvar a mesa e brigar com o disco.
 //
 // Mas adiar *também* a primeira seria apostar num encerramento gracioso que nem
