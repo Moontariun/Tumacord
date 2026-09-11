@@ -138,3 +138,38 @@ A pasta de downloads da atualização (`updates`, dentro dos dados do aplicativo
 ## Replicação pessoal
 
 Mensagens e perfis são mesclados entre os computadores online. Perfis usam o nome normalizado como identidade P2P e `updatedAt` como revisão: avatar, banner, bio e cor mais recentes vencem. As mídias de perfil são publicadas no host atual e baixadas para o servidor embutido de cada desktop, permitindo que qualquer participante assuma como host sem voltar para uma foto antiga.
+
+## Interface: o que a tela diz, e onde
+
+A regra do projeto, a partir da 0.9.8: **texto explicativo não fica ao lado do
+controle**. Um botão, uma caixa de marcar ou um campo carrega o nome da coisa;
+a explicação, quando existe, vive na dica que aparece com o ponteiro parado
+(`title`). Um aplicativo de conversa não é um tutorial, e um parágrafo embaixo
+de cada opção faz a tela crescer até precisar de rolagem para entrar.
+
+O que isso quer dizer na prática:
+
+- o rótulo diz **o que é**, em uma a três palavras, sem repetir o ícone;
+- a dica diz **o que acontece** ou **onde aquilo fica guardado**, em uma frase;
+- nada de `<small>` embaixo de botão, de caixa de marcar ou de campo;
+- avisos permanentes (segurança, estado da conexão) viram uma linha curta com
+  ícone, não um cartão com título e parágrafo;
+- o que só interessa depois de um erro aparece **depois do erro**, não antes.
+
+A tela de entrada é o exemplo: ela era uma coluna só, e em servidor dedicado com
+contas guardadas media 420 × 1325 px — rolagem numa janela de 800 px de altura.
+Agora são duas colunas, 860 × 448 px, sem rolagem; o texto que explicava cada
+campo continua todo lá, no ponteiro.
+
+## Contas guardadas neste computador
+
+A coluna esquerda da entrada lista o que `keyring.ts` lembra, por destino. Cada
+linha traz a foto do perfil daquela sessão e um **x** que esquece aquele destino
+— sessão e chave —, com uma confirmação antes, porque não há como desfazer.
+
+A foto não vem do endereço relativo que o resto do app usa: na entrada não há
+sessão aberta, e esse endereço não aponta para lugar nenhum. `SavedAvatar`
+tenta primeiro o que este computador já baixou (`/api/local/attachments`, que
+funciona com o host do grupo desligado) e depois o servidor daquele destino.
+Falhando as duas, vale a inicial do nome — um círculo vazio seria pior.
+

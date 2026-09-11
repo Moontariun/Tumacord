@@ -109,6 +109,21 @@ export function forgetDestination(keyring: Keyring, destination: string): Keyrin
   return { ...endSession(keyring, destination), keys };
 }
 
+/**
+ * Desfazer uma entrada que ninguém chegou a adotar.
+ *
+ * A recuperação automática do P2P autentica e grava antes de alguém dizer se
+ * aquela sessão ainda serve. Quando a tela já saiu do ar — porque a pessoa
+ * saiu da conta —, o que foi gravado precisa sair junto: senão "sair" vira um
+ * clique que não faz nada e a conta reaparece na abertura seguinte.
+ *
+ * Sai só o que aquela tentativa escreveu. Se algo mais novo já ocupa o
+ * destino — uma troca de host, por exemplo —, ele fica onde está.
+ */
+export function abandonSession(keyring: Keyring, destination: string, token: string): Keyring {
+  return sessionAt(keyring, destination)?.token === token ? endSession(keyring, destination) : keyring;
+}
+
 /** Trocar de destino sem encerrar nada. */
 export function switchTo(keyring: Keyring, destination: string): Keyring {
   return { ...keyring, active: destination };
@@ -137,6 +152,12 @@ export function forgetEverything(): Keyring {
 // perder a sessão de quem atualizou seria trocar um problema por outro. O
 // `directKey` era usado para duas coisas diferentes — chave de convite no P2P
 // e chave de acesso no dedicado —, e aqui cada uma vai para o seu lugar.
+//
+// Converter é um ato único, e quem chama precisa registrar que ele aconteceu.
+// Enquanto isso não era feito, a conversão rodava a cada leitura do chaveiro:
+// sair da conta apagava a sessão e a leitura seguinte a trazia de volta da
+// gaveta antiga. No P2P os dois lados caíam no mesmo destino — `grupo:` —, e
+// por isso sair de uma conta do modo P2P simplesmente não acontecia.
 export function migrateSingleSession(keyring: Keyring, legacy: SavedSession | null, destinationOf: (session: SavedSession) => string): Keyring {
   if (!legacy?.token) return keyring;
   const destination = destinationOf(legacy);

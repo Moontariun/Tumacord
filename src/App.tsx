@@ -12,7 +12,7 @@ import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './componen
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { describeOrigin } from './lib/origin';
-import { clearSession, defaultServerUrl, destinationOf, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
+import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetThisDestination, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
@@ -81,6 +81,17 @@ function App() {
   return <Boundary title="O Tumacord tropeçou"><Tumacord session={session} onSessionChange={setSession} onLogout={logout} onSwitchAccount={trocarDeConta} /></Boundary>;
 }
 
+// A entrada.
+//
+// Ela era uma coluna só, e crescia para baixo a cada coisa nova: modo, chave,
+// convite, duas caixas de "lembrar" com dois parágrafos cada, aviso de
+// segurança, contas guardadas. Num monitor comum a tela terminava com barra de
+// rolagem para entrar em um aplicativo de conversa.
+//
+// Agora são duas colunas: à esquerda quem já entrou neste computador, à
+// direita o formulário. O que explicava cada campo virou dica no ponteiro — o
+// texto continua disponível para quem procura e para de ocupar a tela de quem
+// já sabe.
 function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   const [serverUrl, setServerUrl] = useState(() => {
     const saved = defaultServerUrl();
@@ -100,7 +111,8 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   // assim digitar a chave toda vez, e o contrário também.
   const [rememberKey, setRememberKey] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
-  const [lembradas] = useState(() => rememberedDestinations().filter((entrada) => entrada.session.token));
+  const [lembradas, setLembradas] = useState(() => rememberedDestinations().filter((entrada) => entrada.session.token));
+  const [aEsquecer, setAEsquecer] = useState<{ destination: string; session: SavedSession } | null>(null);
   const isDesktop = Boolean(window.tumacordDesktop);
 
   // A chave guardada daquele servidor volta para o campo assim que o endereço
@@ -123,6 +135,14 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
   const retomar = (destination: string) => {
     const retomada = useDestination(destination);
     if (retomada) onLogin(retomada);
+  };
+
+  // Esquecer é do computador, não do servidor: a conta continua lá, e o que
+  // sai daqui é a sessão e a chave guardadas nesta máquina.
+  const esquecer = (destination: string) => {
+    forgetThisDestination(destination);
+    setLembradas((atuais) => atuais.filter((entrada) => entrada.destination !== destination));
+    setAEsquecer(null);
   };
 
   const submit = async (event: FormEvent) => {
@@ -178,41 +198,133 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
 
   return <main className="login-page">
     <div className="login-glow glow-one" /><div className="login-glow glow-two" />
-    <form className="login-card" onSubmit={submit}>
-      <img className="login-logo" src={logoUrl} alt="Marca do Tumacord" />
-      <div className="brand-title">Tuma<span>cord</span></div>
-      <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
-        <button type="button" disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={!isDesktop ? 'O modo P2P automático está disponível no aplicativo instalado.' : undefined}><Icon name="users" /><span><strong>P2P automático</strong><small>{isDesktop ? 'Enlace direto, rede local e convite' : 'Disponível no aplicativo'}</small></span></button>
-        <button type="button" className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')}><Icon name="server" /><span><strong>Servidor dedicado</strong><small>Conectar por endereço</small></span></button>
-      </div>
-      <label className="invite-field">Código de convite <small>Opcional. Cole o código de quem já está na call: ele leva você ao lugar certo, seja P2P ou servidor.</small><input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="TUMA2~…" /></label>
-      {connectionMode === 'server' && <div className="server-login-fields">
-        <label>Endereço do servidor <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
-        <label>Chave do servidor <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Chave definida pelo host" /></label>
-        <label className="remember-login"><input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} /><span><strong>Lembrar a chave deste servidor</strong><small>Ela fica guardada neste computador, só para este servidor, e o campo continua mascarado. Desmarcar apaga a que estiver guardada.</small></span></label>
-        <p className="server-security-note"><Icon name="shield" /><span><strong>Conexão protegida</strong><small>HTTPS/WSS quando configurado; voz, câmera e tela usam WebRTC criptografado.</small></span></p>
-      </div>}
-      <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Seu nome de usuário" required /></label>
-      <label>Senha <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••" required /></label>
-      {mode === 'register' && <label>Confirmar senha <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Repita a senha" required /></label>}
-      <label className="remember-login"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span><strong>Continuar conectado</strong><small>Reabre o Tumacord nesta conta sem pedir login novamente.</small></span></label>
-      {/* As contas que este computador já lembra, por destino. Trocar de modo
-          ou entrar em outro servidor deixou de custar as outras: elas ficam
-          aqui, e voltar para qualquer uma é um clique. */}
-      {lembradas.length > 0 && <div className="saved-destinations">
-        <span className="group-title"><span>Continuar em</span></span>
-        {lembradas.map(({ destination, session: guardada }) => <button key={destination} type="button" className="saved-destination" onClick={() => retomar(destination)}>
-          <Avatar name={guardada.user.username} profile={guardada.user.profile} small />
-          <span><strong>{guardada.user.username}</strong><small>{describeOrigin(destination, guardada.serverName)}</small></span>
-        </button>)}
-      </div>}
-      {error && <div className="form-error">{error}</div>}
-      <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar no Tumacord'}</button>
-      <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
-      <small>{connectionMode === 'p2p' ? 'Uma conversa e uma call para o grupo. Na mesma rede as calls aparecem sozinhas; fora dela, um código de convite basta — sem ZeroTier.' : 'A primeira entrada cria sua conta nesse servidor com as mesmas credenciais locais. A porta padrão é 4600.'}</small>
-      <div className="app-version" title={`Versão instalada: ${APP_VERSION}`}>Tumacord v{APP_VERSION}</div>
-    </form>
+    <div className="login-card">
+      <aside className="login-aside">
+        <div className={`login-aside-main ${lembradas.length ? '' : 'is-bare'}`}>
+          <div className="login-brand">
+            <img className="login-logo" src={logoUrl} alt="Marca do Tumacord" />
+            <div className="brand-title">Tuma<span>cord</span></div>
+            <p>Conversa, voz e tela para o seu grupo.</p>
+          </div>
+          {/* As contas que este computador já lembra, por destino. Trocar de
+              modo ou entrar em outro servidor deixou de custar as outras: elas
+              ficam aqui, e voltar para qualquer uma é um clique. O "x" esquece
+              aquele destino — a sessão e a chave dele — depois de confirmar. */}
+          {lembradas.length > 0 && <div className="saved-destinations">
+            <span className="group-title"><span>Continuar em</span></span>
+            {lembradas.map(({ destination, session: guardada }) => <div key={destination} className="saved-destination">
+              <button type="button" onClick={() => retomar(destination)} title={`Entrar como ${guardada.user.username} sem digitar a senha`}>
+                <SavedAvatar session={guardada} />
+                <span><strong>{guardada.user.username}</strong><small>{describeOrigin(destination, guardada.serverName)}</small></span>
+              </button>
+              <button type="button" className="saved-forget" onClick={() => setAEsquecer({ destination, session: guardada })} title="Esquecer esta conta neste computador" aria-label={`Esquecer ${guardada.user.username}`}><Icon name="close" /></button>
+            </div>)}
+          </div>}
+        </div>
+        <div className="login-aside-foot">
+          <span className="login-secure" title="HTTPS e WSS quando o servidor está configurado para isso. Voz, câmera e tela usam WebRTC criptografado em qualquer modo."><Icon name="shield" />Conexão criptografada</span>
+          <span className="app-version" title={`Versão instalada: ${APP_VERSION}`}>v{APP_VERSION}</span>
+        </div>
+      </aside>
+      <form className="login-form" onSubmit={submit}>
+        <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
+          <button type="button" role="tab" aria-selected={connectionMode === 'p2p'} disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={isDesktop ? 'Enlace direto entre os computadores. Na mesma rede as calls aparecem sozinhas; fora dela, um código de convite basta.' : 'O modo P2P automático está disponível no aplicativo instalado.'}><Icon name="users" />P2P automático</button>
+          <button type="button" role="tab" aria-selected={connectionMode === 'server'} className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')} title="Conectar a um servidor por endereço. A primeira entrada cria sua conta nele; a porta padrão é 4600."><Icon name="server" />Servidor dedicado</button>
+        </div>
+        {connectionMode === 'server' && <div className="field-row">
+          <label>Endereço <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
+          <label title="A chave de acesso definida por quem hospeda o servidor.">Chave <input type="password" value={serverKey} onChange={(event) => setServerKey(event.target.value)} autoComplete="off" placeholder="Definida pelo host" /></label>
+        </div>}
+        <label title="Cole o código de quem já está na call: ele leva você ao lugar certo, seja P2P ou servidor.">Convite <input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Opcional — TUMA2~…" /></label>
+        <div className="field-row">
+          <label>Usuário <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Seu nome de usuário" required /></label>
+          <label>Senha <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} placeholder="••••••••" required /></label>
+        </div>
+        {mode === 'register' && <label>Confirmar senha <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Repita a senha" required /></label>}
+        <div className="login-switches">
+          <label title="Reabre o Tumacord nesta conta sem pedir a senha de novo."><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />Continuar conectado</label>
+          {connectionMode === 'server' && <label title="A chave fica guardada neste computador, só para este servidor, e o campo continua mascarado. Desmarcar apaga a que estiver guardada."><input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />Lembrar a chave</label>}
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="login-actions">
+          <button className="primary-button" disabled={loading}>{loading ? (mode === 'register' ? 'Criando…' : 'Entrando…') : mode === 'register' ? 'Criar conta' : 'Entrar'}</button>
+          <button type="button" className="account-toggle" onClick={() => { setMode((current) => current === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'register' ? 'Já tenho uma conta' : 'Criar uma conta nova'}</button>
+        </div>
+      </form>
+    </div>
+    {aEsquecer && <ConfirmDialog
+      title="Esquecer esta conta?"
+      body={<>A sessão de <strong>{aEsquecer.session.user.username}</strong> em {describeOrigin(aEsquecer.destination, aEsquecer.session.serverName)} sai deste computador, junto com a chave guardada. A conta continua existindo.</>}
+      confirmLabel="Esquecer"
+      onConfirm={() => esquecer(aEsquecer.destination)}
+      onClose={() => setAEsquecer(null)}
+    />}
   </main>;
+}
+
+/**
+ * A foto de quem ficou guardado neste computador.
+ *
+ * Na tela de entrada não há sessão aberta, e o endereço relativo que o resto do
+ * app usa apontaria para lugar nenhum — era por isso que a foto não aparecia
+ * aqui. A busca tenta primeiro o que esta máquina já baixou, que é o único
+ * caminho que funciona com o host do grupo desligado, e depois o servidor
+ * daquele destino. Falhando as duas, a inicial continua valendo.
+ */
+function SavedAvatar({ session }: { session: SavedSession }) {
+  const [image, setImage] = useState<string>();
+  const avatar = session.user.profile?.avatar;
+  useEffect(() => {
+    if (!avatar) return setImage(undefined);
+    let vivo = true;
+    const candidatos = [
+      ...(window.tumacordDesktop ? [`http://127.0.0.1:3927/api/local/attachments/${avatar.id}`] : []),
+      profileMediaUrl(session.serverUrl, avatar) ?? '',
+    ].filter(Boolean);
+    void (async () => {
+      for (const candidato of candidatos) {
+        const chegou = await new Promise<boolean>((resolve) => {
+          const teste = new Image();
+          teste.onload = () => resolve(true);
+          teste.onerror = () => resolve(false);
+          teste.src = candidato;
+        });
+        if (!vivo) return;
+        if (chegou) return setImage(candidato);
+      }
+      setImage(undefined);
+    })();
+    return () => { vivo = false; };
+  }, [avatar, session.serverUrl]);
+  // O perfil vai sem a foto de propósito: quem decide onde ela está é este
+  // componente. Passando a foto junto, o `Avatar` cairia no endereço relativo
+  // — que na tela de entrada aponta para lugar nenhum — e desenharia um
+  // círculo vazio no lugar da inicial quando nenhum candidato responde.
+  const perfil = session.user.profile;
+  return <Avatar name={session.user.username} profile={perfil && { ...perfil, avatar: undefined }} imageOverride={image} />;
+}
+
+/**
+ * Uma pergunta antes de algo que não volta atrás.
+ *
+ * Curta de propósito: título, uma frase do que sai, e os dois caminhos. Quem
+ * cancela é quem chega no Enter, porque errar para o lado seguro custa um
+ * clique e errar para o outro custa a conta guardada.
+ */
+function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }: { title: string; body: ReactNode; confirmLabel: string; onConfirm: () => void; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="confirm-dialog" role="alertdialog" aria-modal="true">
+    <h2>{title}</h2>
+    <p>{body}</p>
+    <div className="confirm-actions">
+      <button type="button" autoFocus onClick={onClose}>Cancelar</button>
+      <button type="button" className="danger" onClick={onConfirm}>{confirmLabel}</button>
+    </div>
+  </div></div>;
 }
 
 function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { session: SavedSession; onSessionChange: (session: SavedSession) => void; onLogout: () => void; onSwitchAccount: () => void }) {
@@ -496,6 +608,9 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   useEffect(() => {
     const next = io(session.serverUrl, { auth: { token: session.token }, transports: ['websocket', 'polling'], reconnectionDelay: 500, reconnectionDelayMax: 3000 });
     let recoveringPersistedSession = false;
+    // Se esta conexão ainda é a conexão desta tela. A recuperação automática
+    // do P2P autentica antes de saber disso, e autenticar grava.
+    let vivo = true;
     const mergeVisible = (incoming: ChatMessage[]) => {
       const visible = incoming.filter((item) => item.channelId === selectedChannelRef.current);
       if (!visible.length) return;
@@ -545,6 +660,11 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
         recoveringPersistedSession = true;
         void login('http://127.0.0.1:3927', session.user.username, session.password, session.resumeChannelId, true, 'p2p', session.rememberMe ?? true)
           .then((recovered) => {
+            // Sair da conta enquanto a recuperação estava no ar: o que ela
+            // gravou sai junto. Sem isto, a sessão que a pessoa acabou de
+            // encerrar voltava para o chaveiro e reaparecia na abertura
+            // seguinte — sair virava um clique sem efeito.
+            if (!vivo) return abandonSession(recovered);
             showToast('Sessão local recuperada automaticamente.');
             onSessionChange(recovered);
           })
@@ -585,6 +705,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
     });
     setSocket(next);
     return () => {
+      vivo = false;
       next.disconnect();
       setSocket(null);
       // Sem isto o indicador continuava dizendo "conectado" durante a troca de

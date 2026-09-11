@@ -7,6 +7,7 @@
 import type { SessionResponse } from '../../shared/types';
 import { originFor } from './origin';
 import {
+  abandonSession as descartarDoChaveiro,
   activeSession as chaveiroAtivo,
   destinations as chaveiroDestinos,
   emptyKeyring,
@@ -29,6 +30,18 @@ const KEYRING_KEY = 'tumacord.keyring';
 const SERVER_KEY = 'tumacord.server';
 /** A gaveta única de até a 0.9.5. Lida para migrar, nunca escrita de novo. */
 const LEGACY_SESSION_KEY = 'tumacord.session';
+/**
+ * Que a conversão da gaveta única já aconteceu.
+ *
+ * Sem esta marca a conversão rodava a cada leitura, e a gaveta antiga — que
+ * não é apagada de propósito — repunha a sessão logo depois de sair da conta.
+ * No P2P a sessão antiga e a nova caem no mesmo destino, então sair de uma
+ * conta do modo P2P não acontecia: ela voltava na leitura seguinte.
+ *
+ * A marca mora fora do chaveiro porque não é conteúdo dele: "esquecer tudo"
+ * esvazia o chaveiro e não pode ressuscitar a gaveta de antes.
+ */
+const MIGRATION_KEY = 'tumacord.keyring.migrado';
 
 export function destinationOf(session: SavedSession): string {
   return originFor({
@@ -57,7 +70,14 @@ export function readKeyring(): Keyring {
     keys: persistido.keys ?? {},
     active: daAbertura.active || persistido.active || '',
   };
-  return migrateSingleSession(chaveiro, readLegacy(), destinationOf);
+  if (localStorage.getItem(MIGRATION_KEY)) return chaveiro;
+  // Ler escrevendo é o preço de uma conversão que só pode acontecer uma vez.
+  // A marca é gravada mesmo quando não havia nada para converter: o que se
+  // registra é que este computador já passou por aqui.
+  const convertido = migrateSingleSession(chaveiro, readLegacy(), destinationOf);
+  localStorage.setItem(MIGRATION_KEY, new Date().toISOString());
+  if (convertido !== chaveiro) writeKeyring(convertido);
+  return convertido;
 }
 
 function writeKeyring(keyring: Keyring): void {
@@ -105,6 +125,17 @@ export function clearSession(): void {
 export function suspendActive(): void {
   const chaveiro = readKeyring();
   writeKeyring(switchTo(chaveiro, ''));
+}
+
+/**
+ * Descartar uma sessão que foi gravada e nunca adotada.
+ *
+ * Quem chama é a recuperação automática do P2P, que autentica antes de saber
+ * se a tela ainda está de pé. Sai só o que aquela tentativa escreveu.
+ */
+export function abandonSession(session: SavedSession): void {
+  const chaveiro = readKeyring();
+  writeKeyring(descartarDoChaveiro(chaveiro, destinationOf(session), session.token));
 }
 
 export function forgetThisDestination(destination: string): void {

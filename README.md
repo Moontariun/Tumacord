@@ -37,6 +37,8 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - mensagens mescladas entre os participantes online e guardadas localmente, de modo que alguém que entra depois recebe o histórico disponível;
 - anexos de até 25 MB com prévia leve, download manual e opção de manter os arquivos completos sincronizados neste PC;
 - perfis com avatar estático ou GIF, banner, descrição e cor personalizada, replicados entre os hosts pelo usuário e pela edição mais recente;
+- **tela de entrada em duas colunas**: à esquerda a marca e as contas que este computador lembra, à direita o formulário — sem rolagem, com endereço e chave lado a lado e usuário e senha lado a lado, e virando uma coluna só em janela estreita;
+- contas guardadas com a **foto do perfil** e um **x** para esquecer cada destino — a sessão e a chave dele —, com confirmação antes;
 - login com escolha entre **P2P automático** e **Servidor dedicado**;
 - opção **Continuar conectado**, inclusive após reiniciar o servidor dedicado;
 - feedbacks sonoros distintos para entrada, saída, mensagem, mute, início/fim de live e troca de host, com volume configurável;
@@ -48,7 +50,8 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - **painel de administração** com quatro áreas: visão geral, canais, usuários e registro de auditoria;
 - canais com categoria, posição, tópico e limite de pessoas, editáveis pelo painel e aplicados em tempo real;
 - **diagnóstico de mídia por camada** — captura, processamento, faixa, envio, enlace e recepção — com botão de copiar sem token nem endereço;
-- interface original inspirada na organização familiar de apps de comunidade, sem copiar a marca do Discord.
+- interface original inspirada na organização familiar de apps de comunidade, sem copiar a marca do Discord;
+- **explicação no ponteiro, não ao lado do controle**: o rótulo diz o que a coisa é e a dica diz o que acontece, sem parágrafo embaixo de cada opção — a regra está em [ARCHITECTURE.md](ARCHITECTURE.md), na seção *Interface*.
 
 ## Instalação no Linux
 
@@ -59,19 +62,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-por-escolha-v0.9.7/scripts/install-v0.9.7.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/entrada-e-contas-v0.9.8/scripts/install-v0.9.8.sh | bash
 ```
 
-Este comando instala a v0.9.7 a partir da branch separada `release/live-por-escolha-v0.9.7`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.9.8 a partir da branch separada `release/entrada-e-contas-v0.9.8`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.7, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-live-por-escolha-v0.9.7`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.8, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-entrada-e-contas-v0.9.8`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/live-por-escolha-v0.9.7/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/entrada-e-contas-v0.9.8/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 ### Atualização pelo próprio aplicativo
@@ -138,7 +141,7 @@ nenhum redistribuível do Visual C++**.
 
 ### Instalador (recomendado)
 
-Baixe `Tumacord-0.9.7-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+Baixe `Tumacord-0.9.8-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
 e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
 escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
 Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
@@ -149,7 +152,7 @@ avisa e o encerra antes de continuar.
 
 ### Portátil
 
-`Tumacord-0.9.7-portable.exe` roda sem instalar nada. É a opção para pendrive
+`Tumacord-0.9.8-portable.exe` roda sem instalar nada. É a opção para pendrive
 ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
 atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
 na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
@@ -218,7 +221,7 @@ certificado configurado — o instalador, o portátil, o executável principal e
 componente de áudio, todos com carimbo de tempo. Você pode conferir:
 
 ```powershell
-Get-AuthenticodeSignature .\Tumacord-0.9.7-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\Tumacord-0.9.8-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` precisa ser `Valid`.

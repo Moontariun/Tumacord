@@ -1,5 +1,83 @@
 # Histórico de versões
 
+## 0.9.8 — a entrada cabe na tela, e as contas guardadas são suas
+
+<!-- tumacord:resumo -->
+A tela de entrada foi refeita. Onde havia uma coluna que descia até precisar de rolagem, agora há duas que cabem na tela.
+
+- As contas guardadas aparecem com a foto do perfil e um "x" para esquecer cada uma, com uma confirmação antes.
+- Sair de uma conta do modo P2P passou a funcionar: ela voltava sozinha na abertura seguinte.
+- O texto que explicava cada campo virou dica no ponteiro. Nada se perdeu, e a tela ficou limpa.
+<!-- /tumacord:resumo -->
+
+**A entrada em duas colunas**
+
+A tela crescia para baixo a cada coisa nova: escolha de modo, endereço, chave,
+convite, duas caixas de "lembrar" com um parágrafo cada, aviso de segurança,
+contas guardadas, rodapé explicando o modo escolhido. Em servidor dedicado, com
+duas contas guardadas, o cartão media 420 × 1325 px — rolagem numa janela de 800
+px de altura, para entrar em um aplicativo de conversa.
+
+Agora são duas: à esquerda a marca e o que este computador lembra, à direita o
+formulário, com endereço e chave lado a lado e usuário e senha lado a lado. O
+mesmo caso mede 860 × 448 px e não rola. Abaixo de 880 px de largura as duas
+colunas viram uma e os pares de campo desempilham, que é o que a janela dividida
+e a tela pequena precisam.
+
+**As contas guardadas, com rosto e com saída**
+
+Cada conta lembrada aparece com a foto do perfil daquela sessão. Ela não
+aparecia: a tela de entrada não tem sessão aberta, e o endereço que o resto do
+aplicativo usa para buscar uma foto é relativo — ali ele não aponta para lugar
+nenhum. A busca agora tenta primeiro o que este computador já baixou, que é o
+único caminho que funciona com o host do grupo desligado, e depois o servidor
+daquele destino. Falhando as duas, vale a inicial do nome; um círculo vazio
+seria pior.
+
+Ao lado de cada uma há um **x**, que esquece aquele destino — a sessão e a chave
+guardada dele — depois de uma confirmação, porque não há como desfazer. Até aqui
+o único jeito de tirar uma conta da lista era entrar nela para poder sair.
+
+**Sair do P2P não estava saindo**
+
+Sair de uma conta do modo P2P apagava a sessão e, um instante depois, ela estava
+de volta.
+
+A gaveta única de até a 0.9.5 continua no disco de propósito: apagá-la e errar
+na conversão custaria a sessão de quem atualizou. O que faltava era registrar
+que a conversão **já aconteceu**. Sem esse registro ela rodava a cada leitura do
+chaveiro, e a leitura seguinte a um "sair" repunha a sessão que acabara de ser
+encerrada. No P2P a sessão antiga e a nova caem no mesmo destino — `grupo:` —,
+então era exatamente ali que o efeito aparecia. "Esquecer tudo" tinha o mesmo
+destino.
+
+Havia um segundo caminho, também só do P2P: quando o socket cai, o aplicativo
+se reautentica sozinho no servidor embutido, e autenticar grava. Sair da conta
+enquanto essa tentativa estava no ar gravava de volta o que a pessoa tinha
+acabado de encerrar. Agora a tentativa que chega tarde desfaz o que escreveu —
+e só o que ela escreveu: uma troca de host que tenha ocupado aquele destino no
+meio do caminho fica onde está.
+
+**Menos texto ao lado dos controles**
+
+Vale para o projeto inteiro, a partir daqui: explicação não fica ao lado do
+controle. O rótulo diz o que a coisa é; a explicação vive na dica que aparece
+com o ponteiro parado. Um aplicativo de conversa não é um jogo que precisa de
+tutorial, e o parágrafo embaixo de cada opção era metade da altura daquela tela.
+
+Nada foi removido do que se podia ler — "a chave fica guardada neste
+computador, só para este servidor", "reabre o Tumacord nesta conta sem pedir a
+senha de novo", o que cada modo de conexão significa: tudo continua escrito, no
+ponteiro. A regra está em `ARCHITECTURE.md`, na seção *Interface*.
+
+**Validação**
+
+656 testes passam. Os quatro novos cobrem o chaveiro encostado no armazenamento
+do navegador: sair de uma conta convertida da gaveta antiga, "esquecer tudo"
+depois da conversão, a gaveta antiga que continua no disco e o descarte de uma
+sessão que ninguém adotou. A tela foi medida no navegador, nos dois modos e nas
+duas larguras; o que está dito acima em pixels foi lido da tela, não estimado.
+
 ## 0.9.7 — a live só começa quando você diz que quer
 
 <!-- tumacord:resumo -->

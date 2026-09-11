@@ -193,6 +193,28 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Entrada reformulada e contas guardadas — 0.9.8
+
+| Item | Estado |
+| --- | --- |
+| Sair de uma conta P2P convertida da gaveta antiga não a traz de volta | TESTADO AUTOMATICAMENTE (armazenamento simulado) |
+| "Esquecer tudo" depois da conversão não ressuscita a gaveta antiga | TESTADO AUTOMATICAMENTE (armazenamento simulado) |
+| A gaveta antiga continua no disco: só a conversão acontece uma vez | TESTADO AUTOMATICAMENTE (armazenamento simulado) |
+| Descartar desfaz só o que aquela tentativa de recuperação escreveu | TESTADO AUTOMATICAMENTE (armazenamento simulado) |
+| Sair enquanto a recuperação do P2P está no ar | VALIDADO POR ANÁLISE (a corrida é estreita e não foi provocada) |
+| Duas colunas cabem sem rolagem (1280 × 800, servidor + duas contas) | TESTADO NO NAVEGADOR (860 × 448 px, era 420 × 1325 px) |
+| Cadastro cabe sem rolagem na mesma janela | TESTADO NO NAVEGADOR (860 × 523 px, era 420 × 1406 px) |
+| Coluna única abaixo de 880 px de largura | TESTADO NO NAVEGADOR (520 px: empilha e rola) |
+| "x" com confirmação esquece o destino e persiste | TESTADO NO NAVEGADOR (chaveiro relido depois do clique) |
+| Foto do perfil na conta guardada | TESTADO NO NAVEGADOR (imagem servida pelo endereço do destino) |
+| Foto vinda do que este computador já baixou, com o host desligado | IMPLEMENTADO — REQUER TESTE MANUAL (exige o app instalado) |
+| Inicial no lugar da foto quando nenhum candidato responde | TESTADO NO NAVEGADOR |
+
+O que foi medido na tela foi lido no navegador, com o modo servidor dedicado e
+duas contas guardadas. O caminho da foto pelo cache local só existe no
+aplicativo instalado — no navegador ele nem é tentado — e por isso está dito
+como pendente.
+
 ## Live por escolha explícita — 0.9.7
 
 | Item | Estado |

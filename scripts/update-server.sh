@@ -31,7 +31,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/live-por-escolha-v0.9.7}"
+alvo="${1:-release/entrada-e-contas-v0.9.8}"
 repositorio="${TUMACORD_REPO:-Moontariun/Tumacord}"
 projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$projeto"
@@ -96,7 +96,7 @@ if [[ "$alvo" == "ultima" || "$alvo" == "--ultima" ]]; then
   alvo="$(consultar_releases ultima || true)"
   if [[ -z "$alvo" ]]; then
     echo "Não consegui descobrir a versão mais nova no GitHub." >&2
-    echo "Rode de novo com a referência: ./scripts/update-server.sh release/live-por-escolha-v0.9.7" >&2
+    echo "Rode de novo com a referência: ./scripts/update-server.sh release/entrada-e-contas-v0.9.8" >&2
     exit 1
   fi
   echo "   versão publicada: $alvo"
