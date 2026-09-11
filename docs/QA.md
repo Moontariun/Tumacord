@@ -193,6 +193,83 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Mensagens, som, servidor e o que saiu — 0.9.9
+
+| Item | Estado |
+| --- | --- |
+| Editar chega a todo mundo e o texto novo é o que fica | TESTADO AUTOMATICAMENTE (servidor real) |
+| Apagar deixa lápide, e a lápide não carrega texto nem anexo | TESTADO AUTOMATICAMENTE (servidor real) |
+| Ninguém edita nem apaga a mensagem de outra pessoa | TESTADO AUTOMATICAMENTE (servidor real) |
+| P2P: a cópia antiga não ressuscita o que foi apagado | TESTADO AUTOMATICAMENTE (servidor real, em modo P2P) |
+| P2P: exclusão feita offline alcança quem ainda tinha a mensagem | TESTADO AUTOMATICAMENTE (servidor real, em modo P2P) |
+| P2P: edição feita offline vence o texto guardado, e o inverso não | TESTADO AUTOMATICAMENTE (servidor real, em modo P2P) |
+| No P2P a identidade de quem edita é o apelido, não o id | TESTADO AUTOMATICAMENTE (modelo) |
+| Empate de revisão e horário resolve a favor de apagar | TESTADO AUTOMATICAMENTE (modelo) |
+| Editar e apagar pela interface, com a confirmação | TESTADO NO APLICATIVO (servidor dedicado real) |
+| Prévia da imagem antes de qualquer upload | IMPLEMENTADO — REQUER TESTE MANUAL (depende de escolher arquivo) |
+| Entrar no app não entra na call | TESTADO NO APLICATIVO (sessão restaurada, nenhuma call aberta) |
+| A call retomada não é guardada no chaveiro | TESTADO AUTOMATICAMENTE (armazenamento simulado) |
+
+**Atualizar o servidor pelo painel**
+
+| Item | Estado |
+| --- | --- |
+| Só o dono; administrador é recusado | TESTADO AUTOMATICAMENTE (servidor real) |
+| Desligado por padrão, com o motivo dito | TESTADO AUTOMATICAMENTE (servidor real) |
+| A tentativa é registrada antes de acontecer | TESTADO AUTOMATICAMENTE (servidor real) |
+| Corpo sem etiqueta de texto é recusado na porta | TESTADO AUTOMATICAMENTE (servidor real) |
+| Só a forma `vX.Y.Z` é aceita; branch, caminho e comando não | TESTADO AUTOMATICAMENTE (modelo) |
+| Etiqueta bem formada que não está publicada é recusada | TESTADO AUTOMATICAMENTE (modelo) |
+| Versão retirada aparece na lista, dita, e não é aplicável | TESTADO AUTOMATICAMENTE (modelo) |
+| A escolha padrão é a mais nova acima da atual, nunca um passo atrás | TESTADO AUTOMATICAMENTE (modelo) |
+| Sem `scripts/` ou sem `.git`, recusa antes do backup | TESTADO AUTOMATICAMENTE (modelo) |
+| A lista de versões chega do GitHub e aparece no seletor | TESTADO NO APLICATIVO (servidor real, com o recurso ligado) |
+| **Aplicar de verdade uma versão** | **REQUER TESTE MANUAL** — nenhum caso executa o script, e executá-lo trocaria o código desta cópia |
+| Reinício do servidor no meio da atualização | REQUER TESTE MANUAL |
+
+**Sons**
+
+Medidos no aplicativo, com um analisador no mesmo ponto em que os sons entram
+na mistura. Pico e RMS por evento, com o volume de feedback em 80%:
+
+| Evento | Pico | RMS |
+| --- | --- | --- |
+| connect | 0,298 | 0,0562 |
+| callJoin | 0,320 | 0,0518 |
+| callLeave | 0,201 | 0,0426 |
+| peerJoin | 0,166 | 0,0251 |
+| peerLeave | 0,140 | 0,0215 |
+| message | 0,132 | 0,0211 |
+| messageSent | 0,097 | 0,0107 |
+| notification | 0,167 | 0,0272 |
+| error | 0,244 | 0,0403 |
+| mute | 0,163 | 0,0209 |
+| unmute | 0,173 | 0,0223 |
+| deafen | 0,219 | 0,0266 |
+| undeafen | 0,175 | 0,0278 |
+| streamStart | 0,267 | 0,0468 |
+| streamStop | 0,216 | 0,0323 |
+| host | 0,233 | 0,0502 |
+| update | 0,167 | 0,0296 |
+
+Nenhum passa de 0,32 de pico, então nada satura. A diferença que sobra é de
+propósito: os eventos frequentes e leves ficam entre 0,021 e 0,028 de RMS, os
+acontecimentos entre 0,032 e 0,056, e `messageSent` é o mais discreto de todos.
+Na primeira medição ele saía a 0,003 — sete vezes abaixo de `message`, na
+prática inaudível — e `connect` a 0,076, três vezes e meia acima do resto; os
+dois foram corrigidos e remedidos.
+
+O que **não** foi medido é o timbre, que não tem número: ele foi construído
+(parciais, envelope, ruído de ataque, cauda) e julgado de ouvido.
+
+**O que saiu**
+
+| Item | Estado |
+| --- | --- |
+| Nenhuma referência a telestração em código, teste ou empacotamento | TESTADO AUTOMATICAMENTE (a suíte compila e passa sem os arquivos) |
+| A mesa de desenho compartilhada continua inteira | TESTADO AUTOMATICAMENTE (18 casos contra servidor real) |
+| A janela sobreposta do Windows não é mais aberta por nada | VALIDADO POR ANÁLISE (o IPC e o módulo saíram) |
+
 ## Entrada reformulada e contas guardadas — 0.9.8
 
 | Item | Estado |

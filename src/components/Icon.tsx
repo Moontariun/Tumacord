@@ -6,7 +6,7 @@ export type IconName =
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
   | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser' | 'update'
-  | 'board' | 'hand' | 'undo' | 'lock';
+  | 'board' | 'hand' | 'undo' | 'lock' | 'trash';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -21,6 +21,7 @@ const glyphs: Record<IconName, ReactNode> = {
   hand: <><path d="M8.4 11.6V5.8a1.6 1.6 0 0 1 3.2 0v5" /><path d="M11.6 10.4V4.6a1.6 1.6 0 0 1 3.2 0v5.8" /><path d="M14.8 11V7.2a1.6 1.6 0 0 1 3.2 0v7.4a6 6 0 0 1-6 6h-1a4 4 0 0 1-3-1.4l-3-3.6a1.6 1.6 0 0 1 2.3-2.2l1.9 1.8" /></>,
   undo: <><path d="M3.8 12a8.2 8.2 0 1 0 2.4-5.8" /><path d="M3.6 4.4v5.2h5.2" /></>,
   lock: <><rect x="4.4" y="10.2" width="15.2" height="10.2" rx="2.2" /><path d="M8 10.2V7.4a4 4 0 0 1 8 0v2.8" /></>,
+  trash: <><path d="M3.8 6.6h16.4M9.4 6.6V4.8a1.4 1.4 0 0 1 1.4-1.4h2.4a1.4 1.4 0 0 1 1.4 1.4v1.8" /><path d="M5.8 6.6 6.9 19.4a1.8 1.8 0 0 0 1.8 1.6h6.6a1.8 1.8 0 0 0 1.8-1.6L18.2 6.6" /><path d="M10.2 10.4v6.2M13.8 10.4v6.2" /></>,
   eraser: <><path d="M8.6 19.8H19.8" /><path d="M6.2 17.4 4.5 15.7a1.8 1.8 0 0 1 0-2.5l8-8a1.8 1.8 0 0 1 2.5 0l4.3 4.3a1.8 1.8 0 0 1 0 2.5l-6.1 6.1H8.7l-2.5-1.7Z" /></>,
   hash: <path d="M10.2 3.6 8.2 20.4M15.8 3.6l-2 16.8M4.4 9h15.2M3.8 15h15.2" />,
   voice: <><path d={SPEAKER} /><path d="M15.2 9.6a3.4 3.4 0 0 1 0 4.8" /><path d="M17.9 6.9a7.2 7.2 0 0 1 0 10.2" /></>,

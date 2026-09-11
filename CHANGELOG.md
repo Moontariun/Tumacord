@@ -1,5 +1,137 @@
 # Histórico de versões
 
+## 0.9.9 — a mensagem deixa de ser definitiva, e o aplicativo ganha ouvido
+
+<!-- tumacord:resumo -->
+Dá para editar e apagar mensagem, e a mudança tem prioridade: uma exclusão alcança quem estava offline e a cópia antiga não a desfaz.
+
+- A imagem escolhida aparece no compositor antes de sair do seu computador — escolher não envia nada.
+- Entrar no Tumacord deixou de entrar na call sozinho.
+- Os dezessete sons do aplicativo foram refeitos do zero. Silenciar o microfone e fechar o ouvido passaram a soar diferente, e você entrando na call não soa mais igual a alguém entrando nela.
+- O dono do servidor pode trocar a versão dele pelo painel, escolhendo entre as publicadas — desligado por padrão.
+- O desenho por cima da transmissão de alguém saiu. O desenho do Tumacord é a mesa compartilhada, que continua inteira.
+<!-- /tumacord:resumo -->
+
+**Editar e apagar**
+
+Passar o ponteiro sobre uma mensagem sua mostra dois botões. Editar abre o texto
+ali mesmo — Enter salva, Esc desiste — e deixa um "(editada)" ao lado. Apagar
+pergunta antes, porque não volta.
+
+Quem pode é o autor, e quem confere é o servidor: esconder o botão do outro lado
+é conveniência, não permissão. No P2P a identidade é o apelido, e não o `id` —
+cada host tem o próprio cadastro, e sem isso trocar de host tiraria de você o
+direito de apagar as suas próprias mensagens.
+
+**A parte difícil: a replicação**
+
+O merge do P2P olhava só o identificador da mensagem — quem já a conhecia
+ignorava a que chegava. Isso bastava enquanto uma mensagem era imutável. Com
+edição e exclusão vira o pior comportamento possível: quem apaga vê a mensagem
+voltar no primeiro encontro com alguém que ainda tinha a cópia antiga.
+
+Agora cada mensagem carrega uma revisão, e **quem tem mais revisão vence**.
+Apagar é uma revisão como outra qualquer — a prioridade não vem de um
+tratamento especial, vem de ser sempre mais nova que a cópia guardada. No lugar
+do conteúdo fica uma lápide, que não carrega o texto nem o anexo: sem ela não
+haveria como distinguir "foi apagada" de "ainda não recebi", e é a segunda
+leitura que ressuscita.
+
+A regra vale nos três lugares por onde uma mensagem passa: o histórico do
+servidor, o espelho local de cada computador e a lista em tela. Valesse em
+dois, o terceiro desfaria.
+
+**A prévia vem antes do upload**
+
+Escolher um arquivo mandava ele embora na hora, e o compositor mostrava um nome.
+Agora escolher não envia nada: a imagem aparece no compositor, do tamanho de
+uma miniatura, e o arquivo só sai deste computador quando você aperta enviar.
+Desistir é fechar o cartão, e não há o que desfazer do outro lado.
+
+**Entrar no Tumacord não é entrar na call**
+
+A call que a sessão estava retomando era gravada no chaveiro. Ela existe para o
+agora — um convite aponta uma call, uma troca de host reaponta a mesma —, e
+guardada ela fazia o aplicativo entrar sozinho naquela call em toda abertura
+seguinte. Para sempre, porque nada a apagava. Agora entrar na call é uma
+escolha sua, e o convite continua levando direto ao lugar certo.
+
+**Os sons, refeitos**
+
+Eram um oscilador por nota ligado a um ganho. Isso toca a nota certa e soa como
+bipe, e o motivo é conhecido: uma senoide não tem timbre, sem ataque não há
+percussão, sem cauda o som morre na parede e um envelope quadrado estala.
+
+Cada nota passou a ser uma pilha de parciais levemente desafinados entre si,
+com um filtro que fecha conforme ela decai — é esse fechamento que separa
+"macio" de "estridente" —, um sopro de ruído no ataque e um envio para uma
+cauda de reverberação gerada por código. No fim de tudo, um compressor suave,
+para que nenhum evento fique mais alto que os outros. Tudo continua sintetizado
+no aplicativo: o Tumacord não embarca arquivo de som de ninguém.
+
+A paleta também cresceu, porque havia coisas diferentes soando igual. Silenciar
+o microfone e fechar o ouvido tocavam o mesmo par de notas; você entrando na
+call soava idêntico a alguém entrando nela. Agora são dezessete sons, todos na
+mesma tonalidade — é isso que faz um conjunto soar como um produto e não como
+uma coleção de bipes —, e **Configurações › Voz e vídeo** tem um botão para
+ouvir cada um.
+
+**Atualizar o servidor pelo painel**
+
+O dono de um servidor dedicado vê uma aba **Versão**, com todas as versões
+publicadas nas Releases do projeto, consultadas pelo próprio servidor. Escolher
+uma e confirmar faz o servidor fazer backup do volume, trocar o código e
+reiniciar.
+
+É a ação mais perigosa do projeto, e está cercada em camadas — nenhuma delas na
+interface:
+
+- **desligada por padrão.** Ligar é uma decisão de quem hospeda, com
+  `TUMACORD_SELF_UPDATE=1`. Um servidor que ganhou esta versão não passa a
+  aceitar troca de código porque atualizou;
+- **é do dono.** Administrador cuida de canais e de gente;
+- **o navegador só manda uma etiqueta**, e ela é conferida contra a lista que o
+  próprio servidor buscou — na leitura e de novo na hora de aplicar. Não há
+  caminho, branch, endereço, repositório nem comando vindo da tela;
+- **o que roda é fixo**, com a etiqueta passada como argumento e nunca por
+  shell;
+- **uma por vez, com limite**, e a tentativa entra na auditoria antes de
+  qualquer coisa acontecer — uma atualização que derruba o servidor no meio não
+  deixaria rastro se o registro viesse depois.
+
+Dentro do contêiner isso não funciona, e ele diz o motivo: a imagem carrega só
+o código compilado. Serve para quem roda o servidor direto no host, a partir do
+clone do repositório.
+
+**O desenho sobre a transmissão saiu**
+
+Ele nasceu na 0.8.7 e nunca funcionou inteiro: na 0.9.0 virou exclusividade do
+Windows, porque no Linux a janela que pintava o traço roubava o foco do teclado
+de quem estava jogando e ainda voltava dentro da própria captura. Duas coisas
+diferentes carregavam o mesmo nome, e a que ficou é a que funciona igual nos
+dois sistemas.
+
+**A mesa de desenho compartilhada continua inteira** — ela nunca dependeu de
+live, de call nem de janela sobreposta. O que saiu foi o rabisco por cima da
+transmissão de alguém: o botão do lápis no quadro, a aba de Desenho nas
+configurações, a janela sobreposta do Windows e a sinalização dos traços.
+
+**Validação**
+
+663 testes passam. Doze cobrem mensagem editada e apagada — seis contra um
+servidor de verdade, incluindo os três caminhos de replicação do P2P. Vinte e
+um cobrem a atualização do servidor, entre o que decide e o que recusa: nenhum
+deles executa o script, porque executá-lo trocaria o código desta cópia, e isso
+está dito como manual em `docs/QA.md`. A tela foi exercitada no aplicativo
+rodando contra um servidor dedicado real: entrar sem cair na call, enviar,
+editar, e a lista de versões chegando do GitHub.
+
+Os sons foram medidos com um analisador no ponto em que eles entram na mistura,
+e a tabela está em `docs/QA.md`. A medição encontrou dois defeitos reais e os
+dois foram corrigidos: `messageSent` saía sete vezes abaixo de `message`, na
+prática inaudível, e `connect` três vezes e meia acima do resto. O timbre não
+tem número — ele foi construído e julgado de ouvido, e isso está dito.
+
 ## 0.9.8 — a entrada cabe na tela, e as contas guardadas são suas
 
 <!-- tumacord:resumo -->

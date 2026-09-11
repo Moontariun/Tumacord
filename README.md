@@ -12,8 +12,9 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - **enlace direto sem ZeroTier**: travessia de NAT por ICE/STUN, entrada por IPv6 e abertura de porta no roteador por PCP, NAT-PMP ou UPnP;
 - **servidor de encontro opcional**, alcançado só por conexão de saída: funciona atrás de CGNAT sem abrir porta em lugar nenhum, e com relay TURN para o caso em que nem o ICE atravessa;
 - convite em código que aponta o servidor da call e leva a chave de entrada;
-- desenho sobre a transmissão de quem está compartilhando a tela, **na live de quem está no Windows**, com a permissão sendo de quem transmite;
-- **mesas de desenho compartilhadas**: um quadro em branco dentro do app, criado por alguém e aberto a quem enxerga o canal — sem depender de live, de overlay nem de call, e igual no Linux e no Windows;
+- **mesas de desenho compartilhadas**: um quadro em branco dentro do app, criado por alguém e aberto a quem enxerga o canal — sem depender de live nem de call, e igual no Linux e no Windows. É o desenho do Tumacord: rabiscar por cima da transmissão de alguém saiu na 0.9.9;
+- **editar e apagar mensagem**, com a mudança tendo prioridade na replicação do P2P: uma exclusão alcança quem estava offline, e a cópia antiga não a desfaz;
+- **prévia antes de enviar**: a imagem escolhida aparece no compositor e só sai deste computador quando você aperta enviar;
 - descoberta automática de calls na rede local, sem copiar IP;
 - ZeroTier opcional, ligado ou desligado em **Configurações › Rede e conexão**;
 - servidor completo embutido em toda instalação;
@@ -40,8 +41,9 @@ Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar algu�
 - **tela de entrada em duas colunas**: à esquerda a marca e as contas que este computador lembra, à direita o formulário — sem rolagem, com endereço e chave lado a lado e usuário e senha lado a lado, e virando uma coluna só em janela estreita;
 - contas guardadas com a **foto do perfil** e um **x** para esquecer cada destino — a sessão e a chave dele —, com confirmação antes;
 - login com escolha entre **P2P automático** e **Servidor dedicado**;
-- opção **Continuar conectado**, inclusive após reiniciar o servidor dedicado;
-- feedbacks sonoros distintos para entrada, saída, mensagem, mute, início/fim de live e troca de host, com volume configurável;
+- opção **Continuar conectado**, inclusive após reiniciar o servidor dedicado. Entrar no Tumacord não entra na call: quem decide isso é você;
+- **atualizar o servidor pelo painel do dono**, escolhendo entre as versões publicadas nas Releases — desligado por padrão, e descrito em [ARCHITECTURE.md](ARCHITECTURE.md);
+- **dezessete sons próprios**, sintetizados no aplicativo e sem arquivo de áudio embarcado: entrar, entrar na call, alguém entrando ou saindo, mensagem recebida e enviada, aviso, erro, microfone, ouvido, transmissão, troca de host e versão nova — com volume configurável e um botão para ouvir cada um;
 - microfone que se recupera sozinho quando o sistema silencia a faixa, troca o dispositivo padrão ou abre a captura sem sinal;
 - aplicativo Electron instalável no Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE, e cliente web servido pelo contêiner dedicado;
 - ícone no menu de aplicativos e na bandeja, com o Tumacord continuando em execução quando a janela é fechada: o ícone traz a janela de volta, e **Sair** é o único encerramento de verdade;
@@ -62,19 +64,19 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/entrada-e-contas-v0.9.8/scripts/install-v0.9.8.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/mensagens-e-som-v0.9.9/scripts/install-v0.9.9.sh | bash
 ```
 
-Este comando instala a v0.9.8 a partir da branch separada `release/entrada-e-contas-v0.9.8`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
+Este comando instala a v0.9.9 a partir da branch separada `release/mensagens-e-som-v0.9.9`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
 
 Até a 0.7.8 este comando falhava fora do Arch: o instalador recusava a máquina na primeira linha se não encontrasse `pacman`. Agora ele reconhece `dnf`/`dnf5`, `pacman`, `apt-get` e `zypper`, instala as dependências com o nome certo de cada distribuição (`pipewire-utils` no Fedora, `pipewire-audio` no Arch, `pipewire-bin` no Debian) e, se faltar alguma biblioteca do Electron, percebe pelo `ldd` e resolve antes de instalar.
 
-O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.8, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-entrada-e-contas-v0.9.8`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
+O script baixa primeiro um bootstrap temporário e então clona/compila exatamente a branch v0.9.9, sem cair na `main` e sem depender de um pipe aninhado. O clone permanece na pasta de Downloads configurada pelo sistema (por exemplo, `~/Downloads/Tumacord-release-mensagens-e-som-v0.9.9`). O instalador guarda cada build em uma pasta imutável dentro de `~/.local/share/tumacord/versions` e troca apenas o atalho `current`; por isso, atualizar enquanto o app está aberto não mistura arquivos nem interrompe a call. O atalho executável fica em `~/.local/bin/tumacord`, e o AppImage não participa da instalação nem da atualização. A versão anterior permanece apontada por `~/.local/share/tumacord/previous` para recuperação.
 
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/entrada-e-contas-v0.9.8/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/mensagens-e-som-v0.9.9/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 ### Atualização pelo próprio aplicativo
@@ -141,7 +143,7 @@ nenhum redistribuível do Visual C++**.
 
 ### Instalador (recomendado)
 
-Baixe `Tumacord-0.9.8-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
+Baixe `Tumacord-0.9.9-Setup.exe` nas [Releases](https://github.com/Moontariun/Tumacord/releases)
 e execute. O instalador pede uma única confirmação do Windows (UAC), deixa
 escolher a pasta e cria os atalhos no Menu Iniciar e na área de trabalho. O
 Tumacord aparece em **Aplicativos instalados**, com desinstalador próprio.
@@ -152,7 +154,7 @@ avisa e o encerra antes de continuar.
 
 ### Portátil
 
-`Tumacord-0.9.8-portable.exe` roda sem instalar nada. É a opção para pendrive
+`Tumacord-0.9.9-portable.exe` roda sem instalar nada. É a opção para pendrive
 ou para uma máquina onde não se pode instalar programas. Em troca, ele não cria
 atalhos e **não configura o firewall** — a primeira vez que o Tumacord escutar
 na rede, o Windows mostrará o próprio aviso, e é preciso marcar **Redes
@@ -221,7 +223,7 @@ certificado configurado — o instalador, o portátil, o executável principal e
 componente de áudio, todos com carimbo de tempo. Você pode conferir:
 
 ```powershell
-Get-AuthenticodeSignature .\Tumacord-0.9.8-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\Tumacord-0.9.9-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` precisa ser `Valid`.
@@ -275,39 +277,6 @@ e anexos é uma decisão sua, e você pode remover essa pasta à mão depois.
 Para compilar, assinar e publicar, veja
 [`docs/windows-build.md`](docs/windows-build.md). A matriz de teste manual está
 em [`docs/windows-testing.md`](docs/windows-testing.md).
-
-## Desenho sobre a transmissão
-
-Quem assiste a uma live pode rabiscar em cima dela para apontar alguma coisa. O
-traço aparece na live de todo mundo que está vendo e, quando o que está sendo
-transmitido é o monitor inteiro, também sobre a área de trabalho de verdade de
-quem transmite — que é o que dá sentido à ferramenta: continuar olhando para o
-jogo e ainda ver o que estão apontando.
-
-**A partir da 0.9.0, isso só funciona na transmissão de quem está no Windows.**
-
-O motivo é a janela que pinta o traço sobre a área de trabalho. No Windows ela
-se comporta: não rouba foco, e `setContentProtection` a mantém fora da própria
-captura. No Linux, não — ela tira o foco do teclado de quem estava jogando e não
-o devolve para ninguém, e o portal do PipeWire não sabe deixá-la fora da
-captura, então o traço volta dentro do próprio vídeo. Uma live com desenho no
-Linux custava o controle do jogo para quem estava transmitindo.
-
-Na prática:
-
-- transmitindo do **Windows**: tudo como antes. A permissão continua sendo de
-  quem transmite, em **Configurações › Desenho na tela**, e o prazo do traço
-  também;
-- transmitindo do **Linux**: ninguém desenha na sua live. Quem assiste vê o
-  lápis no canto do seu quadro **desabilitado**, translúcido, dizendo por quê —
-  em vez de um botão que sumiu ou de um traço que não chega. O servidor recusa o
-  traço, então nem um cliente modificado pinta na sua tela;
-- **você, no Linux, continua desenhando** na transmissão de quem estiver no
-  Windows, normalmente.
-
-Um cliente anterior à 0.9.0 não declara em que sistema está, e por isso é tratado
-como quem não recebe desenho: adivinhar o sistema de alguém para pintar na área
-de trabalho dele seria a escolha errada.
 
 ## Mesa de desenho compartilhada
 

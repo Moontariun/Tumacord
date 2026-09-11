@@ -24,7 +24,7 @@ const local = memoria();
 const daAbertura = memoria();
 Object.assign(globalThis, { localStorage: local, sessionStorage: daAbertura, window: { location: { protocol: 'file:' } } });
 
-const { abandonSession, clearSession, forgetAllDestinations, loadSession, rememberedDestinations, saveSession } = await import('../src/lib/session');
+const { abandonSession, clearSession, forgetAllDestinations, loadSession, rememberedDestinations, saveSession, useDestination } = await import('../src/lib/session');
 
 function sessao(extra: Partial<SavedSession> = {}): SavedSession {
   return {
@@ -85,4 +85,29 @@ test('descartar desfaz só o que aquela tentativa escreveu', () => {
   saveSession(sessao({ token: 'token-mais-novo' }));
   abandonSession(sessao({ token: 'token-de-uma-tentativa-antiga' }));
   assert.equal(loadSession()?.token, 'token-mais-novo', 'uma troca de host não é desfeita por uma tentativa vencida');
+});
+
+// Entrar no Tumacord não é entrar na call.
+//
+// `resumeChannelId` existe para o agora — um convite aponta uma call, uma troca
+// de host reaponta a mesma. Guardado no chaveiro, ele fazia o aplicativo entrar
+// sozinho naquela call em toda abertura seguinte, e nada o apagava.
+test('a call que a sessão retomava não é guardada', () => {
+  doZero();
+  saveSession(sessao({ resumeChannelId: 'call-geral' }));
+  assert.equal(loadSession()?.resumeChannelId, undefined, 'a abertura seguinte não entra em call nenhuma');
+  assert.equal(loadSession()?.token, 'token-do-grupo', 'e o resto da sessão continua de pé');
+});
+
+test('uma retomada já gravada por uma versão anterior não entra sozinha uma última vez', () => {
+  doZero();
+  // Como a 0.9.8 e anteriores gravavam: a call ia junto para o chaveiro.
+  local.setItem('tumacord.keyring.migrado', 'sim');
+  local.setItem('tumacord.keyring', JSON.stringify({
+    remembered: { 'grupo:rede-local': sessao({ resumeChannelId: 'call-geral' }) },
+    keys: {},
+    active: 'grupo:rede-local',
+  }));
+  assert.equal(loadSession()?.resumeChannelId, undefined);
+  assert.equal(useDestination('grupo:rede-local')?.resumeChannelId, undefined, 'nem retomando o destino pela tela de entrada');
 });

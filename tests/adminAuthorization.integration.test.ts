@@ -244,3 +244,81 @@ test('o papel sobrevive ao reinício do servidor', { timeout: 40_000 }, async (c
   // ninguém — senão bastaria editar o ambiente para virar administrador.
   assert.equal((await entrar(url, 'Outro', 'senha-do-outro')).body.user.role, 'member');
 });
+
+// --- atualizar o servidor pelo painel ---------------------------------------
+//
+// É a ação mais perigosa do projeto: ela troca o código que está rodando.
+// Nenhum caso aqui aplica nada — o que se prova é que os caminhos de recusa
+// fecham. Aplicar de verdade trocaria o código desta cópia do repositório, e
+// está dito como manual em `docs/QA.md`.
+
+async function pedirAtualizacao(url: string, token: string, metodo: 'GET' | 'POST', corpo?: unknown) {
+  const resposta = await fetch(`${url}/api/admin/update`, {
+    method: metodo,
+    headers: { authorization: `Bearer ${token}`, ...(corpo === undefined ? {} : { 'content-type': 'application/json' }) },
+    ...(corpo === undefined ? {} : { body: JSON.stringify(corpo) }),
+  });
+  return { status: resposta.status, body: await resposta.json().catch(() => ({})) as { enabled?: boolean; reason?: string; error?: string; releases?: unknown[] } };
+}
+
+test('trocar a versão do servidor é do dono, e só dele', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context);
+
+  const comum = await entrar(url, 'Fulano', 'senha-do-fulano');
+  assert.equal((await pedirAtualizacao(url, comum.body.token, 'GET')).status, 403);
+  assert.equal((await pedirAtualizacao(url, comum.body.token, 'POST', { tag: 'v0.9.8' })).status, 403);
+
+  // Administrador cuida de canais e de gente. Trocar o código do servidor é de
+  // quem responde por ele.
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  const promovido = await fetch(`${url}/api/admin/users/${encodeURIComponent(comum.body.user.id)}/role`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${chefe.body.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'admin' }),
+  });
+  assert.equal(promovido.ok, true);
+  const comoAdmin = await entrar(url, 'Fulano', 'senha-do-fulano');
+  const recusaDoAdmin = await pedirAtualizacao(url, comoAdmin.body.token, 'GET');
+  assert.equal(recusaDoAdmin.status, 403);
+  assert.match(recusaDoAdmin.body.error ?? '', /dono/i);
+});
+
+test('o padrão é não aceitar atualização pelo painel, e o dono vê o motivo', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context);
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+
+  const leitura = await pedirAtualizacao(url, chefe.body.token, 'GET');
+  assert.equal(leitura.status, 200);
+  assert.equal(leitura.body.enabled, false, 'ligar isso é decisão de quem hospeda');
+  assert.match(leitura.body.reason ?? '', /TUMACORD_SELF_UPDATE/);
+  assert.deepEqual(leitura.body.releases, [], 'desligado, nem a lista é buscada');
+
+  // E o caminho que executa recusa pelo mesmo motivo, sem depender de o botão
+  // estar escondido no navegador.
+  const tentativa = await pedirAtualizacao(url, chefe.body.token, 'POST', { tag: 'v0.9.8' });
+  assert.equal(tentativa.status, 409);
+  assert.match(tentativa.body.error ?? '', /desligada/);
+});
+
+test('a tentativa de atualizar fica registrada antes de acontecer', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context);
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  await pedirAtualizacao(url, chefe.body.token, 'POST', { tag: 'v0.9.8' });
+
+  const registro = await fetch(`${url}/api/admin/audit`, { headers: { authorization: `Bearer ${chefe.body.token}` } });
+  const { entries } = await registro.json() as { entries: Array<{ action: string; target?: string; actorUsername: string }> };
+  const pedido = entries.find((entrada) => entrada.action === 'server.update');
+  assert.ok(pedido, 'uma atualização que derruba o servidor no meio não deixaria rastro se o registro viesse depois');
+  assert.equal(pedido?.target, 'v0.9.8');
+  assert.equal(pedido?.actorUsername, 'Chefe');
+});
+
+test('um corpo sem etiqueta de texto é recusado na porta', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context);
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  for (const corpo of [{}, { tag: 42 }, { tag: null }, { tag: 'v'.repeat(80) }, { tag: ['v0.9.8'] }]) {
+    const resposta = await pedirAtualizacao(url, chefe.body.token, 'POST', corpo);
+    assert.equal(resposta.status, 400, `${JSON.stringify(corpo)} não passa do esquema`);
+  }
+});
+

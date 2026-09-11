@@ -90,8 +90,28 @@ export function defaultServerUrl(): string {
   return localStorage.getItem(SERVER_KEY) ?? 'http://127.0.0.1:3927';
 }
 
+/**
+ * A call que a sessão estava retomando não é coisa de guardar.
+ *
+ * `resumeChannelId` existe para o agora: um convite aponta uma call, uma troca
+ * de host reaponta a mesma. Guardá-lo no chaveiro fazia o aplicativo entrar
+ * sozinho naquela call em toda abertura seguinte — para sempre, porque nada o
+ * apagava. Entrar no Tumacord não é entrar na call.
+ *
+ * A limpeza vale na escrita e na leitura: na escrita para não gravar de novo,
+ * na leitura para que quem já tem um valor gravado não entre sozinho uma
+ * última vez.
+ */
+function semRetomada(session: SavedSession): SavedSession;
+function semRetomada(session: SavedSession | null): SavedSession | null;
+function semRetomada(session: SavedSession | null): SavedSession | null {
+  if (!session?.resumeChannelId) return session;
+  const { resumeChannelId: _agora, ...resto } = session;
+  return resto;
+}
+
 export function loadSession(): SavedSession | null {
-  return chaveiroAtivo(readKeyring());
+  return semRetomada(chaveiroAtivo(readKeyring()));
 }
 
 /** Os destinos que dá para retomar sem digitar nada. */
@@ -100,12 +120,12 @@ export function rememberedDestinations(): Array<{ destination: string; session: 
 }
 
 export function sessionFor(destination: string): SavedSession | null {
-  return sessionAt(readKeyring(), destination);
+  return semRetomada(sessionAt(readKeyring(), destination));
 }
 
 export function saveSession(session: SavedSession): void {
   const chaveiro = readKeyring();
-  writeKeyring(putSession(chaveiro, destinationOf(session), session));
+  writeKeyring(putSession(chaveiro, destinationOf(session), semRetomada(session)));
   localStorage.setItem(SERVER_KEY, session.serverUrl);
 }
 
@@ -149,7 +169,7 @@ export function forgetAllDestinations(): void {
 export function useDestination(destination: string): SavedSession | null {
   const chaveiro = switchTo(readKeyring(), destination);
   writeKeyring(chaveiro);
-  return sessionAt(chaveiro, destination);
+  return semRetomada(sessionAt(chaveiro, destination));
 }
 
 // A chave do servidor, guardada só quando a pessoa pede.

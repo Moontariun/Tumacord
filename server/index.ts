@@ -11,7 +11,6 @@ import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
 import type { AdminOverview, Channel, ChatMessage, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
-import { MAX_POINTS_PER_STROKE, parseDrawLifetime } from '../shared/telestration.js';
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
@@ -25,9 +24,11 @@ import { isTrustedLocalAddress } from '../shared/directLink.js';
 import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hashToken, normalizeInviteToken, normalizeUsername, proveKey, verifyPassword, verifySecret } from './auth.js';
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter, TokenBucket } from './rateLimit.js';
+import { MAX_MESSAGE_BODY, canModify, deleteMessage, editMessage } from '../shared/messageSync.js';
 import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
 import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
+import { SelfUpdater, selfUpdateConfig, unavailableReason } from './selfUpdate.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 import { Whiteboards, type StoredBoard } from './whiteboards.js';
@@ -56,6 +57,11 @@ const directKey = process.env.TUMACORD_DIRECT_KEY?.trim() ?? '';
 // Quando não está configurado, o servidor simplesmente não anuncia nada.
 const turn = turnConfiguration(process.env);
 const loginLimiter = new AuthRateLimiter();
+// Atualizar o próprio servidor pelo painel. Desligado por padrão, e por
+// decisão: um servidor que ganhou esta versão não passa a aceitar troca de
+// código porque atualizou. Quem hospeda liga isso sabendo o que é.
+const selfUpdateSettings = selfUpdateConfig(process.env, path.resolve(process.cwd()));
+const selfUpdater = new SelfUpdater(selfUpdateSettings);
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
 if (Boolean(tlsCertificateFile) !== Boolean(tlsKeyFile)) throw new Error('TLS_CERT_FILE e TLS_KEY_FILE precisam ser configurados juntos.');
@@ -232,9 +238,15 @@ const replicatedMessageSchema = z.object({
   id: z.string().uuid(),
   channelId: z.string().min(1).max(80),
   author: z.object({ id: z.string().min(1).max(80), username: z.string().trim().min(1).max(24) }),
-  body: z.string().max(2000),
+  body: z.string().max(MAX_MESSAGE_BODY),
   createdAt: z.string().datetime(),
   attachment: attachmentSchema.optional(),
+  // A revisão é o que faz uma edição ou uma exclusão vencer a cópia antiga de
+  // quem ainda não soube. O teto existe pelo mesmo motivo dos outros: um campo
+  // que chega da rede não decide sozinho o tamanho do que guardamos.
+  revision: z.number().int().min(0).max(100_000).optional(),
+  editedAt: z.string().datetime().optional(),
+  deletedAt: z.string().datetime().optional(),
 });
 const replicatedChannelSchema = z.object({ id: z.string().min(1).max(80), name: z.string().min(1).max(32), type: z.enum(['text', 'voice']) });
 const profileMediaSchema = z.object({ id: z.string().uuid(), mimeType: z.string().regex(/^image\/(?:gif|png|jpeg|webp)$/) });
@@ -274,18 +286,6 @@ const rtcResyncSchema = z.object({ target: rtcTargetSchema });
 const rtcWatchSchema = z.object({ target: rtcTargetSchema, stream: z.string().min(1).max(128), watching: z.boolean() });
 const rtcStreamHealthSchema = z.object({ target: rtcTargetSchema, frozen: z.boolean() });
 const rtcStreamMetaSchema = z.object({ target: rtcTargetSchema, meta: z.object({ streamId: z.string().min(1).max(256), kind: z.enum(['camera', 'screen']) }) });
-// Desenho sobre a transmissão de alguém. `target` é quem transmite: é dele a
-// tela, e é dele a permissão.
-const rtcDrawSchema = z.object({
-  target: rtcTargetSchema,
-  strokeId: z.string().min(1).max(64),
-  color: z.string().regex(/^#[0-9a-f]{6}$/i),
-  points: z.array(z.object({ x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1) })).max(MAX_POINTS_PER_STROKE),
-  done: z.boolean().optional(),
-  clear: z.boolean().optional(),
-  clearAll: z.boolean().optional(),
-});
-
 // Mesa de desenho compartilhada. `id` identifica o pedaço enviado — é a chave
 // contra reentrega —, e `stroke` identifica o traço, que é o objeto que a
 // borracha apaga e o desfazer remove.
@@ -872,6 +872,63 @@ app.get('/api/admin/overview', (request, response) => {
   response.json(adminOverview());
 });
 
+// Atualizar o servidor.
+//
+// É a ação mais perigosa do painel: ela troca o código que está rodando. Três
+// coisas a cercam, e nenhuma depende de o botão estar escondido no navegador:
+//
+//   1. **é do dono.** Administrador cuida de canais e de gente; trocar o código
+//      do servidor é de quem responde por ele;
+//   2. **o navegador só manda uma etiqueta.** A lista de versões é buscada por
+//      este servidor, e a etiqueta escolhida é conferida contra ela — aqui e de
+//      novo dentro do `SelfUpdater`, contra uma lista buscada na hora;
+//   3. **fica registrado.** A tentativa entra na auditoria antes de qualquer
+//      coisa acontecer, com quem pediu e para qual versão.
+function requireOwner(request: express.Request, response: express.Response): AdminContext | null {
+  const context = requireAdmin(request, response);
+  if (!context) return null;
+  if (context.role !== 'owner') {
+    refuse(response, 403, 'Só o dono do servidor pode trocar a versão que ele roda.');
+    return null;
+  }
+  return context;
+}
+
+app.get('/api/admin/update', async (request, response) => {
+  const context = requireOwner(request, response);
+  if (!context) return;
+  const reason = unavailableReason(selfUpdateSettings);
+  const estado = selfUpdater.snapshot();
+  if (reason) return response.json({ enabled: false, reason, current: serverVersion, releases: [], state: estado });
+  try {
+    response.json({ enabled: true, reason: '', current: serverVersion, releases: await selfUpdater.offers(serverVersion), state: estado });
+  } catch (erro) {
+    response.json({ enabled: true, reason: '', current: serverVersion, releases: [], state: estado, error: erro instanceof Error ? erro.message : 'Não consegui consultar as versões publicadas.' });
+  }
+});
+
+const updateBucket = new TokenBucket(3, 1);
+
+app.post('/api/admin/update', async (request, response) => {
+  const context = requireOwner(request, response);
+  if (!context) return;
+  const parsed = z.object({ tag: z.string().max(32) }).safeParse(request.body);
+  if (!parsed.success) return refuse(response, 400, 'Versão inválida.');
+  if (!updateBucket.take()) {
+    await audit(context.user, 'server.update', parsed.data.tag, 'denied', 'pedidos demais');
+    return refuse(response, 429, 'Muitos pedidos de atualização. Espere um pouco.');
+  }
+  // Registrado antes de acontecer: uma atualização que derruba o servidor no
+  // meio não deixaria rastro se o registro viesse depois.
+  await audit(context.user, 'server.update', parsed.data.tag, 'ok', 'pedido');
+  const resultado = await selfUpdater.start(parsed.data.tag, serverVersion);
+  if (!resultado.ok) {
+    await audit(context.user, 'server.update', parsed.data.tag, 'denied', resultado.error);
+    return refuse(response, 409, resultado.error);
+  }
+  response.json({ ok: true, tag: resultado.release.tag, state: selfUpdater.snapshot() });
+});
+
 app.post('/api/admin/users/:id/disconnect', (request, response) => {
   const admin = httpUser(request);
   if (!admin?.isAdmin) return void response.status(403).json({ error: 'Acesso exclusivo do administrador do servidor.' });
@@ -1110,7 +1167,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat:send', async (payload: unknown) => {
-    const parsed = z.object({ channelId: z.string(), body: z.string().trim().max(2000).default(''), attachment: attachmentSchema.optional() })
+    const parsed = z.object({ channelId: z.string(), body: z.string().trim().max(MAX_MESSAGE_BODY).default(''), attachment: attachmentSchema.optional() })
       .refine((value) => Boolean(value.body || value.attachment), { message: 'Mensagem vazia.' })
       .safeParse(payload);
     if (!parsed.success || !channelIsAvailable(parsed.data.channelId, 'text')) return;
@@ -1118,6 +1175,40 @@ io.on('connection', (socket) => {
     const message = { id: randomUUID(), ...parsed.data, author: socket.data.user as PublicUser, createdAt: new Date().toISOString() };
     await store.addMessage(message);
     io.emit('chat:message', message);
+  });
+
+  // Editar e apagar.
+  //
+  // Quem pode é o autor, e a conferência é aqui — esconder o botão do outro
+  // lado é conveniência, não permissão. No P2P a identidade é o apelido
+  // normalizado, e não o `id`: cada host tem o próprio cadastro, e sem isso
+  // trocar de host tirava de você o direito de apagar as suas mensagens.
+  //
+  // As duas saem pelo mesmo evento porque para quem recebe são a mesma coisa:
+  // esta mensagem mudou, fique com esta versão.
+  const chatEditBucket = new TokenBucket(30, 15);
+
+  async function aplicarMudanca(id: unknown, mudar: (message: ChatMessage) => ChatMessage): Promise<void> {
+    if (typeof id !== 'string' || !chatEditBucket.take()) return;
+    const atual = store.messages.find((message) => message.id === id);
+    const quem = socket.data.user as PublicUser;
+    if (!atual || !channelIsAvailable(atual.channelId, 'text')) return;
+    if (!canModify(atual, quem, { p2pMode, normalize: normalizeUsername })) return;
+    const mudada = mudar(atual);
+    await store.replaceMessage(mudada);
+    io.emit('chat:message:updated', mudada);
+  }
+
+  socket.on('chat:edit', (payload: unknown) => {
+    const parsed = z.object({ id: z.string().uuid(), body: z.string().trim().min(1).max(MAX_MESSAGE_BODY) }).safeParse(payload);
+    if (!parsed.success) return;
+    void aplicarMudanca(parsed.data.id, (message) => editMessage(message, parsed.data.body, new Date().toISOString()));
+  });
+
+  socket.on('chat:delete', (payload: unknown) => {
+    const parsed = z.object({ id: z.string().uuid() }).safeParse(payload);
+    if (!parsed.success) return;
+    void aplicarMudanca(parsed.data.id, (message) => deleteMessage(message, new Date().toISOString()));
   });
 
   // A replicação entre pessoas é do P2P, e só dele.
@@ -1140,6 +1231,9 @@ io.on('connection', (socket) => {
     const parsed = syncBundleSchema.safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false });
     const addedChannels = p2pMode ? await store.mergeChannels(parsed.data.channels) : [];
+    // `mergeMessages` devolve o que entrou **e** o que foi substituído por uma
+    // revisão maior: uma edição que chega pela replicação precisa alcançar
+    // quem está com a tela aberta, igual a uma mensagem nova.
     const addedMessages = p2pMode ? await store.mergeMessages(parsed.data.messages.filter((message) => channelIsAvailable(message.channelId))) : [];
     const changedProfiles = p2pMode ? await store.mergeProfiles(parsed.data.profiles) : [];
     if (changedProfiles.length) refreshProfilePresence(new Set(changedProfiles.map((entry) => normalizeUsername(entry.username))));
@@ -1226,9 +1320,6 @@ io.on('connection', (socket) => {
     const parsed = z.object({
       muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(),
       camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional(),
-      allowDraw: z.boolean().optional(),
-      drawLifetime: z.number().optional().transform((value) => (value === undefined ? undefined : parseDrawLifetime(value))),
-      drawSupported: z.boolean().optional(),
     }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
@@ -1267,39 +1358,6 @@ io.on('connection', (socket) => {
       io.to(target).emit(event, { ...forwarded, from: socket.id, user: socket.data.user as PublicUser });
     });
   }
-
-  // Um balde por socket: a mão de quem desenha passa, a inundação de um
-  // cliente adulterado não. Cada mensagem é reenviada para a sala inteira, e é
-  // por isso que o limite mora aqui e não no cliente.
-  const drawBucket = new TokenBucket();
-  socket.on('rtc:draw', (payload: unknown) => {
-    const parsed = rtcDrawSchema.safeParse(payload);
-    if (!parsed.success) return;
-    const channelId = rooms.roomOf(socket.id);
-    if (!channelId || rooms.roomOf(parsed.data.target) !== channelId) return;
-    const dono = rooms.members(channelId).find((member) => member.socketId === parsed.data.target);
-    // Só se desenha sobre uma transmissão que existe, e cuja dona permite.
-    // `allowDraw` ausente é um cliente anterior à 0.8.7: permitido, como o
-    // padrão da versão nova.
-    if (!dono?.screen || dono.allowDraw === false) return;
-    // E só sobre uma transmissão de um sistema que sabe receber traço. A
-    // recusa mora aqui, e não só na interface: esconder o lápis é conveniência
-    // para quem assiste, não proteção para quem transmite. Sem esta linha, um
-    // cliente modificado pintaria sobre a área de trabalho de quem está no
-    // Linux — que é justamente onde a janela sobreposta rouba o foco.
-    if (dono.drawSupported !== true) return;
-    // Limpar tudo é da dona da tela. Qualquer outro pode limpar só o que é seu.
-    if (parsed.data.clearAll && parsed.data.target !== socket.id) return;
-    if (!drawBucket.take()) return;
-    const { target, ...traco } = parsed.data;
-    io.to(`voice:${channelId}`).emit('rtc:draw', {
-      ...traco,
-      target,
-      from: socket.id,
-      author: socket.id,
-      authorName: (socket.data.user as PublicUser).username,
-    });
-  });
 
   // --- mesa de desenho compartilhada ---------------------------------------
   //

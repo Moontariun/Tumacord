@@ -186,3 +186,64 @@ tenta primeiro o que este computador já baixou (`/api/local/attachments`, que
 funciona com o host do grupo desligado) e depois o servidor daquele destino.
 Falhando as duas, vale a inicial do nome — um círculo vazio seria pior.
 
+## Mensagens depois de enviadas
+
+Editar e apagar valem para o autor, e a conferência é do servidor — esconder o
+botão é conveniência, não permissão. No P2P a identidade é o apelido
+normalizado, e não o `id`: cada host tem o próprio cadastro, e sem isso trocar
+de host tirava de você o direito de apagar as suas mensagens.
+
+A parte difícil é a replicação. O merge antigo olhava só o `id` — quem já
+conhecia a mensagem ignorava a que chegava —, e isso bastava enquanto uma
+mensagem era imutável. Com edição e exclusão vira o pior comportamento
+possível: quem apagou vê a mensagem voltar no primeiro pacote de quem ainda
+tinha a cópia antiga.
+
+`shared/messageSync.ts` resolve com uma revisão por mensagem: **quem tem mais
+revisão vence**. Apagar é uma revisão como outra qualquer, e é daí que vem a
+prioridade — não de um tratamento especial, mas de ser sempre mais nova que a
+cópia guardada. A lápide fica no lugar do conteúdo, porque sem ela não há como
+distinguir "foi apagada" de "ainda não recebi", e é a segunda leitura que
+ressuscita. O que a lápide não guarda é o texto nem o anexo.
+
+A regra vale nos três lugares por onde uma mensagem passa: o histórico do
+servidor (`mergeMessages`), o espelho local de cada computador (`mergeMirror`)
+e a lista em tela (`mergeVisible`). Valesse em dois, o terceiro desfaria.
+
+## Atualizar o servidor pelo painel
+
+É a ação mais perigosa do projeto — ela troca o código que está rodando —, e
+por isso está cercada em camadas, nenhuma delas na interface:
+
+- **desligada por padrão.** `TUMACORD_SELF_UPDATE=1` é uma decisão de quem
+  hospeda. Um servidor que ganhou esta versão não passa a aceitar troca de
+  código porque atualizou;
+- **é do dono.** Administrador cuida de canais e de gente;
+- **o navegador só manda uma etiqueta.** A lista de versões é buscada pelo
+  servidor no GitHub; a etiqueta escolhida é conferida contra ela — na leitura
+  e de novo na hora de aplicar, contra uma lista buscada naquele momento. Não
+  há caminho, branch, URL, repositório nem comando vindo do navegador;
+- **o que roda é fixo.** `scripts/update-server.sh`, chamado com `execFile` e
+  uma lista de argumentos. Nunca por shell, nunca com interpolação;
+- **uma por vez, com limite e registro.** A tentativa entra na auditoria antes
+  de qualquer coisa acontecer — uma atualização que derruba o servidor no meio
+  não deixaria rastro se o registro viesse depois.
+
+Não funciona dentro do contêiner, e ele diz isso: a imagem carrega só o código
+compilado, sem `scripts/` e sem `.git`. Serve para quem roda o servidor direto
+no host a partir do clone.
+
+## Sons
+
+Sintetizados na hora, sem arquivo de áudio: o Tumacord não embarca som de
+ninguém. Até a 0.9.8 era um oscilador por nota ligado a um ganho, o que toca a
+nota certa e soa como bipe. Desde a 0.9.9 cada nota é uma pilha de parciais
+levemente desafinados, com um filtro que fecha conforme ela decai, um sopro de
+ruído no ataque e um envio para uma cauda de reverberação gerada por código —
+os quatro pedaços que separam "instrumento" de "frequência ligando".
+
+Os eventos que soavam iguais deixaram de soar: silenciar o microfone e fechar o
+ouvido são coisas diferentes, e você entrando na call não é a mesma notícia que
+alguém entrando nela. Os níveis foram medidos no aplicativo, e estão em
+`docs/QA.md`.
+

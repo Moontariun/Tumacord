@@ -63,6 +63,14 @@ export interface ChatMessage {
   body: string;
   createdAt: string;
   attachment?: ChatAttachment;
+  // O que sobrou de uma mensagem depois de editada ou apagada. A revisão é o
+  // que faz a mudança vencer a cópia antiga na replicação do P2P; a regra
+  // inteira está em `shared/messageSync.ts`. Ausentes numa mensagem que nunca
+  // mudou, e nos clientes anteriores à 0.9.9.
+  revision?: number;
+  editedAt?: string;
+  /** Com isto preenchido a mensagem é uma lápide: o conteúdo já saiu. */
+  deletedAt?: string;
 }
 
 export interface ChatSyncBundle {
@@ -86,16 +94,6 @@ export interface VoiceState extends PublicUser {
   camera: boolean;
   screen: boolean;
   screenAudio: boolean;
-  // Quem transmite decide se quem assiste pode desenhar em cima, e por quanto
-  // tempo o traço fica. Ausentes nos clientes anteriores à 0.8.7: `allowDraw`
-  // ausente é lido como permitido, que é o padrão de quem tem a versão nova.
-  allowDraw?: boolean;
-  drawLifetime?: number;
-  // Se o sistema de quem transmite sabe receber desenho. Só o Windows sabe: no
-  // Linux a janela sobreposta rouba o foco do teclado e volta dentro da
-  // captura. Ausente é lido como "não sabe" — um cliente anterior à 0.9.0 não
-  // declara isso, e oferecer desenho para ele seria adivinhar o sistema dele.
-  drawSupported?: boolean;
 }
 
 export interface ServerSnapshot {

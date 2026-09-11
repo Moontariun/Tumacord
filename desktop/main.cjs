@@ -9,7 +9,6 @@ const { createScreenAudioRouter } = require('./screen-audio.cjs');
 const { closeAction, trayClickAction, trayMenuState } = require('./tray-policy.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
-const { DrawingOverlay } = require('./drawing-overlay.cjs');
 const { Updater } = require('./updater.cjs');
 
 // Torna os fluxos de saída identificáveis no PipeWire. O roteador de live usa
@@ -72,7 +71,6 @@ const screenAudioRouter = createScreenAudioRouter({
   },
   onDiagnostic: (details) => appendRuntimeEvent(runtimeLogFile, details),
 });
-const drawingOverlay = new DrawingOverlay();
 // Procura uma versão nova ao abrir e para por aí: baixar e aplicar são cliques
 // de quem está usando o aplicativo. Uma atualização que se aplica sozinha no
 // meio de uma call custaria a call.
@@ -279,7 +277,6 @@ async function createWindow() {
     child.on('closed', () => liveWindows.delete(child));
   });
   window.on('closed', () => {
-    drawingOverlay.close();
     closeScreenAudioChannel();
     for (const child of liveWindows) {
       if (!child.isDestroyed()) child.close();
@@ -523,31 +520,6 @@ app.whenReady().then(async () => {
       return directLink.lastKnownReport();
     }
   });
-  // O renderer manda o que precisa ser pintado; a janela sobreposta abre, se
-  // atualiza ou fecha a partir disso. Sem transmissão de monitor inteiro, o
-  // pedido é recusado e o desenho fica só dentro do aplicativo.
-  ipcMain.handle('tumacord:draw-overlay', (_event, payload) => {
-    try {
-      // A janela sobreposta é do Windows e só dele. No Linux ela tira o foco
-      // do teclado de quem está jogando e ainda volta dentro da captura do
-      // portal — foi por isso que, na 0.9.0, receber desenho passou a ser
-      // exclusividade do Windows. A interface já não pede; a recusa aqui é
-      // para o caso de ela pedir mesmo assim.
-      if (process.platform !== 'win32') {
-        drawingOverlay.close();
-        return false;
-      }
-      if (!payload || !Array.isArray(payload.strokes) || !payload.strokes.length) {
-        drawingOverlay.close();
-        return false;
-      }
-      return drawingOverlay.show(payload);
-    } catch (error) {
-      appendRuntimeEvent(runtimeLogFile, { event: 'draw-overlay-failed', message: String(error && error.message ? error.message : error) });
-      drawingOverlay.close();
-      return false;
-    }
-  });
   ipcMain.handle('tumacord:set-hosting', (_event, details) => discovery?.setHosting(details) ?? null);
   ipcMain.handle('tumacord:toggle-fullscreen', () => {
     if (!mainWindow) return false;
@@ -622,7 +594,6 @@ app.on('before-quit', (event) => {
   if (!hasSingleInstanceLock) return;
   if (quittingAfterAudioCleanup) return;
   quittingAfterAudioCleanup = true;
-  drawingOverlay.close();
   closeScreenAudioChannel();
   discovery?.close();
   event.preventDefault();

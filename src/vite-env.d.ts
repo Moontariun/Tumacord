@@ -112,7 +112,6 @@ interface Window {
     discoverCalls: () => Promise<DiscoveredCall[]>;
     onCallsChanged: (listener: (calls: DiscoveredCall[]) => void) => () => void;
     setHosting: (details: null | { hostUserId: string; hostUsername: string; callId: string; callName: string; participants: number }) => Promise<void>;
-    drawOverlay: (payload: null | { sourceId: string; sourceKind: 'screen' | 'window'; lifetime: number; strokes: Array<{ color: string; at: number; points: Array<{ x: number; y: number }> }> }) => Promise<boolean>;
     getNetworkPreferences: () => Promise<TumacordNetworkPreferences>;
     setNetworkPreferences: (patch: Partial<TumacordNetworkPreferences>) => Promise<TumacordNetworkPreferences>;
     onNetworkPreferencesChanged: (listener: (preferences: TumacordNetworkPreferences) => void) => () => void;

@@ -127,7 +127,7 @@ export async function cacheAttachment(socket: Socket | null, attachment: ChatAtt
   await saveAttachmentLocally(attachment.id, await resolveAttachment(socket, attachment, serverUrl, token));
 }
 
-async function imagePreview(file: File): Promise<string | undefined> {
+export async function imagePreview(file: File): Promise<string | undefined> {
   if (!file.type.startsWith('image/')) return undefined;
   try {
     const bitmap = await createImageBitmap(file);

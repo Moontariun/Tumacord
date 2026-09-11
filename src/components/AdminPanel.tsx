@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminOverview, Channel, ChannelCategory, ServerRole } from '../../shared/types';
 import { Icon } from './Icon';
 import { Dropdown } from './Dropdown';
+import { defaultChoice } from '../../shared/serverUpdate';
 import { describeMissing, mergeCapabilities, readCapabilities, UNKNOWN_CAPABILITIES, type ServerCapabilities } from '../lib/capabilities';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from '../lib/freshness';
 
@@ -23,7 +24,7 @@ import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from '..
 // a mais nova. Agora o valor anterior fica em tela enquanto a leitura corre,
 // e uma resposta de geração antiga é descartada em silêncio.
 
-type Area = 'overview' | 'channels' | 'users' | 'logs';
+type Area = 'overview' | 'channels' | 'users' | 'version' | 'logs';
 
 // Um pedido que nunca responde deixaria o painel em "carregando" para sempre.
 // Doze segundos é folgado para uma rede ruim e curto para quem está esperando.
@@ -57,12 +58,43 @@ interface PainelDados {
   audit: AuditEntry[];
 }
 
+/** Uma versão publicada, como o servidor a oferece. */
+interface VersaoOferecida {
+  tag: string;
+  version: string;
+  publishedAt: string;
+  pageUrl: string;
+  prerelease: boolean;
+  /** O motivo de não dever ser instalada, quando há um. */
+  broken: string;
+  current: boolean;
+  newer: boolean;
+}
+
+interface EstadoDaAtualizacao {
+  status: 'idle' | 'running' | 'done' | 'error';
+  tag: string;
+  startedAt: string;
+  finishedAt: string;
+  log: string;
+}
+
+interface PainelDeVersao {
+  enabled: boolean;
+  reason: string;
+  current: string;
+  releases: VersaoOferecida[];
+  state: EstadoDaAtualizacao;
+  error?: string;
+}
+
 type Resultado<T> = { ok: true; body: T } | { ok: false; error: string };
 
 const AREAS: Array<{ id: Area; label: string }> = [
   { id: 'overview', label: 'Visão geral' },
   { id: 'channels', label: 'Canais' },
   { id: 'users', label: 'Usuários' },
+  { id: 'version', label: 'Versão' },
   { id: 'logs', label: 'Registro' },
 ];
 
@@ -77,6 +109,7 @@ const ACTION_LABEL: Record<string, string> = {
   'category.update': 'renomeou a categoria',
   'category.delete': 'apagou a categoria',
   'category.reorder': 'reordenou as categorias',
+  'server.update': 'pediu a atualização do servidor para',
   'user.role': 'mudou o papel de',
   'user.remove': 'removeu',
 };
@@ -234,11 +267,110 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
             onRemove={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}`, 'DELETE'), `${nome} foi removido do servidor.`)}
             onDisconnect={(id, nome) => executar(id, () => chamar(`/api/admin/users/${encodeURIComponent(id)}/disconnect`, 'POST'), `${nome} foi desconectado.`)}
           />}
+          {area === 'version' && <Versao pedir={pedir} onNotice={onNotice} />}
           {area === 'logs' && <Logs entries={audit} />}
         </>}
       </section>
     </div>
   </div>;
+}
+
+/**
+ * A versão que este servidor roda, e para qual ele pode ir.
+ *
+ * A lista vem do próprio servidor, que a busca no GitHub — o mesmo lugar de
+ * onde o aplicativo tira a atualização dele. O navegador não escolhe de onde
+ * ela vem nem manda nada além da etiqueta escolhida; quem confere se aquela
+ * etiqueta pode ser aplicada é o servidor, e ele confere de novo na hora.
+ */
+function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string, corpo?: unknown) => Promise<Resultado<T>>; onNotice: (message: string) => void }) {
+  const [painel, setPainel] = useState<PainelDeVersao | null>(null);
+  const [erro, setErro] = useState('');
+  const [escolhida, setEscolhida] = useState('');
+  const [confirmando, setConfirmando] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+
+  const carregar = useCallback(async () => {
+    const resultado = await pedir<PainelDeVersao>('/api/admin/update');
+    if (!resultado.ok) return setErro(resultado.error);
+    setErro('');
+    setPainel(resultado.body);
+    setEscolhida((atual) => atual || defaultChoice(resultado.body.releases));
+  }, [pedir]);
+
+  useEffect(() => { void carregar(); }, [carregar]);
+
+  // Enquanto o script roda, o servidor reinicia no meio: a leitura vai falhar
+  // e voltar sozinha. Continuar perguntando é o que mostra o fim.
+  const rodando = painel?.state.status === 'running';
+  useEffect(() => {
+    if (!rodando) return;
+    const timer = window.setInterval(() => { void carregar(); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [carregar, rodando]);
+
+  const aplicar = async () => {
+    setEnviando(true);
+    const resultado = await pedir<{ ok: boolean }>('/api/admin/update', 'POST', { tag: escolhida });
+    setEnviando(false);
+    setConfirmando(false);
+    if (!resultado.ok) return onNotice(resultado.error);
+    onNotice(`Atualização para ${escolhida} pedida. O servidor vai reiniciar.`);
+    void carregar();
+  };
+
+  if (erro) return <p className="invite-status error">{erro} <button className="ghost" onClick={() => void carregar()}>Tentar de novo</button></p>;
+  if (!painel) return <p className="invite-status">Consultando as versões publicadas…</p>;
+
+  const alvo = painel.releases.find((entrada) => entrada.tag === escolhida);
+  return <>
+    <p className="settings-intro">Este servidor está na <strong>v{painel.current}</strong>. As versões vêm da página de Releases do projeto, consultada por este servidor.</p>
+
+    {!painel.enabled
+      ? <p className="invite-status">{painel.reason}</p>
+      : <>
+        {painel.error && <p className="invite-status error">{painel.error} <button className="ghost" onClick={() => void carregar()}>Tentar de novo</button></p>}
+        <div className="setting-label">
+          <span className="setting-title">Versão</span>
+          <Dropdown
+            label="Versão"
+            value={escolhida}
+            options={painel.releases.map((entrada) => ({
+              value: entrada.tag,
+              label: `${entrada.tag}${entrada.current ? ' · em uso' : entrada.newer ? '' : ' · anterior'}${entrada.broken ? ' · retirada' : ''}${entrada.prerelease ? ' · prévia' : ''}`,
+            }))}
+            onChange={setEscolhida}
+          />
+        </div>
+        {alvo?.broken && <p className="invite-status error">A {alvo.tag} está marcada como retirada: {alvo.broken}. O servidor recusa aplicá-la.</p>}
+        {alvo?.current && <p className="invite-status">Esta é a versão que já está rodando.</p>}
+        {alvo && !alvo.current && !alvo.newer && !alvo.broken && <p className="invite-status">A {alvo.tag} é anterior à que está rodando. Voltar é possível, e é o caminho quando algo quebrou.</p>}
+
+        <div className="update-actions">
+          <button
+            className="primary-button"
+            disabled={enviando || rodando || !alvo || Boolean(alvo.broken) || alvo.current}
+            onClick={() => setConfirmando(true)}
+            title="Baixa a versão escolhida, faz backup do volume e reinicia o servidor"
+          >{rodando ? 'Atualizando…' : 'Atualizar servidor'}</button>
+          {alvo?.pageUrl && <a className="ghost update-link" href={alvo.pageUrl} target="_blank" rel="noreferrer noopener">Ver as notas da {alvo.tag}</a>}
+        </div>
+
+        {painel.state.status !== 'idle' && <p className={`invite-status ${painel.state.status === 'error' ? 'error' : ''}`}>
+          <strong>{painel.state.status === 'running' ? `Aplicando ${painel.state.tag}…` : painel.state.status === 'done' ? `A ${painel.state.tag} foi aplicada.` : `A ${painel.state.tag} falhou.`}</strong>
+          {painel.state.log && <><br />{painel.state.log.split('\n').slice(-6).join(' · ')}</>}
+        </p>}
+      </>}
+
+    {confirmando && alvo && <div className="modal-backdrop" onMouseDown={(evento) => { if (evento.target === evento.currentTarget) setConfirmando(false); }}><div className="confirm-dialog" role="alertdialog" aria-modal="true">
+      <h2>Atualizar para {alvo.tag}?</h2>
+      <p>O servidor faz backup do volume, troca o código e reinicia. Quem estiver em uma call cai durante o reinício.</p>
+      <div className="confirm-actions">
+        <button type="button" autoFocus onClick={() => setConfirmando(false)}>Cancelar</button>
+        <button type="button" className="danger" disabled={enviando} onClick={() => void aplicar()}>{enviando ? 'Pedindo…' : 'Atualizar'}</button>
+      </div>
+    </div></div>}
+  </>;
 }
 
 function Overview({ overview, users, channels }: { overview: AdminOverview | null; users: AdminUser[]; channels: Channel[] }) {

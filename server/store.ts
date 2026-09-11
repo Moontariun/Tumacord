@@ -3,6 +3,7 @@ import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import type { Channel, ChatAttachment, ChatMessage, ReplicatedProfile, UserProfile } from '../shared/types.js';
 import { profileIsNewer } from '../shared/profileVersion.js';
+import { supersedes } from '../shared/messageSync.js';
 import { countOwners, migrateRoles, normalizeRole, type Role } from './roles.js';
 import { applyOrder, detachCategory, nextPosition, normalizePositions, type CategoryRecord, type ChannelRecord } from './channels.js';
 import { appendAudit, type AuditEntry } from './audit.js';
@@ -350,7 +351,13 @@ export class JsonStore {
     const canais = new Map(atual.channels.map((channel) => [channel.id, channel]));
     for (const channel of incoming.channels ?? []) canais.set(channel.id, channel);
     const mensagens = new Map(atual.messages.map((message) => [message.id, message]));
-    for (const message of incoming.messages ?? []) mensagens.set(message.id, message);
+    for (const message of incoming.messages ?? []) {
+      // A cópia espelhada segue a mesma regra do histórico: revisão maior
+      // vence. Sem isto, um espelho antigo desfazia no disco uma exclusão que
+      // já tinha valido — e era desse disco que a próxima replicação saía.
+      const guardada = mensagens.get(message.id);
+      if (!guardada || supersedes(guardada, message)) mensagens.set(message.id, message);
+    }
     const perfis = new Map(atual.profiles.map((entry) => [profileKey(entry.username), entry]));
     for (const entry of incoming.profiles ?? []) {
       const chave = profileKey(entry.username);
@@ -511,21 +518,53 @@ export class JsonStore {
     return added;
   }
 
+  /** Trocar uma mensagem pela versão editada ou pela lápide dela. */
+  async replaceMessage(message: ChatMessage): Promise<void> {
+    const indice = this.data.messages.findIndex((candidate) => candidate.id === message.id);
+    if (indice < 0) return;
+    this.data.messages[indice] = message;
+    await this.save();
+  }
+
+  /**
+   * Mesclar o que chegou da replicação.
+   *
+   * Antes isto olhava só o `id`: quem já conhecia a mensagem ignorava a que
+   * chegava. Com edição e exclusão essa regra vira o pior comportamento
+   * possível — quem apagou vê a mensagem voltar no primeiro pacote de quem
+   * ainda tinha a cópia antiga. Agora uma revisão maior substitui a menor, e é
+   * isso que dá prioridade de verdade a apagar e editar.
+   *
+   * O retorno leva as novas **e** as substituídas, porque para quem está com a
+   * tela aberta as duas são a mesma notícia: fique com esta versão.
+   */
   async mergeMessages(messages: readonly ChatMessage[]): Promise<ChatMessage[]> {
-    const known = new Set(this.data.messages.map((message) => message.id));
+    const porId = new Map(this.data.messages.map((message) => [message.id, message]));
     const added: ChatMessage[] = [];
+    const changed: ChatMessage[] = [];
     for (const message of messages) {
-      if (known.has(message.id)) continue;
-      known.add(message.id);
-      added.push(message);
+      const atual = porId.get(message.id);
+      if (!atual) {
+        porId.set(message.id, message);
+        added.push(message);
+        if (message.attachment) this.rememberAttachment(message.attachment);
+        continue;
+      }
+      if (!supersedes(atual, message)) continue;
+      porId.set(message.id, message);
+      changed.push(message);
       if (message.attachment) this.rememberAttachment(message.attachment);
     }
-    if (!added.length) return [];
+    if (!added.length && !changed.length) return [];
+    for (const message of changed) {
+      const indice = this.data.messages.findIndex((candidate) => candidate.id === message.id);
+      if (indice >= 0) this.data.messages[indice] = message;
+    }
     this.data.messages.push(...added);
     this.data.messages.sort((first, second) => first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id));
     if (this.data.messages.length > 2000) this.data.messages.splice(0, this.data.messages.length - 2000);
     await this.save();
-    return added;
+    return [...added, ...changed];
   }
 
   async saveAttachment(id: string, contents: Buffer, metadata?: ChatAttachment): Promise<void> {

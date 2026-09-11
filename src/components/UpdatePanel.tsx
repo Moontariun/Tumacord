@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import { playSound } from '../lib/sound';
 import { copyText } from '../lib/clipboard';
 import { describePublished, formatBytes, readReleaseHighlights } from '../lib/releaseNotes';
 
@@ -64,12 +65,20 @@ export function useUpdates(): UpdateBridge {
   // primeiro: o processo principal começa a procurar antes de esta tela
   // existir, e o aviso dele é sempre mais novo do que a leitura pedida aqui.
   const avisado = useRef(false);
+  // A versão que já teve som. Sem isto, toda mudança de estado da mesma
+  // atualização — baixando, baixada, aplicando — tocaria de novo.
+  const anunciada = useRef('');
   useEffect(() => {
     if (!bridge) return;
     let ativo = true;
     const parar = bridge.onChanged((novo) => {
       if (!ativo) return;
       avisado.current = true;
+      const oferecida = novo?.phase === 'available' ? novo.version : '';
+      if (oferecida && anunciada.current !== oferecida) {
+        anunciada.current = oferecida;
+        playSound('update');
+      }
       setState(novo);
     });
     void bridge.state().then((atual) => { if (ativo && !avisado.current) setState(atual); }).catch(() => undefined);

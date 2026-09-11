@@ -1,10 +1,11 @@
 // Mesa de desenho compartilhada.
 //
 // Alguém cria um quadro em branco dentro do app, os outros entram e desenham
-// juntos. Não é o mesmo que rabiscar sobre a live de alguém — aquilo é
-// apontamento, mora em `shared/telestration.ts`, tem prazo de validade e vive
-// dentro do vídeo. Aqui o quadro é o trabalho: ele fica, ele é o motivo de
-// estarem ali, e sair da call não pode apagá-lo.
+// juntos. Até a 0.9.8 havia uma segunda coisa com o mesmo nome — rabiscar por
+// cima da transmissão de alguém —, e ela saiu: era apontamento com prazo de
+// validade, preso dentro de um vídeo e só no Windows. Aqui o quadro é o
+// trabalho: ele fica, ele é o motivo de estarem ali, e sair da call não pode
+// apagá-lo.
 //
 // Quatro decisões sustentam o resto do arquivo:
 //
