@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { readCapabilities, supports } from './capabilities';
+import { beginDraft, endDraft, extendDraft, idleDraft, settleDraft, type DraftSession } from './boardDraft';
 import {
   applyOrderedOp,
   BOARD_CURSOR_INTERVAL_MS,
@@ -140,7 +141,9 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
 
   const activeIdRef = useRef<string>('');
   const revisionRef = useRef(0);
-  const draftRef = useRef<BoardStroke | null>(null);
+  // A sessão de desenho: o traço da mão e se a caneta ainda está encostada.
+  // `draft` é só o que a tela precisa; quem manda é esta referência.
+  const draftRef = useRef<DraftSession>(idleDraft());
   // A fila do que ainda não foi confirmado. Ela sobrevive à reconexão de
   // propósito: o mesmo pedaço reenviado com o mesmo id é reconhecido do outro
   // lado e não vira traço dobrado.
@@ -218,7 +221,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     activeIdRef.current = boardId;
     observerRef.current = observer;
     queueRef.current = [];
-    draftRef.current = null;
+    draftRef.current = idleDraft();
     setDraft(null);
     joinBoard(boardId, observer);
   }, [joinBoard]);
@@ -227,7 +230,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     const boardId = activeIdRef.current;
     activeIdRef.current = '';
     queueRef.current = [];
-    draftRef.current = null;
+    draftRef.current = idleDraft();
     setDraft(null);
     setActive(null);
     if (boardId && socket) socket.emit('board:leave', { boardId });
@@ -407,7 +410,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
           // Qualquer outra recusa é definitiva — mesa encerrada, permissão
           // revogada, observador. Insistir só repetiria a mesma resposta.
           queueRef.current = [];
-          draftRef.current = null;
+          draftRef.current = idleDraft();
           setDraft(null);
           if (reply?.error) setActive((atual) => (atual ? { ...atual, notice: reply.error! } : atual));
           return;
@@ -416,7 +419,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
         queueRef.current = queueRef.current.filter((op) => !enviados.has(op.id));
         const recusa = reply.rejected?.[0];
         if (recusa) {
-          draftRef.current = null;
+          draftRef.current = idleDraft();
           setDraft(null);
           setActive((atual) => (atual ? { ...atual, notice: recusa.error } : atual));
         }
@@ -425,14 +428,16 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     return () => window.clearInterval(timer);
   }, [socket]);
 
-  // O traço local some quando o quadro confirmado já o contém por inteiro.
+  // O eco local some quando ele já não acrescenta nada — e nunca antes disso.
+  // A regra inteira mora em `settleDraft`, que sabe que a caneta encostada tem
+  // a última palavra.
   useEffect(() => {
     if (!draft || !active) return;
     const confirmado = active.state.strokes.find((stroke) => stroke.id === draft.id);
-    if (confirmado && confirmado.points.length >= draft.points.length && !queueRef.current.length) {
-      draftRef.current = null;
-      setDraft(null);
-    }
+    const proxima = settleDraft(draftRef.current, confirmado, queueRef.current.length);
+    if (proxima === draftRef.current) return;
+    draftRef.current = proxima;
+    setDraft(proxima.stroke);
   }, [active, draft]);
 
   // Cursor alheio é enfeite com prazo: sem notícias da pessoa, ele sai da tela.
@@ -470,22 +475,24 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
   }, []);
 
   const beginStroke = useCallback((stroke: BoardStroke) => {
-    draftRef.current = stroke;
+    draftRef.current = beginDraft(stroke);
     setDraft(stroke);
     enqueue({ id: `${stroke.id}@0`, kind: 'stroke', stroke: stroke.id, color: stroke.color, width: stroke.width, points: stroke.points });
   }, [enqueue]);
 
   const extendStroke = useCallback((points: BoardStroke['points']) => {
-    const atual = draftRef.current;
-    if (!atual || !points.length) return;
-    const proximo = { ...atual, points: [...atual.points, ...points] };
-    draftRef.current = proximo;
-    setDraft(proximo);
-    enqueue({ id: `${atual.id}@${proximo.points.length}`, kind: 'stroke', stroke: atual.id, color: atual.color, width: atual.width, points });
+    const proxima = extendDraft(draftRef.current, points);
+    if (proxima === draftRef.current || !proxima.stroke) return;
+    draftRef.current = proxima;
+    setDraft(proxima.stroke);
+    // O identificador do pedaço vem do tamanho do traço depois dele: é único
+    // porque o traço só cresce, e é estável se o mesmo pedaço for reenviado.
+    enqueue({ id: `${proxima.stroke.id}@${proxima.stroke.points.length}`, kind: 'stroke', stroke: proxima.stroke.id, color: proxima.stroke.color, width: proxima.stroke.width, points });
   }, [enqueue]);
 
   const endStroke = useCallback(() => {
-    const atual = draftRef.current;
+    const atual = draftRef.current.stroke;
+    draftRef.current = endDraft(draftRef.current);
     if (!atual) return;
     // O último pedaço marca o fim do traço. Ele vai mesmo sem pontos novos
     // porque é ele que diz "a caneta levantou" para quem está assistindo.

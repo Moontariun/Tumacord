@@ -53,6 +53,7 @@ export function Whiteboard({ session, api, currentUserId, connectionMode, onNoti
   const [width, setWidth] = useState<number>(DEFAULT_BOARD_WIDTH);
   const [view, setView] = useState<BoardView>({ scale: 1, offsetX: 0, offsetY: 0 });
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [pausado, setPausado] = useState(() => document.visibilityState === 'hidden');
   const traco = useRef<{ id: string; ultimo: BoardPoint; pendentes: BoardPoint[] } | null>(null);
   const arrasto = useRef<{ x: number; y: number; view: BoardView } | null>(null);
@@ -262,6 +263,14 @@ export function Whiteboard({ session, api, currentUserId, connectionMode, onNoti
     }
   };
 
+  const excluir = async () => {
+    if (await api.manage('delete')) {
+      setConfirmDelete(false);
+      onNotice(`A mesa “${board.name}” foi excluída.`);
+      onClose();
+    }
+  };
+
   const outros = participants.filter((participante) => participante.userId !== currentUserId);
 
   return <section className="board-surface">
@@ -344,11 +353,20 @@ export function Whiteboard({ session, api, currentUserId, connectionMode, onNoti
               <p>Isto apaga o que <strong>todo mundo</strong> desenhou nesta mesa. Não dá para desfazer.</p>
               <div><button className="danger" onClick={() => void limpar()}>Limpar mesmo assim</button><button onClick={() => setConfirmClear(false)}>Cancelar</button></div>
             </div>
-            : <button className="danger" onClick={() => setConfirmClear(true)}><Icon name="eraser" /><span>Limpar o quadro</span></button>}
+            : <button className="danger" onClick={() => { setConfirmDelete(false); setConfirmClear(true); }}><Icon name="eraser" /><span>Limpar o quadro</span></button>}
           {board.status === 'open'
             ? <button onClick={() => void api.manage('close')}><Icon name="close" /><span>Encerrar a mesa</span></button>
             : <button onClick={() => void api.manage('reopen')}><Icon name="refresh" /><span>Reabrir a mesa</span></button>}
           {connectionMode === 'server' && <button onClick={() => void api.manage('archive').then((ok) => { if (ok) onClose(); })}><Icon name="file" /><span>Arquivar, guardando o conteúdo</span></button>}
+          {/* Quatro coisas diferentes com nomes parecidos, e esta é a única
+              sem volta: limpar esvazia a folha, encerrar para os desenhos,
+              arquivar tira da lista guardando tudo, excluir apaga a mesa. */}
+          {confirmDelete
+            ? <div className="board-confirm">
+              <p>Isto apaga a mesa <strong>“{board.name}”</strong> e tudo o que foi desenhado nela, para todo mundo. Não dá para desfazer, e ela não volta nem em outra sessão. As imagens que alguém já exportou continuam com quem as salvou.</p>
+              <div><button className="danger" onClick={() => void excluir()}>Excluir a mesa</button><button onClick={() => setConfirmDelete(false)}>Cancelar</button></div>
+            </div>
+            : <button className="danger" onClick={() => { setConfirmClear(false); setConfirmDelete(true); }}><Icon name="close" /><span>Excluir a mesa</span></button>}
         </div>}
 
         {connectionMode === 'p2p' && <p className="board-warning">

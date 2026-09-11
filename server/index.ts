@@ -75,7 +75,12 @@ const rooms = new VoiceRooms();
 // outro dedicado —, e no P2P a adoção da troca de host exige que quem entrega
 // esteja na mesma call agora.
 const boardOrigin = p2pMode ? 'p2p' : `server:${serverName}`;
-const whiteboards = new Whiteboards(() => scheduleBoardSave());
+const whiteboards = new Whiteboards(() => scheduleBoardSave(), () => {
+  // Excluir não pode esperar a janela de coalescência: se o servidor cair
+  // nesse meio segundo, a mesa volta na subida seguinte como se nada tivesse
+  // acontecido — e quem a excluiu não teria como saber por quê.
+  if (!p2pMode) void saveBoardsNow();
+});
 let boardSaveTimer: NodeJS.Timeout | null = null;
 let lastBoardSaveAt = 0;
 /** Intervalo mínimo entre duas gravações do arquivo por causa das mesas. É
@@ -111,7 +116,7 @@ function scheduleBoardSave(): void {
 
 function saveBoardsNow(): Promise<void> {
   lastBoardSaveAt = Date.now();
-  return store.saveBoards(whiteboards.toStored()).catch(() => undefined);
+  return store.saveBoards(whiteboards.toStored(), whiteboards.deletedBoards).catch(() => undefined);
 }
 
 // Onde existe encerramento gracioso — Linux, contêiner, `docker compose down` —
@@ -304,7 +309,7 @@ const boardSyncSchema = z.object({ boardId: z.string().min(1).max(64), since: z.
 const boardCursorSchema = z.object({ boardId: z.string().min(1).max(64), x: z.number().finite().min(0).max(BOARD_WIDTH), y: z.number().finite().min(0).max(BOARD_HEIGHT), color: z.string().regex(/^#[0-9a-f]{6}$/i) });
 const boardManageSchema = z.object({
   boardId: z.string().min(1).max(64),
-  action: z.enum(['lock', 'unlock', 'observers', 'clear', 'close', 'reopen', 'archive', 'rename', 'revoke', 'restore']),
+  action: z.enum(['lock', 'unlock', 'observers', 'clear', 'close', 'reopen', 'archive', 'rename', 'revoke', 'restore', 'delete']),
   value: z.union([z.string().max(MAX_BOARD_NAME * 4), z.boolean()]).optional(),
 });
 // A mesa que volta para o ar depois da troca de host, no P2P. O que chega aqui
@@ -1358,6 +1363,13 @@ io.on('connection', (socket) => {
     if (!board || !channelIsAvailable(board.channelId)) return acknowledge?.({ ok: false, error: 'Essa mesa não existe mais.' });
     const result = whiteboards.manage(parsed.data.boardId, boardActor(), parsed.data.action, parsed.data.value);
     if (!result.ok) return acknowledge?.({ ok: false, error: result.error });
+    // Excluída: não há mais mesa para descrever nem sala para atualizar. O
+    // aviso vai para quem enxerga o canal, e não só para quem estava dentro.
+    if (result.value.deleted) {
+      announceBoard('board:closed', { boardId: parsed.data.boardId, reason: `${(socket.data.user as PublicUser).username} excluiu a mesa “${result.value.board.name}”.` });
+      void audit(socket.data.user as PublicUser, 'board:delete', result.value.board.name).catch(() => undefined);
+      return acknowledge?.({ ok: true, deleted: true, board: result.value.board });
+    }
     // Limpar tudo é uma operação como outra qualquer: ela chega pelo mesmo
     // caminho, com revisão, e por isso quem reconectar depois também a vê.
     if (result.value.op) io.to(`board:${parsed.data.boardId}`).emit('board:ops', { boardId: parsed.data.boardId, ops: [result.value.op] });
@@ -1380,6 +1392,10 @@ io.on('connection', (socket) => {
     const parsed = boardAdoptSchema.safeParse(payload);
     if (!parsed.success) return acknowledge?.({ ok: false, error: 'Mesa inválida.' });
     const entrada = parsed.data.board;
+    // A primeira pergunta é se ela foi excluída. Responder "entre na call"
+    // para quem tenta devolver uma mesa apagada manda a pessoa resolver o
+    // problema errado — e a resposta certa não depende de onde ela está.
+    if (whiteboards.wasDeleted(entrada.id)) return acknowledge?.({ ok: false, error: 'Essa mesa foi excluída.' });
     if (!channelIsAvailable(entrada.channelId)) return acknowledge?.({ ok: false, error: 'Esse canal não existe aqui.' });
     // Estar na call deste host agora é o que significa "ser do grupo que está
     // reunido". Não é o mesmo que provar que a mesa é daqui — isso ninguém
@@ -1467,7 +1483,7 @@ storeReady.then(async () => {
   // As mesas guardadas voltam inteiras: salvar e reabrir preserva o conteúdo,
   // que é o que o dedicado promete. No P2P nada foi gravado, e a lista sobe
   // vazia — a mesa de lá vive enquanto o grupo estiver reunido.
-  if (!p2pMode) whiteboards.load(store.boards);
+  if (!p2pMode) whiteboards.load(store.boards, store.deletedBoards);
   if (!p2pMode) {
     const migracao = await store.migrateUserRoles(adminUsername);
     if (migracao.changed) console.log(`Tumacord: papéis migrados${migracao.ownerId ? ' — dono definido' : ''}.`);

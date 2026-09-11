@@ -391,6 +391,68 @@ test('a mesa chega ao disco sem depender de um encerramento gracioso', { timeout
   assert.deepEqual(montar(entrou.snapshot, entrou.ops).strokes.map((stroke) => stroke.id), ['t1', 't2']);
 });
 
+// Excluir tem de ser definitivo, e "definitivo" tem inimigos: o reinício do
+// servidor, a reconexão de quem estava dentro e, no P2P, a devolução da mesa
+// na troca de host. Quem tinha o quadro na memória devolveria a mesa excluída
+// inteira, e quem a excluiu não teria como saber por quê.
+test('a mesa excluída não volta — nem pelo reinício, nem por quem ainda tem o quadro', { timeout: 90_000 }, async (context) => {
+  const { entrar, reiniciar } = await ambiente(context);
+  const ana = await entrar('Ana');
+  const bia = await entrar('Bia');
+  const criada = await criar(ana, 'Mesa que some');
+  const boardId = criada.board!.id;
+  await entrarNaMesa(ana, boardId);
+  await entrarNaMesa(bia, boardId);
+  await desenhar(ana, boardId, [traco('t1', 10, 10)]);
+
+  // Quem não gerencia não exclui.
+  const recusado = await emit<{ ok: boolean; error?: string }>(bia, 'board:manage', { boardId, action: 'delete' });
+  assert.equal(recusado.ok, false);
+  assert.match(recusado.error ?? '', /criou a mesa ou administra/);
+
+  const aviso = waitFor<{ boardId: string; reason?: string }>(bia, 'board:closed', (payload) => payload.boardId === boardId);
+  const excluido = await emit<{ ok: boolean; deleted?: boolean }>(ana, 'board:manage', { boardId, action: 'delete' });
+  assert.equal(excluido.ok, true);
+  assert.equal(excluido.deleted, true);
+  assert.match((await aviso).reason ?? '', /excluiu a mesa/);
+
+  // Some da lista e não aceita mais ninguém dentro.
+  const lista = await emit<{ ok: boolean; boards: BoardSummary[] }>(ana, 'board:list', {});
+  assert.equal(lista.boards.some((board) => board.id === boardId), false);
+  assert.equal((await entrarNaMesa(bia, boardId)).ok, false);
+  assert.equal((await desenhar(ana, boardId, [traco('t2', 20, 20)])).ok, false);
+
+  await reiniciar();
+  const depois = await entrar('Ana');
+  const listaDepois = await emit<{ ok: boolean; boards: BoardSummary[] }>(depois, 'board:list', {});
+  assert.equal(listaDepois.boards.some((board) => board.id === boardId), false, 'a exclusão sobreviveu ao reinício');
+  assert.equal((await entrarNaMesa(depois, boardId)).ok, false);
+});
+
+test('no P2P, a troca de host não ressuscita uma mesa excluída', { timeout: 90_000 }, async (context) => {
+  const { entrar, reiniciar } = await ambiente(context, true);
+  const ana = await entrar('Ana');
+  const criada = await criar(ana, 'Rascunho descartado', 'geral');
+  const boardId = criada.board!.id;
+  await entrarNaMesa(ana, boardId);
+  await desenhar(ana, boardId, [traco('t1', 10, 10)]);
+  assert.equal((await emit<{ ok: boolean }>(ana, 'board:manage', { boardId, action: 'delete' })).ok, true);
+
+  // O host troca. Quem ainda tem o quadro na memória tenta devolvê-lo — e no
+  // P2P a lápide vive na memória do processo, então este é o caso em que o
+  // host **não** trocou de máquina: o mesmo servidor lembra a exclusão.
+  const devolvida = await emit<{ ok: boolean; error?: string }>(ana, 'board:adopt', {
+    board: { ...criada.board!, revoked: [], snapshot: { revision: 1, strokes: [] } },
+  });
+  assert.equal(devolvida.ok, false);
+  assert.match(devolvida.error ?? '', /excluída/);
+
+  await reiniciar();
+  const depois = await entrar('Ana');
+  const lista = await emit<{ ok: boolean; boards: BoardSummary[] }>(depois, 'board:list', {});
+  assert.equal(lista.boards.length, 0, 'no P2P nada é guardado: a mesa não volta de disco nenhum');
+});
+
 test('a mesa funciona no P2P, e a troca de host não leva o quadro embora', { timeout: 90_000 }, async (context) => {
   // No P2P quem ordena é o host — o mesmo servidor, rodando na máquina dele.
   const { entrar, reiniciar } = await ambiente(context, true);

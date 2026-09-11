@@ -47,6 +47,8 @@ import {
 export const MAX_BOARDS = 64;
 /** Ids de operação lembrados por mesa, para a retentativa não virar traço duplo. */
 const SEEN_LIMIT = 4_096;
+/** Mesas excluídas lembradas. É o que impede uma delas de voltar do nada. */
+export const TOMBSTONE_LIMIT = 512;
 
 /** A mesa como ela vai para o disco. Sem participantes: eles morrem com o processo. */
 export interface StoredBoard {
@@ -98,15 +100,48 @@ export interface JoinResult {
   participants: BoardParticipant[];
 }
 
-export type ManageAction = 'lock' | 'unlock' | 'observers' | 'clear' | 'close' | 'reopen' | 'archive' | 'rename' | 'revoke' | 'restore';
+export type ManageAction = 'lock' | 'unlock' | 'observers' | 'clear' | 'close' | 'reopen' | 'archive' | 'rename' | 'revoke' | 'restore' | 'delete';
 
 export class Whiteboards {
   private readonly boards = new Map<string, LiveBoard>();
+  // Mesas excluídas.
+  //
+  // Excluir precisa ser definitivo, e "definitivo" tem um inimigo: a mesa pode
+  // voltar de fora. Um cliente que estava desenhando quando a exclusão
+  // aconteceu ainda tem o quadro na memória, e no P2P ele devolve o que tem
+  // quando o host troca. Sem uma lápide, a mesa excluída reapareceria inteira
+  // na primeira troca de host — e quem a excluiu não teria como saber por quê.
+  private readonly tombstones = new Set<string>();
+  private tombstoneOrder: string[] = [];
 
-  constructor(private readonly onChange: (board: StoredBoard) => void = () => undefined) {}
+  constructor(private readonly onChange: (board: StoredBoard) => void = () => undefined, private readonly onDelete: (boardId: string, tombstones: readonly string[]) => void = () => undefined) {}
+
+  /** Uma mesa que foi excluída não volta — nem por adoção, nem por reconexão. */
+  wasDeleted(boardId: string): boolean {
+    return this.tombstones.has(boardId);
+  }
+
+  get deletedBoards(): readonly string[] {
+    return this.tombstoneOrder;
+  }
+
+  private rememberDeletion(boardId: string): void {
+    if (this.tombstones.has(boardId)) return;
+    this.tombstones.add(boardId);
+    this.tombstoneOrder.push(boardId);
+    // A lista tem teto: a mais antiga sai primeiro. Uma mesa excluída há
+    // quinhentas exclusões já não tem ninguém segurando uma cópia dela.
+    while (this.tombstoneOrder.length > TOMBSTONE_LIMIT) {
+      const antiga = this.tombstoneOrder.shift();
+      if (antiga) this.tombstones.delete(antiga);
+    }
+  }
 
   create(input: CreateBoardInput): BoardOutcome<BoardSummary> {
-    if (this.boards.size >= MAX_BOARDS) return { ok: false, error: `Este servidor já tem ${MAX_BOARDS} mesas. Arquive alguma antes de criar outra.` };
+    // Arquivar libera a vaga *do canal*, porque o limite por canal conta só as
+    // abertas — mas não libera esta, que conta tudo o que ocupa disco. Dizer
+    // "arquive" aqui mandaria a pessoa fazer algo que não resolve.
+    if (this.boards.size >= MAX_BOARDS) return { ok: false, error: `Este servidor já tem ${MAX_BOARDS} mesas, contando as arquivadas. Exclua alguma antes de criar outra.` };
     const noCanal = [...this.boards.values()].filter((board) => board.channelId === input.channelId && board.status === 'open');
     if (noCanal.length >= MAX_BOARDS_PER_CHANNEL) {
       return { ok: false, error: `Este canal já tem ${MAX_BOARDS_PER_CHANNEL} mesas abertas. Encerre ou arquive alguma antes de criar outra.` };
@@ -278,12 +313,21 @@ export class Whiteboards {
     return { ok: true, value: recoverBoard(board.snapshot, board.log, Number.isFinite(since) ? Math.max(0, Math.floor(since)) : 0) };
   }
 
-  manage(boardId: string, actor: BoardActor, action: ManageAction, value?: unknown): BoardOutcome<{ board: BoardSummary; op?: BoardOpEnvelope; revoked?: string }> {
+  manage(boardId: string, actor: BoardActor, action: ManageAction, value?: unknown): BoardOutcome<{ board: BoardSummary; op?: BoardOpEnvelope; revoked?: string; deleted?: boolean }> {
     const board = this.boards.get(boardId);
     if (!board) return { ok: false, error: 'Essa mesa não existe mais.' };
     if (!canManageBoard(board, actor)) return { ok: false, error: 'Só quem criou a mesa ou administra o servidor pode fazer isso.' };
     let op: BoardOpEnvelope | undefined;
     let revoked: string | undefined;
+    // A exclusão é a única ação que devolve o retrato de algo que já não
+    // existe: quem chama precisa do nome da mesa para poder dizer o que sumiu.
+    if (action === 'delete') {
+      const retrato = this.summary(board);
+      this.boards.delete(boardId);
+      this.rememberDeletion(boardId);
+      this.onDelete(boardId, this.tombstoneOrder);
+      return { ok: true, value: { board: retrato, deleted: true } };
+    }
     switch (action) {
       case 'lock': board.locked = true; break;
       case 'unlock': board.locked = false; break;
@@ -370,6 +414,9 @@ export class Whiteboards {
   // que chegar manda, e os demais viram reentrega — e recusada se a origem for
   // outra: conteúdo de um grupo não atravessa para outro.
   adopt(input: StoredBoard, origin: string): BoardOutcome<BoardSummary> {
+    // A primeira pergunta é se ela foi excluída: devolver uma mesa que alguém
+    // apagou de propósito é desfazer a decisão dessa pessoa em silêncio.
+    if (this.tombstones.has(input.id)) return { ok: false, error: 'Essa mesa foi excluída.' };
     if (input.origin !== origin) return { ok: false, error: 'Essa mesa é de outro grupo.' };
     if (this.boards.has(input.id)) return { ok: false, error: 'Esta mesa já está aqui.' };
     if (this.boards.size >= MAX_BOARDS) return { ok: false, error: 'Não há espaço para mais mesas neste servidor.' };
@@ -384,10 +431,14 @@ export class Whiteboards {
     return [...this.boards.values()].map((board) => stored(board));
   }
 
-  /** O que volta do disco quando o servidor sobe. */
-  load(boards: readonly StoredBoard[]): void {
+  /** O que volta do disco quando o servidor sobe, exclusões inclusive. */
+  load(boards: readonly StoredBoard[], deleted: readonly string[] = []): void {
     this.boards.clear();
+    this.tombstones.clear();
+    this.tombstoneOrder = [];
+    for (const boardId of deleted.slice(-TOMBSTONE_LIMIT)) this.rememberDeletion(boardId);
     for (const board of boards.slice(0, MAX_BOARDS)) {
+      if (this.tombstones.has(board.id)) continue;
       const vivo = this.hydrate(board);
       this.boards.set(vivo.id, vivo);
     }

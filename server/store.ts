@@ -56,6 +56,8 @@ interface StoredData {
   // 0.9.1, e ausência é lista vazia — carregar sem elas precisa continuar
   // funcionando.
   boards: StoredBoard[];
+  /** Ids de mesas excluídas. É o que impede uma delas de voltar do nada. */
+  deletedBoards: string[];
 }
 
 type StoredAttachment = Pick<ChatAttachment, 'id' | 'name' | 'mimeType' | 'size'>;
@@ -76,6 +78,7 @@ const initialData = (): StoredData => ({
   invites: [],
   auditLog: [],
   boards: [],
+  deletedBoards: [],
 });
 
 function profileKey(username: string): string {
@@ -150,6 +153,7 @@ export class JsonStore {
         sessions,
         auditLog: parsed.auditLog ?? [],
         boards: parsed.boards ?? [],
+        deletedBoards: parsed.deletedBoards ?? [],
       };
       if (migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
@@ -285,13 +289,15 @@ export class JsonStore {
   get categories(): readonly CategoryRecord[] { return this.data.categories; }
   get auditLog(): readonly AuditEntry[] { return this.data.auditLog; }
   get boards(): readonly StoredBoard[] { return this.data.boards ?? (this.data.boards = []); }
+  get deletedBoards(): readonly string[] { return this.data.deletedBoards ?? (this.data.deletedBoards = []); }
 
   // As mesas vão para o disco inteiras, e não por operação: o arquivo já é
   // reescrito por completo a cada gravação, e um caminho incremental aqui só
   // criaria uma segunda verdade para manter em dia. Quem chama debounce a
   // gravação — desenhar produz operações a poucos milissegundos de distância.
-  async saveBoards(boards: readonly StoredBoard[]): Promise<void> {
+  async saveBoards(boards: readonly StoredBoard[], deleted?: readonly string[]): Promise<void> {
     this.data.boards = [...boards];
+    if (deleted) this.data.deletedBoards = [...deleted];
     await this.save();
   }
 

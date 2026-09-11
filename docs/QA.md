@@ -193,6 +193,23 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Traço e exclusão de mesas — 0.9.3
+
+| Item | Estado |
+| --- | --- |
+| Arrasto no ritmo de uma mão produzia um ponto | REPRODUZIDO (servidor real, 1 operação de 1 ponto) |
+| O mesmo arrasto depois da correção | TESTADO NO APLICATIVO (1 traço, 14 pontos, trajeto inteiro) |
+| Confirmação no meio do arrasto não encerra o traço | TESTADO AUTOMATICAMENTE (6 casos) |
+| Excluir pede confirmação e diz o que não alcança | TESTADO NO APLICATIVO |
+| Quem não gerencia não exclui | TESTADO AUTOMATICAMENTE (servidor real) |
+| Exclusão sobrevive ao reinício do servidor | TESTADO AUTOMATICAMENTE (servidor reiniciado) |
+| Mesa excluída não aceita entrada nem desenho | TESTADO AUTOMATICAMENTE (servidor real) |
+| Devolução na troca de host não ressuscita a excluída | TESTADO AUTOMATICAMENTE (servidor P2P real) |
+| Mesa some da lista de quem está no canal | TESTADO NO APLICATIVO |
+| Mensagem do teto global fala em excluir | VALIDADO POR ANÁLISE |
+| Traço com caneta física e pressão | FORA DESTA VERSÃO |
+| Arrasto com dois clientes desenhando ao mesmo tempo | IMPLEMENTADO — REQUER TESTE MANUAL |
+
 ## Bandeja, mesa e atualização — 0.9.2
 
 | Item | Estado |

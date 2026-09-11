@@ -1,5 +1,58 @@
 # Histórico de versões
 
+## 0.9.3 — o traço volta a ser um traço
+
+Esta versão sai da **0.9.2** e conserta o que estava quebrado na mesa.
+
+**Arrastar desenhava um ponto**
+
+Clicar deixava um ponto; arrastar deixava o mesmo ponto e mais nada. Um arrasto
+de 240 pixels chegava ao servidor como **uma operação, de um ponto** — o resto
+da mão era descartado em silêncio.
+
+A causa não era o ponteiro, a coordenada nem o desenho. Duas coisas diferentes
+moravam no mesmo lugar: *o traço que a mão está fazendo* e *o eco desenhado na
+tela enquanto a confirmação não volta*. O eco era apagado assim que o quadro
+confirmado alcançava o que já tinha sido enviado — e numa rede local isso leva
+milissegundos, **no meio do arrasto**. A partir dali cada movimento não tinha
+mais em que se apoiar.
+
+Agora são duas coisas separadas, com uma regra: **enquanto a caneta estiver
+encostada, nada esquece o traço.** O mesmo arrasto que virava um ponto agora
+chega inteiro.
+
+Vale a pena dizer por que isso passou: um teste em laço apertado desenha a
+linha certinha, porque nele a confirmação nunca chega no meio do movimento. Só
+o ritmo de uma mão reproduz. É esse ritmo que o teste novo percorre.
+
+**Excluir uma mesa, de verdade**
+
+Havia limpar, encerrar e arquivar — nenhum deles apagava a mesa. Agora há
+**excluir**, e ele é o único sem volta:
+
+- **limpar** esvazia a folha e a mesa continua lá;
+- **encerrar** para os desenhos e todo mundo continua vendo;
+- **arquivar** tira da lista do dia a dia guardando o conteúdo;
+- **excluir** apaga a mesa e o que foi desenhado nela, para todo mundo.
+
+A exclusão pergunta antes, é gravada na hora e não volta: nem no reinício do
+servidor, nem quando alguém que ainda tinha o quadro na memória tenta devolvê-lo
+na troca de host do P2P. O que já foi exportado em PNG continua com quem salvou
+— isso a exclusão não alcança, e a tela diz isso.
+
+**Uma mensagem que mandava fazer a coisa errada**
+
+O teto de mesas do servidor dizia *"Arquive alguma antes de criar outra"* e
+continuava contando as arquivadas. Agora ele fala em excluir, que é o que
+realmente libera espaço. O teto por canal continua liberando com o arquivamento,
+porque ele conta só as mesas abertas.
+
+**Auditoria**
+
+Esta versão vem com `docs/AUDITORIA-0.9.2.md`: o que foi reproduzido, o que foi
+confirmado lendo o código, o que não foi olhado, e qual é a próxima etapa
+recomendada — com a evidência de cada coisa.
+
 ## 0.9.2 — a janela fechada não fecha o Tumacord
 
 Esta versão sai da **0.9.1** e conserta três coisas que apareceram em uso.
