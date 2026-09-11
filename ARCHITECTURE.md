@@ -164,8 +164,14 @@ campo continua todo lá, no ponteiro.
 ## Contas guardadas neste computador
 
 A coluna esquerda da entrada lista o que `keyring.ts` lembra, por destino. Cada
-linha traz a foto do perfil daquela sessão e um **x** que esquece aquele destino
-— sessão e chave —, com uma confirmação antes, porque não há como desfazer.
+linha traz a foto do perfil daquela sessão, uma pastilha dizendo se ela é **P2P**
+ou de **servidor** dedicado, e um **x** que esquece aquele destino — sessão e
+chave —, com uma confirmação antes, porque não há como desfazer.
+
+O modo vem escrito porque o nome não o carrega: `originLabel` devolve modo e
+lugar separados justamente para a tela poder dizer os dois. `describeOrigin`
+devolve a mesma coisa por extenso ("no servidor dedicado Casa do Tuma"), para
+caber no meio de uma frase — a confirmação e as dicas usam essa forma.
 
 A foto não vem do endereço relativo que o resto do app usa: na entrada não há
 sessão aberta, e esse endereço não aponta para lugar nenhum. `SavedAvatar`

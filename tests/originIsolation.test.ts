@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { originFor } from '../src/lib/origin';
+import { describeOrigin, originFor, originLabel } from '../src/lib/origin';
 
 // A origem é o que impede a conversa de um lugar de voltar como se fosse de
 // outro. O documento do projeto é explícito sobre o que não serve: nome de
@@ -50,3 +50,28 @@ test('um grupo só de rede local tem a própria origem, e não a de ninguém', (
   assert.equal(redeLocal, 'grupo:rede-local');
   assert.notEqual(redeLocal, originFor({ connectionMode: 'p2p', inviteKey: 'convite' }));
 });
+
+// Como o destino se apresenta. O nome sozinho não diz o modo: um servidor
+// dedicado chamado "Casa do Tuma" e um grupo P2P chamado "Tumacord" apareciam
+// iguais na lista de contas guardadas, e escolher entre eles era adivinhar.
+test('a etiqueta de um destino diz o modo antes do nome', () => {
+  assert.deepEqual(originLabel('servidor:casa', 'Casa do Tuma'), { mode: 'server', place: 'Casa do Tuma' });
+  assert.deepEqual(originLabel('endereco:https://casa:4600', 'Casa do Tuma'), { mode: 'server', place: 'Casa do Tuma' });
+  assert.deepEqual(originLabel('grupo:convite', 'Tumacord'), { mode: 'p2p', place: 'Tumacord' });
+  assert.deepEqual(originLabel('grupo:rede-local'), { mode: 'p2p', place: 'Rede local' });
+});
+
+test('um destino sem nome ainda declara o modo', () => {
+  assert.equal(originLabel('servidor:casa').mode, 'server');
+  assert.equal(originLabel('grupo:convite').mode, 'p2p');
+  assert.equal(originLabel('grupo:convite').place, 'Por convite');
+});
+
+test('por extenso, o destino cabe no meio de uma frase', () => {
+  assert.equal(describeOrigin('servidor:casa', 'Casa do Tuma'), 'no servidor dedicado Casa do Tuma');
+  assert.equal(describeOrigin('servidor:casa'), 'no servidor dedicado');
+  assert.equal(describeOrigin('grupo:rede-local'), 'no grupo P2P da rede local');
+  assert.equal(describeOrigin('grupo:convite', 'Tumacord'), 'no grupo P2P de Tumacord');
+  assert.equal(describeOrigin('grupo:convite'), 'no grupo P2P do convite');
+});
+

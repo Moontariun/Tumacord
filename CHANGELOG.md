@@ -5,7 +5,7 @@
 <!-- tumacord:resumo -->
 A tela de entrada foi refeita. Onde havia uma coluna que descia até precisar de rolagem, agora há duas que cabem na tela.
 
-- As contas guardadas aparecem com a foto do perfil e um "x" para esquecer cada uma, com uma confirmação antes.
+- As contas guardadas aparecem com a foto do perfil, dizendo se cada uma é P2P ou de servidor dedicado, e com um "x" para esquecer.
 - Sair de uma conta do modo P2P passou a funcionar: ela voltava sozinha na abertura seguinte.
 - O texto que explicava cada campo virou dica no ponteiro. Nada se perdeu, e a tela ficou limpa.
 <!-- /tumacord:resumo -->
@@ -33,6 +33,11 @@ nenhum. A busca agora tenta primeiro o que este computador já baixou, que é o
 único caminho que funciona com o host do grupo desligado, e depois o servidor
 daquele destino. Falhando as duas, vale a inicial do nome; um círculo vazio
 seria pior.
+
+Cada linha também diz, escrito, se aquela conta é **P2P** ou de **servidor**
+dedicado. O nome sozinho não dizia: um servidor chamado "Casa do Tuma" aparecia
+como "Casa do Tuma" e um grupo P2P como "Grupo de Tumacord" — escolher entre
+eles era adivinhar.
 
 Ao lado de cada uma há um **x**, que esquece aquele destino — a sessão e a chave
 guardada dele — depois de uma confirmação, porque não há como desfazer. Até aqui
@@ -72,11 +77,12 @@ ponteiro. A regra está em `ARCHITECTURE.md`, na seção *Interface*.
 
 **Validação**
 
-656 testes passam. Os quatro novos cobrem o chaveiro encostado no armazenamento
-do navegador: sair de uma conta convertida da gaveta antiga, "esquecer tudo"
-depois da conversão, a gaveta antiga que continua no disco e o descarte de uma
-sessão que ninguém adotou. A tela foi medida no navegador, nos dois modos e nas
-duas larguras; o que está dito acima em pixels foi lido da tela, não estimado.
+659 testes passam. Quatro novos cobrem o chaveiro encostado no armazenamento do
+navegador: sair de uma conta convertida da gaveta antiga, "esquecer tudo" depois
+da conversão, a gaveta antiga que continua no disco e o descarte de uma sessão
+que ninguém adotou. Três cobrem a etiqueta de cada destino, com e sem nome. A
+tela foi medida no navegador, nos dois modos e nas duas larguras; o que está
+dito acima em pixels foi lido da tela, não estimado.
 
 ## 0.9.7 — a live só começa quando você diz que quer
 

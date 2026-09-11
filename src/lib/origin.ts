@@ -39,9 +39,24 @@ export function originFor(input: DestinationInput): string {
   return chave ? `grupo:${chave.slice(0, 64)}` : 'grupo:rede-local';
 }
 
-/** Como o destino se apresenta para quem está escolhendo entre eles. */
+/**
+ * O modo e o lugar de um destino, separados.
+ *
+ * Separados porque a tela precisa dizer os dois, e o nome sozinho não diz o
+ * modo: um servidor dedicado chamado "Casa do Tuma" aparecia como "Casa do
+ * Tuma", e um grupo P2P como "Grupo de Tumacord" — quem olhava a lista de
+ * contas guardadas não tinha como saber qual era qual.
+ */
+export function originLabel(origin: string, serverName = ''): { mode: 'p2p' | 'server'; place: string } {
+  if (origin === 'grupo:rede-local') return { mode: 'p2p', place: 'Rede local' };
+  if (origin.startsWith('grupo:')) return { mode: 'p2p', place: serverName || 'Por convite' };
+  return { mode: 'server', place: serverName || 'Sem nome' };
+}
+
+/** O mesmo destino dito por extenso, para caber no meio de uma frase. */
 export function describeOrigin(origin: string, serverName = ''): string {
-  if (origin === 'grupo:rede-local') return 'Grupo na rede local';
-  if (origin.startsWith('grupo:')) return serverName ? `Grupo de ${serverName}` : 'Grupo por convite';
-  return serverName || 'Servidor dedicado';
+  const { mode, place } = originLabel(origin, serverName);
+  if (mode === 'server') return serverName ? `no servidor dedicado ${serverName}` : 'no servidor dedicado';
+  if (origin === 'grupo:rede-local') return 'no grupo P2P da rede local';
+  return serverName ? `no grupo P2P de ${place}` : 'no grupo P2P do convite';
 }

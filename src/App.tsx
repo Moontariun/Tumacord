@@ -11,7 +11,7 @@ import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './components/UpdatePanel';
 import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type ScreenAudioSupport, type StreamQuality } from './hooks/useVoice';
 import { SCREEN_QUALITIES } from './lib/screenQuality';
-import { describeOrigin } from './lib/origin';
+import { describeOrigin, originLabel } from './lib/origin';
 import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetThisDestination, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
 import { playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
@@ -213,9 +213,9 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
           {lembradas.length > 0 && <div className="saved-destinations">
             <span className="group-title"><span>Continuar em</span></span>
             {lembradas.map(({ destination, session: guardada }) => <div key={destination} className="saved-destination">
-              <button type="button" onClick={() => retomar(destination)} title={`Entrar como ${guardada.user.username} sem digitar a senha`}>
+              <button type="button" onClick={() => retomar(destination)} title={`Entrar como ${guardada.user.username} ${describeOrigin(destination, guardada.serverName)}, sem digitar a senha`}>
                 <SavedAvatar session={guardada} />
-                <span><strong>{guardada.user.username}</strong><small>{describeOrigin(destination, guardada.serverName)}</small></span>
+                <SavedOrigin destination={destination} serverName={guardada.serverName} username={guardada.user.username} />
               </button>
               <button type="button" className="saved-forget" onClick={() => setAEsquecer({ destination, session: guardada })} title="Esquecer esta conta neste computador" aria-label={`Esquecer ${guardada.user.username}`}><Icon name="close" /></button>
             </div>)}
@@ -254,12 +254,27 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
     </div>
     {aEsquecer && <ConfirmDialog
       title="Esquecer esta conta?"
-      body={<>A sessão de <strong>{aEsquecer.session.user.username}</strong> em {describeOrigin(aEsquecer.destination, aEsquecer.session.serverName)} sai deste computador, junto com a chave guardada. A conta continua existindo.</>}
+      body={<>A sessão de <strong>{aEsquecer.session.user.username}</strong> {describeOrigin(aEsquecer.destination, aEsquecer.session.serverName)} sai deste computador, junto com a chave guardada. A conta continua existindo.</>}
       confirmLabel="Esquecer"
       onConfirm={() => esquecer(aEsquecer.destination)}
       onClose={() => setAEsquecer(null)}
     />}
   </main>;
+}
+
+/**
+ * Quem é a conta e de que tipo de lugar ela é.
+ *
+ * O modo vem antes do nome, escrito, porque o nome sozinho não diz: um
+ * servidor dedicado chamado "Casa do Tuma" e um grupo P2P chamado "Tumacord"
+ * apareciam iguais na lista, e escolher entre eles virava adivinhação.
+ */
+function SavedOrigin({ destination, serverName, username }: { destination: string; serverName: string; username: string }) {
+  const { mode, place } = originLabel(destination, serverName);
+  return <span>
+    <strong>{username}</strong>
+    <small><em className={`origin-mode ${mode}`}>{mode === 'p2p' ? 'P2P' : 'Servidor'}</em><span>{place}</span></small>
+  </span>;
 }
 
 /**

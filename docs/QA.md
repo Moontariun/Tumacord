@@ -207,6 +207,7 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Coluna única abaixo de 880 px de largura | TESTADO NO NAVEGADOR (520 px: empilha e rola) |
 | "x" com confirmação esquece o destino e persiste | TESTADO NO NAVEGADOR (chaveiro relido depois do clique) |
 | Foto do perfil na conta guardada | TESTADO NO NAVEGADOR (imagem servida pelo endereço do destino) |
+| Cada conta guardada diz se é P2P ou de servidor dedicado | TESTADO AUTOMATICAMENTE (etiqueta) + TESTADO NO NAVEGADOR |
 | Foto vinda do que este computador já baixou, com o host desligado | IMPLEMENTADO — REQUER TESTE MANUAL (exige o app instalado) |
 | Inicial no lugar da foto quando nenhum candidato responde | TESTADO NO NAVEGADOR |
 
