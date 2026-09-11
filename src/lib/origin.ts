@@ -47,16 +47,27 @@ export function originFor(input: DestinationInput): string {
  * Tuma", e um grupo P2P como "Grupo de Tumacord" — quem olhava a lista de
  * contas guardadas não tinha como saber qual era qual.
  */
+/**
+ * O nome que todo servidor embutido carrega quando ninguém definiu `SERVER_NAME`.
+ *
+ * No P2P o servidor é o embutido de quem hospeda, e ele quase nunca foi
+ * renomeado: o nome do grupo saía como "Tumacord" em todos eles, o que não
+ * identifica grupo nenhum. Um nome escolhido continua valendo; este não.
+ */
+const NOME_PADRAO = 'Tumacord';
+
 export function originLabel(origin: string, serverName = ''): { mode: 'p2p' | 'server'; place: string } {
+  const nome = serverName.trim();
   if (origin === 'grupo:rede-local') return { mode: 'p2p', place: 'Rede local' };
-  if (origin.startsWith('grupo:')) return { mode: 'p2p', place: serverName || 'Por convite' };
-  return { mode: 'server', place: serverName || 'Sem nome' };
+  if (origin.startsWith('grupo:')) return { mode: 'p2p', place: nome && nome !== NOME_PADRAO ? nome : 'Por convite' };
+  return { mode: 'server', place: nome || 'Sem nome' };
 }
 
 /** O mesmo destino dito por extenso, para caber no meio de uma frase. */
 export function describeOrigin(origin: string, serverName = ''): string {
   const { mode, place } = originLabel(origin, serverName);
-  if (mode === 'server') return serverName ? `no servidor dedicado ${serverName}` : 'no servidor dedicado';
-  if (origin === 'grupo:rede-local') return 'no grupo P2P da rede local';
-  return serverName ? `no grupo P2P de ${place}` : 'no grupo P2P do convite';
+  if (mode === 'server') return place === 'Sem nome' ? 'no servidor dedicado' : `no servidor dedicado ${place}`;
+  if (place === 'Rede local') return 'no grupo P2P da rede local';
+  if (place === 'Por convite') return 'no grupo P2P do convite';
+  return `no grupo P2P de ${place}`;
 }

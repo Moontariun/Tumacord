@@ -57,8 +57,17 @@ test('um grupo só de rede local tem a própria origem, e não a de ninguém', (
 test('a etiqueta de um destino diz o modo antes do nome', () => {
   assert.deepEqual(originLabel('servidor:casa', 'Casa do Tuma'), { mode: 'server', place: 'Casa do Tuma' });
   assert.deepEqual(originLabel('endereco:https://casa:4600', 'Casa do Tuma'), { mode: 'server', place: 'Casa do Tuma' });
-  assert.deepEqual(originLabel('grupo:convite', 'Tumacord'), { mode: 'p2p', place: 'Tumacord' });
+  assert.deepEqual(originLabel('grupo:convite', 'Casa da Ana'), { mode: 'p2p', place: 'Casa da Ana' });
   assert.deepEqual(originLabel('grupo:rede-local'), { mode: 'p2p', place: 'Rede local' });
+});
+
+// No P2P o servidor é o embutido de quem hospeda, e ele quase nunca foi
+// renomeado: o nome do grupo saía "Tumacord" em todos eles.
+test('o nome padrão do servidor embutido não vira nome de grupo', () => {
+  assert.equal(originLabel('grupo:convite', 'Tumacord').place, 'Por convite');
+  assert.equal(describeOrigin('grupo:convite', 'Tumacord'), 'no grupo P2P do convite');
+  assert.equal(originLabel('grupo:rede-local', 'Tumacord').place, 'Rede local');
+  assert.equal(originLabel('servidor:casa', 'Tumacord').place, 'Tumacord', 'num dedicado o nome é declarado por quem hospeda, e vale');
 });
 
 test('um destino sem nome ainda declara o modo', () => {
@@ -71,7 +80,7 @@ test('por extenso, o destino cabe no meio de uma frase', () => {
   assert.equal(describeOrigin('servidor:casa', 'Casa do Tuma'), 'no servidor dedicado Casa do Tuma');
   assert.equal(describeOrigin('servidor:casa'), 'no servidor dedicado');
   assert.equal(describeOrigin('grupo:rede-local'), 'no grupo P2P da rede local');
-  assert.equal(describeOrigin('grupo:convite', 'Tumacord'), 'no grupo P2P de Tumacord');
+  assert.equal(describeOrigin('grupo:convite', 'Casa da Ana'), 'no grupo P2P de Casa da Ana');
   assert.equal(describeOrigin('grupo:convite'), 'no grupo P2P do convite');
 });
 

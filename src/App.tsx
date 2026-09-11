@@ -213,7 +213,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
           {lembradas.length > 0 && <div className="saved-destinations">
             <span className="group-title"><span>Continuar em</span></span>
             {lembradas.map(({ destination, session: guardada }) => <div key={destination} className="saved-destination">
-              <button type="button" onClick={() => retomar(destination)} title={`Entrar como ${guardada.user.username} ${describeOrigin(destination, guardada.serverName)}, sem digitar a senha`}>
+              <button type="button" onClick={() => retomar(destination)} title={`Entrar como ${guardada.user.username} ${describeOrigin(destination, guardada.serverName)} — ${guardada.serverUrl}`}>
                 <SavedAvatar session={guardada} />
                 <SavedOrigin destination={destination} serverName={guardada.serverName} username={guardada.user.username} />
               </button>

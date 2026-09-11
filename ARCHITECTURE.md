@@ -173,6 +173,13 @@ lugar separados justamente para a tela poder dizer os dois. `describeOrigin`
 devolve a mesma coisa por extenso ("no servidor dedicado Casa do Tuma"), para
 caber no meio de uma frase — a confirmação e as dicas usam essa forma.
 
+O *lugar* de um grupo P2P **não** é o `serverName`. No P2P o servidor é o
+embutido de quem hospeda, e ele só se chama outra coisa se alguém definiu
+`SERVER_NAME`; o padrão é "Tumacord", igual em todo grupo, e usá-lo dava a
+todos os grupos o mesmo nome. Um grupo é "Rede local" ou "Por convite", e um
+nome escolhido de verdade continua valendo. No dedicado o nome vale sempre,
+porque lá quem hospeda o escolheu.
+
 A foto não vem do endereço relativo que o resto do app usa: na entrada não há
 sessão aberta, e esse endereço não aponta para lugar nenhum. `SavedAvatar`
 tenta primeiro o que este computador já baixou (`/api/local/attachments`, que

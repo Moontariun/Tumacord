@@ -39,6 +39,14 @@ dedicado. O nome sozinho não dizia: um servidor chamado "Casa do Tuma" aparecia
 como "Casa do Tuma" e um grupo P2P como "Grupo de Tumacord" — escolher entre
 eles era adivinhar.
 
+E o nome do grupo P2P deixou de ser "Tumacord". No P2P o servidor é o embutido
+de quem hospeda, que só se chama outra coisa se alguém definiu `SERVER_NAME` —
+ou seja, quase nunca. O nome que aparecia ali era o padrão, igual em todos os
+grupos, e não identificava nenhum. Agora um grupo P2P aparece como **Rede
+local** ou **Por convite**, e o nome só ocupa a linha quando alguém escolheu
+um. No servidor dedicado o nome continua, porque lá ele foi escolhido por quem
+hospeda. O endereço daquele destino fica na dica do ponteiro.
+
 Ao lado de cada uma há um **x**, que esquece aquele destino — a sessão e a chave
 guardada dele — depois de uma confirmação, porque não há como desfazer. Até aqui
 o único jeito de tirar uma conta da lista era entrar nela para poder sair.
@@ -77,10 +85,11 @@ ponteiro. A regra está em `ARCHITECTURE.md`, na seção *Interface*.
 
 **Validação**
 
-659 testes passam. Quatro novos cobrem o chaveiro encostado no armazenamento do
+660 testes passam. Quatro novos cobrem o chaveiro encostado no armazenamento do
 navegador: sair de uma conta convertida da gaveta antiga, "esquecer tudo" depois
 da conversão, a gaveta antiga que continua no disco e o descarte de uma sessão
-que ninguém adotou. Três cobrem a etiqueta de cada destino, com e sem nome. A
+que ninguém adotou. Quatro cobrem a etiqueta de cada destino — com nome, sem
+nome, e com o nome padrão do servidor embutido, que não vira nome de grupo. A
 tela foi medida no navegador, nos dois modos e nas duas larguras; o que está
 dito acima em pixels foi lido da tela, não estimado.
 
