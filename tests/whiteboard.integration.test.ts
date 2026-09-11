@@ -44,6 +44,26 @@ function emit<T>(socket: Socket, event: string, payload: unknown, timeoutMs = 20
   });
 }
 
+/**
+ * O que o servidor de teste reclamou antes de sair.
+ *
+ * Com `stdio: 'ignore'` uma saída com código 1 era só um código: o CI dizia
+ * "servidor encerrou (1)" e não havia como saber por quê. Guardar as últimas
+ * linhas do erro custa nada e transforma a próxima ocorrência em diagnóstico.
+ */
+function comDiagnostico(child: ChildProcess): ChildProcess {
+  const queixas: string[] = [];
+  child.stderr?.on('data', (pedaco: Buffer) => { queixas.push(pedaco.toString()); });
+  Object.defineProperty(child, 'queixas', { value: queixas, configurable: true });
+  return child;
+}
+
+function motivoDaSaida(child: ChildProcess): string {
+  const queixas = (child as ChildProcess & { queixas?: string[] }).queixas ?? [];
+  const texto = queixas.join('').trim().split('\n').slice(-4).join(' | ');
+  return texto ? `: ${texto}` : ' sem dizer por quê (nada no erro padrão)';
+}
+
 async function pararServidor(child: ChildProcess, sinal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
   if (child.exitCode !== null) return;
   child.kill(sinal);
@@ -52,7 +72,7 @@ async function pararServidor(child: ChildProcess, sinal: NodeJS.Signals = 'SIGTE
 
 async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 600; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`servidor encerrou (${child.exitCode})`);
+    if (child.exitCode !== null) throw new Error(`servidor encerrou (${child.exitCode})${motivoDaSaida(child)}`);
     try { if ((await fetch(`${url}/api/health`)).ok) return; } catch { /* subindo */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -68,7 +88,7 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }, p
     TUMACORD_P2P_MODE: p2p ? '1' : '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
     TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
   };
-  let child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: 'ignore' });
+  let child = comDiagnostico(spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'ignore', 'pipe'] }));
   const sockets: Socket[] = [];
   context.after(async () => {
     // Esperar o processo sair antes de apagar o diretório. Desde a 0.9.1 o
@@ -106,7 +126,7 @@ async function ambiente(context: { after: (fn: () => Promise<void>) => void }, p
     // `abrupto` não há gravação nenhuma na saída — é o que sobra quando o
     // sistema não oferece encerramento gracioso.
     await pararServidor(child, abrupto ? 'SIGKILL' : 'SIGTERM');
-    child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: 'ignore' });
+    child = comDiagnostico(spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'ignore', 'pipe'] }));
     await waitForServer(url, child);
   };
 

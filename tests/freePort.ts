@@ -1,4 +1,4 @@
-import { openSync, closeSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { openSync, closeSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,9 +24,38 @@ import path from 'node:path';
 // continua sendo uma ligação de verdade: só é devolvida a porta que o sistema
 // deixou ligar agora.
 
-/** Faixa alta, fora do que o sistema entrega sozinho para portas efêmeras. */
+/**
+ * Abaixo do que o sistema entrega sozinho para portas efêmeras.
+ *
+ * Este arquivo dizia que 20.000–60.000 era uma faixa "fora do que o sistema
+ * entrega sozinho", e isso estava errado: no Linux o padrão de
+ * `ip_local_port_range` é 32768–60999, então dois terços das candidatas eram
+ * justamente portas que o núcleo pode dar a qualquer conexão de saída.
+ *
+ * E há uma janela em que isso importa. Entre conferir a porta aqui e o
+ * servidor de teste ligá-la passa a inicialização de um processo Node com
+ * `tsx` — bem mais que um piscar —, e nesse intervalo a suíte está abrindo
+ * dezenas de conexões para 127.0.0.1. Uma delas recebe do núcleo exatamente a
+ * porta reservada, o servidor encontra `EADDRINUSE` e sai com código 1. O
+ * sintoma é o que o CI mostrava: "servidor encerrou (1)", intermitente, sempre
+ * no arquivo que sobe mais servidores, e nunca reproduzível na máquina de quem
+ * foi olhar.
+ *
+ * A reserva entre processos não cobria isso: ela impede que outra *suíte* pegue
+ * a porta, não que o *núcleo* a entregue a um cliente.
+ */
+function inicioDasEfemeras(): number {
+  try {
+    const [baixo] = readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/).map(Number);
+    if (Number.isInteger(baixo) && baixo > 4_000) return baixo;
+  } catch { /* não é Linux, ou o arquivo não está legível */ }
+  // O padrão do Linux, que é também o mais baixo entre os sistemas comuns.
+  return 32_768;
+}
+
 const INICIO = 20_000;
-const FIM = 60_000;
+/** Uma folga abaixo do limite: quem o ajusta para baixo não nos pega de surpresa. */
+export const FIM = Math.max(INICIO + 2_000, inicioDasEfemeras() - 500);
 const LARGURA = FIM - INICIO;
 
 // O ponto de partida deste processo. Pids próximos viram faixas distantes, o
@@ -88,15 +117,8 @@ export async function freePort(): Promise<number> {
     if (!reservar(candidata)) continue;
     if (await podeLigar(candidata)) return candidata;
   }
-  // Nenhuma das candidatas serviu: volta a perguntar ao sistema, que é o
-  // caminho antigo. Pior do que uma porta disputada é um teste que não roda.
-  return new Promise((resolve, reject) => {
-    const sonda = createServer();
-    sonda.once('error', reject);
-    sonda.listen(0, '127.0.0.1', () => {
-      const address = sonda.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      sonda.close(() => (port ? resolve(port) : reject(new Error('não consegui uma porta livre'))));
-    });
-  });
+  // Nenhuma das 200 candidatas serviu. Perguntar ao sistema com `listen(0)`
+  // era o caminho antigo, e ele devolve justamente uma porta efêmera — o
+  // problema de que acabamos de sair. Melhor falhar dizendo o que houve.
+  throw new Error(`não consegui uma porta livre entre ${INICIO} e ${FIM}`);
 }

@@ -8,6 +8,7 @@ A tela de entrada foi refeita. Onde havia uma coluna que descia até precisar de
 - As contas guardadas aparecem com a foto do perfil, dizendo se cada uma é P2P ou de servidor dedicado, e com um "x" para esquecer.
 - Sair de uma conta do modo P2P passou a funcionar: ela voltava sozinha na abertura seguinte.
 - O texto que explicava cada campo virou dica no ponteiro. Nada se perdeu, e a tela ficou limpa.
+- Um grupo P2P aparece como "Rede local" ou "Por convite", e não mais com o nome padrão do servidor, igual em todos.
 <!-- /tumacord:resumo -->
 
 **A entrada em duas colunas**
@@ -83,15 +84,44 @@ computador, só para este servidor", "reabre o Tumacord nesta conta sem pedir a
 senha de novo", o que cada modo de conexão significa: tudo continua escrito, no
 ponteiro. A regra está em `ARCHITECTURE.md`, na seção *Interface*.
 
+**A reprovação intermitente do CI, diagnosticada**
+
+"servidor encerrou (1)" reprovava a validação sem dizer por quê, sempre em um
+arquivo que ninguém tinha tocado, e passava ao rodar de novo. Estava anotada
+como suspeita de carga desde a 0.9.6.
+
+Não era carga. As portas dos testes eram sorteadas entre 20.000 e 60.000, e o
+comentário do próprio arquivo dizia que essa faixa estava "fora do que o sistema
+entrega sozinho para portas efêmeras" — o que é falso: no Linux o padrão é
+32768–60999. Dois terços das candidatas eram justamente portas que o núcleo pode
+dar a qualquer conexão de saída.
+
+Entre conferir a porta e o servidor de teste ligá-la passa a inicialização de um
+processo Node inteiro, e nesse intervalo a suíte está abrindo dezenas de
+conexões para `127.0.0.1`. Uma delas recebia do núcleo exatamente a porta
+reservada; o servidor encontrava a porta ocupada e saía. A reserva entre
+processos que existe desde a 0.9.6 não cobria isso — ela impede que outra suíte
+pegue a porta, não que o núcleo a entregue a um cliente.
+
+A faixa agora termina antes de onde as efêmeras começam, lido de
+`ip_local_port_range` quando o sistema o expõe. E os servidores de teste passaram
+a guardar o erro padrão: da próxima vez, "encerrou (1)" vem com o motivo escrito.
+
 **Validação**
 
-660 testes passam. Quatro novos cobrem o chaveiro encostado no armazenamento do
-navegador: sair de uma conta convertida da gaveta antiga, "esquecer tudo" depois
-da conversão, a gaveta antiga que continua no disco e o descarte de uma sessão
-que ninguém adotou. Quatro cobrem a etiqueta de cada destino — com nome, sem
-nome, e com o nome padrão do servidor embutido, que não vira nome de grupo. A
-tela foi medida no navegador, nos dois modos e nas duas larguras; o que está
-dito acima em pixels foi lido da tela, não estimado.
+662 testes passam, em três execuções completas da suíte. Quatro novos cobrem o
+chaveiro encostado no armazenamento do navegador: sair de uma conta convertida
+da gaveta antiga, "esquecer tudo" depois da conversão, a gaveta antiga que
+continua no disco e o descarte de uma sessão que ninguém adotou. Quatro cobrem a etiqueta de cada destino — com nome, sem
+nome, e com o nome padrão do servidor embutido, que não vira nome de grupo.
+Dois cobrem a faixa de portas dos testes contra a do sistema. A tela foi medida
+no navegador, nos dois modos e nas duas larguras; o que está dito acima em
+pixels foi lido da tela, não estimado.
+
+O que **não** foi provado aqui: que a reprovação intermitente acabou. Ela é
+intermitente, e três suítes verdes na minha máquina não são prova — a máquina
+onde ela aparecia é a do CI. O que está provado é que a faixa não encosta mais
+na do sistema, e que a próxima ocorrência dirá o motivo em vez de só o código.
 
 ## 0.9.7 — a live só começa quando você diz que quer
 

@@ -208,6 +208,9 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | "x" com confirmação esquece o destino e persiste | TESTADO NO NAVEGADOR (chaveiro relido depois do clique) |
 | Foto do perfil na conta guardada | TESTADO NO NAVEGADOR (imagem servida pelo endereço do destino) |
 | Cada conta guardada diz se é P2P ou de servidor dedicado | TESTADO AUTOMATICAMENTE (etiqueta) + TESTADO NO NAVEGADOR |
+| O nome padrão do servidor embutido não vira nome de grupo | TESTADO AUTOMATICAMENTE (etiqueta) |
+| Faixa de portas dos testes fora da faixa efêmera do sistema | TESTADO AUTOMATICAMENTE (lido de `ip_local_port_range`) |
+| A reprovação intermitente "servidor encerrou (1)" acabou | **NÃO PROVADO** — ela é intermitente, e só o CI pode dizer |
 | Foto vinda do que este computador já baixou, com o host desligado | IMPLEMENTADO — REQUER TESTE MANUAL (exige o app instalado) |
 | Inicial no lugar da foto quando nenhum candidato responde | TESTADO NO NAVEGADOR |
 
