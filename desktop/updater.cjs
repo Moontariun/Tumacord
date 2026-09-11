@@ -330,6 +330,43 @@ class Updater {
     return this.update({ phase: 'available', error: '' });
   }
 
+  // A pasta de downloads não pode virar arquivo morto.
+  //
+  // Um pacote de versão passa dos noventa megabytes, e três caminhos deixavam
+  // um para trás: o instalador do Windows, que não pode ser apagado enquanto
+  // está rodando; um download que ninguém chegou a aplicar, porque a fase não
+  // sobrevive ao fechamento do aplicativo e na volta ninguém mais sabe daquele
+  // arquivo; e a sobra de uma tentativa interrompida na hora errada.
+  //
+  // A varredura roda na abertura e logo depois de aplicar. Ela guarda só o que
+  // ainda pode ser necessário e apaga o resto — inclusive o instalador da vez
+  // passada, que na abertura seguinte já não está em uso.
+  sweepDownloads(keep = '') {
+    if (!this.downloadDirectory || this.snapshot.phase === 'downloading') return [];
+    const manter = keep ? path.resolve(keep) : '';
+    const removidos = [];
+    let nomes = [];
+    try {
+      nomes = fs.readdirSync(this.downloadDirectory);
+    } catch {
+      // A pasta só existe depois do primeiro download.
+      return removidos;
+    }
+    for (const nome of nomes) {
+      const alvo = path.join(this.downloadDirectory, nome);
+      if (manter && path.resolve(alvo) === manter) continue;
+      try {
+        fs.rmSync(alvo, { recursive: true, force: true });
+        removidos.push(nome);
+      } catch {
+        // Arquivo em uso — o instalador do Windows enquanto roda, por exemplo.
+        // A próxima abertura tenta de novo, e aí ele já terminou.
+      }
+    }
+    if (removidos.length) this.log({ event: 'update-downloads-cleaned', files: removidos.length });
+    return removidos;
+  }
+
   // Aplicar é o único momento em que algo muda fora da pasta de downloads, e é
   // sempre um clique de quem está na frente do computador.
   async apply() {
@@ -338,6 +375,9 @@ class Updater {
     try {
       const applied = await this.applyFile(this.snapshot.file, this.snapshot.version);
       this.log({ event: 'update-applied', version: this.snapshot.version, kind: this.kind, restart: applied.restart });
+      // Aplicado, nada mais na pasta de downloads serve para alguma coisa. O
+      // que estiver em uso resiste aqui e some na abertura seguinte.
+      this.sweepDownloads();
       return this.update({ phase: 'applied', applied, error: '' });
     } catch (error) {
       const message = String(error && error.message ? error.message : error);

@@ -523,6 +523,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
     connectionMode: session.connectionMode ?? 'p2p',
     channelId: selectedChannel?.id ?? 'geral',
     voiceChannelId: voice.channelId ?? undefined,
+    serverUrl: session.serverUrl,
     onNotice: showToast,
   });
   const createBoard = useCallback(async (name: string) => {
@@ -701,8 +702,12 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
         {/* A mesa não é um canal: é uma atividade que acontece dentro de um.
             Ela fica aqui embaixo, com o botão de criar no mesmo lugar dos
             outros grupos, e entrar nela é uma escolha explícita. */}
-        <ChannelGroup title="Mesas de desenho" addLabel="Criar mesa" onAdd={() => setBoardPromptOpen(true)}>
-          {boards.boards.map((board) => {
+        <ChannelGroup title="Mesas de desenho" addLabel="Criar mesa" onAdd={boards.supported === false ? undefined : () => setBoardPromptOpen(true)}>
+          {/* Um botão que não pode funcionar é pior do que botão nenhum: o
+              servidor anterior à 0.9.1 não conhece o pedido e nem responde a
+              ele. Quem enxerga isso lê o motivo em vez de esperar. */}
+          {boards.supported === false && <p className="channel-hint">Este servidor ainda não tem mesas de desenho. Elas chegaram na 0.9.1 — atualize o servidor para usar isso aqui.</p>}
+          {boards.supported !== false && boards.boards.map((board) => {
             const canal = snapshot.channels.find((candidate) => candidate.id === board.channelId);
             return <button
               key={board.id}
@@ -718,7 +723,7 @@ function Tumacord({ session, onSessionChange, onLogout }: { session: SavedSessio
               {board.participants > 0 && <em className="board-entry-count">{board.participants}</em>}
             </button>;
           })}
-          {!boards.boards.length && <p className="channel-hint">Nenhuma mesa por aqui. Crie uma para desenhar junto — não precisa de call nem de transmissão.</p>}
+          {boards.supported !== false && !boards.boards.length && <p className="channel-hint">Nenhuma mesa por aqui. Crie uma para desenhar junto — não precisa de call nem de transmissão.</p>}
         </ChannelGroup>
       </div>
       {voice.channelId && <div className="voice-status">
@@ -1622,7 +1627,7 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
     devices.setPreferences({ ...devices.preferences, [key]: value });
   }
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="settings-modal">
-    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho na tela</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
+    <aside><h2>Configurações</h2><button className={tab === 'media' ? 'selected' : ''} onClick={() => setTab('media')}>Voz e vídeo</button><button className={tab === 'drawing' ? 'selected' : ''} onClick={() => setTab('drawing')}>Desenho</button><button className={tab === 'network' ? 'selected' : ''} onClick={() => setTab('network')}>Rede e conexão</button><button className={tab === 'diagnostics' ? 'selected' : ''} onClick={() => setTab('diagnostics')}>Diagnóstico</button><button onClick={onLogout}>Sair da conta</button><span className="settings-version">Tumacord v{APP_VERSION}</span></aside>
     {tab === 'drawing' && <DrawingSettings drawing={drawing} onChange={onDrawing} onClose={onClose} />}
     {tab === 'network' && <NetworkSettings preferences={networkPreferences} onChange={onNetworkPreferences} onClose={onClose} />}
     {tab === 'diagnostics' && <MediaDiagnostics snapshot={mediaSnapshot} preferences={networkPreferences} connectionMode={connectionMode} onNotice={onNotice} onClose={onClose} />}
@@ -1653,22 +1658,37 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
 // juntas: é a mesma tela, é a mesma decisão. Desligar a primeira faz o lápis
 // sumir para quem assiste e faz o servidor recusar traço — esconder o botão
 // seria conveniência, não permissão.
+// Desenhar virou duas coisas diferentes, e a tela precisa dizer isso.
+//
+// Até a 0.9.0 havia uma só — rabiscar sobre a transmissão de alguém —, e esta
+// seção se chamava "Desenho na tela" e falava só dela. No Linux ela era uma
+// página inteira sobre um recurso que não funciona ali: uma caixa desmarcada e
+// desabilitada, e três parágrafos explicando por quê.
+//
+// A partir da 0.9.1 o desenho de verdade é a mesa compartilhada, que funciona
+// em qualquer sistema e não depende de live nenhuma. O apontamento sobre a
+// transmissão continua existindo, como o que ele sempre foi: uma ferramenta de
+// "olha aqui" que depende da janela sobreposta e, por isso, do Windows.
 function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferences; onChange: (patch: Partial<DrawPreferences>) => void; onClose: () => void }) {
-  return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Desenho na tela</h1>
-    <p className="settings-intro">Quem assiste à sua transmissão pode rabiscar em cima dela para apontar alguma coisa. O traço aparece na live de todo mundo que está vendo, e na sua tela de verdade enquanto você compartilha o monitor inteiro.</p>
+  return <section><button className="modal-close" onClick={onClose}><Icon name="close" /></button><h1>Desenho</h1>
+    <p className="settings-intro">Duas coisas diferentes levam o mesmo nome. A <strong>mesa</strong> é um quadro do grupo, dentro do app. O <strong>apontamento</strong> é um rabisco por cima da transmissão de alguém, para mostrar um detalhe.</p>
 
-    {!DRAW_SUPPORTED_HERE && <div className="quality-note"><strong>Neste sistema, ninguém desenha na sua transmissão</strong><span>Receber desenho só funciona no Windows, e a partir da 0.9.0 é só lá que ele é oferecido. A janela que pinta o traço sobre a área de trabalho tira o foco do teclado de quem está jogando no Linux e não o devolve, e o portal do PipeWire não sabe deixá-la fora da captura — o traço voltaria dentro do próprio vídeo. Quem assiste vê o lápis desabilitado na sua live, e o servidor recusa o traço. <strong>Você continua desenhando na transmissão de quem estiver no Windows</strong>, normalmente.</span></div>}
+    <div className="quality-note"><strong>Mesa de desenho compartilhada</strong><span>Fica na barra dos canais, embaixo das calls. Alguém cria, os outros entram, e todo mundo desenha no mesmo quadro. <strong>Não tem configuração aqui</strong> — quem criou a mesa manda nela, de dentro dela: bloquear novos desenhos, aceitar observadores, limpar o quadro, encerrar. Funciona igual no Linux e no Windows, e não precisa de call nem de transmissão.</span></div>
 
-    <label className="sound-toggle"><input type="checkbox" disabled={!DRAW_SUPPORTED_HERE} checked={DRAW_SUPPORTED_HERE && drawing.allowDraw} onChange={(event) => onChange({ allowDraw: event.target.checked })} /><span><strong>Deixar quem assiste desenhar na minha transmissão</strong><small>Desligado, o lápis fica desabilitado para quem está vendo e o servidor recusa qualquer traço — nem um cliente modificado desenha na sua tela. O que já estava desenhado é apagado na hora.</small></span></label>
+    <div className="setting-label"><span className="setting-title">Apontar sobre uma transmissão<small>O traço aparece na live de quem está vendo, e some sozinho depois de alguns segundos. É para mostrar um detalhe, não para guardar um desenho — para guardar, use a mesa.</small></span></div>
 
-    {DRAW_SUPPORTED_HERE && drawing.allowDraw && <>
-      <div className="setting-label"><span className="setting-title">Quanto tempo o traço fica<small>Vale para quem desenhar na sua transmissão. O padrão some sozinho; "não apagar" deixa o desenho parado até alguém limpar.</small></span><Dropdown label="Duração do traço" value={String(drawing.drawLifetime)} options={DRAW_LIFETIMES.map((opcao) => ({ value: String(opcao.value), label: opcao.label }))} onChange={(valor) => onChange({ drawLifetime: Number(valor) })} /></div>
+    {DRAW_SUPPORTED_HERE
+      ? <>
+        <label className="sound-toggle"><input type="checkbox" checked={drawing.allowDraw} onChange={(event) => onChange({ allowDraw: event.target.checked })} /><span><strong>Deixar quem assiste apontar na minha transmissão</strong><small>Desligado, o lápis fica desabilitado para quem está vendo e o servidor recusa qualquer traço — nem um cliente modificado desenha na sua tela. O que já estava desenhado é apagado na hora.</small></span></label>
+        {drawing.allowDraw && <>
+          <div className="setting-label"><span className="setting-title">Quanto tempo o traço fica<small>Vale para quem apontar na sua transmissão. O padrão some sozinho; "não apagar" deixa o traço parado até alguém limpar.</small></span><Dropdown label="Duração do traço" value={String(drawing.drawLifetime)} options={DRAW_LIFETIMES.map((opcao) => ({ value: String(opcao.value), label: opcao.label }))} onChange={(valor) => onChange({ drawLifetime: Number(valor) })} /></div>
+          {isPersistent(drawing.drawLifetime) && <div className="quality-note"><strong>O traço não vai sumir sozinho</strong><span>Use o borrachinha no canto do seu quadro para apagar tudo de uma vez. Quem desenhou também pode limpar o próprio traço, e tudo é apagado quando a transmissão termina.</span></div>}
+        </>}
+      </>
+      : <div className="quality-note"><strong>Ninguém aponta na sua transmissão neste sistema</strong><span>A janela que pinta o traço sobre a área de trabalho rouba o foco do teclado no Linux e ainda volta dentro da captura. Não há o que configurar aqui — mas <strong>você continua apontando na transmissão de quem estiver no Windows</strong>, e a mesa funciona normalmente.</span></div>}
 
-      {isPersistent(drawing.drawLifetime) && <div className="quality-note"><strong>O traço não vai sumir sozinho</strong><span>Use o borrachinha no canto do seu quadro para apagar tudo de uma vez. Quem desenhou também pode limpar o próprio traço, e tudo é apagado quando a transmissão termina.</span></div>}
-    </>}
-
-    <div className="setting-label"><span className="setting-title">A cor do meu traço<small>Vale quando você desenha na transmissão dos outros. Cada pessoa aparece com a própria cor, então dá para saber quem apontou o quê.</small></span></div>
-    <div className="draw-colors" role="radiogroup" aria-label="Cor do meu traço">
+    <div className="setting-label"><span className="setting-title">A cor do meu apontamento<small>Vale quando você rabisca na transmissão dos outros. Cada pessoa aparece com a própria cor, então dá para saber quem apontou o quê. A cor da mesa é escolhida dentro dela.</small></span></div>
+    <div className="draw-colors" role="radiogroup" aria-label="Cor do meu apontamento">
       {DRAW_COLORS.map((cor) => <button
         key={cor}
         type="button"
@@ -1680,21 +1700,8 @@ function DrawingSettings({ drawing, onChange, onClose }: { drawing: DrawPreferen
         onClick={() => onChange({ drawColor: cor })}
       />)}
     </div>
-
-    <div className="quality-note"><strong>Como se desenha</strong><span>No quadro de quem está transmitindo, o lápis liga o modo de desenho. Arrastar faz um traço; um toque sem arrastar deixa um apontador que pulsa. Enquanto o lápis está ligado, o clique duplo para ampliar fica desativado naquele quadro.</span></div>
   </section>;
 }
-
-// Cada jeito de instalar tem um jeito de atualizar, e a diferença muda o que
-// acontece com a sessão aberta. Dizer isso antes é o que evita alguém aplicar
-// no meio de uma call achando que só ia baixar.
-const INSTALL_KIND_NOTES: Record<TumacordInstallKind, string> = {
-  'linux-managed': 'Instalação feita pelo script do Linux. A versão nova entra em uma pasta própria e só o atalho é trocado, de uma vez; a sessão aberta continua na versão de antes e a nova passa a valer ao reabrir o Tumacord. A versão anterior fica guardada para recuperação.',
-  'linux-appimage': 'AppImage. O arquivo é substituído no lugar — a sessão aberta continua inteira, porque ela já está montada — e a versão nova vale ao reabrir.',
-  'windows-installed': 'Instalação do Windows. O instalador da versão nova é aberto e o Tumacord fecha para ele poder substituir a instalação; o Windows vai pedir sua confirmação.',
-  'windows-portable': 'Portable do Windows. Um executável em uso não pode ser substituído, então a versão nova é guardada ao lado da atual e a troca é sua, com o aplicativo fechado.',
-  unknown: 'Esta cópia não veio por um caminho que o Tumacord saiba atualizar sozinho. Dá para avisar da versão nova e abrir a página dela; instalar continua sendo pelo instalador.',
-};
 
 function lastCheckLabel(moment: number): string {
   if (!moment) return 'Ainda não procurei nesta máquina.';

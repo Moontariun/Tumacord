@@ -130,6 +130,45 @@ test('no Linux gerenciado, a build nova entra ao lado e só o atalho muda', { sk
   assert.equal(existsSync(pacote), false, 'o arquivo baixado não fica ocupando disco depois de aplicado');
 });
 
+// Um pacote de versão passa dos noventa megabytes. Sem varrer, a pasta de
+// downloads guardaria para sempre o instalador do Windows já usado e todo
+// arquivo que alguém baixou e nunca aplicou — a fase não sobrevive ao
+// fechamento do aplicativo, e na volta ninguém mais sabe daquele arquivo.
+test('a pasta de downloads não acumula versão baixada', (t) => {
+  const { raiz, updater } = ambiente(t);
+  const downloads = path.join(raiz, 'userData', 'updates');
+  mkdirSync(downloads, { recursive: true });
+  const instaladorUsado = path.join(downloads, 'Tumacord-0.9.0-Setup.exe');
+  const baixadoEsquecido = path.join(downloads, 'tumacord-0.8.8.tar.gz');
+  const daVez = path.join(downloads, 'tumacord-0.9.1.tar.gz');
+  for (const arquivo of [instaladorUsado, baixadoEsquecido, daVez]) writeFileSync(arquivo, 'conteúdo', 'utf8');
+
+  // Guardando o da vez: é o único que ainda pode ser aplicado.
+  const removidos = updater.sweepDownloads(daVez);
+  assert.equal(removidos.length, 2);
+  assert.equal(existsSync(daVez), true, 'o arquivo que ainda serve fica');
+  assert.equal(existsSync(instaladorUsado), false, 'o instalador da vez passada sai');
+  assert.equal(existsSync(baixadoEsquecido), false, 'e o download que ninguém aplicou também');
+
+  // Sem nada a guardar, a pasta fica vazia.
+  updater.sweepDownloads();
+  assert.equal(existsSync(daVez), false);
+});
+
+// Um download em andamento não pode ser apagado pela varredura que roda ao
+// lado: ela existe para limpar o que sobrou, não para atrapalhar o que está
+// acontecendo agora.
+test('a varredura não toca em nada enquanto um download está em andamento', (t) => {
+  const { raiz, updater } = ambiente(t);
+  const downloads = path.join(raiz, 'userData', 'updates');
+  mkdirSync(downloads, { recursive: true });
+  const emAndamento = path.join(downloads, 'tumacord-0.9.1.tar.gz');
+  writeFileSync(emAndamento, 'metade do arquivo', 'utf8');
+  updater.snapshot.phase = 'downloading';
+  assert.deepEqual(updater.sweepDownloads(), []);
+  assert.equal(existsSync(emAndamento), true);
+});
+
 test('um pacote sem o executável não vira instalação', (t) => {
   const { raiz, updater } = ambiente(t, { kind: 'linux-managed' });
   const dataHome = path.join(raiz, 'home', '.local', 'share');

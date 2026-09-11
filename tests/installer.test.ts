@@ -34,6 +34,7 @@ const SHELL_SCRIPTS = [
   'install-v0.8.8.sh',
   'install-v0.9.0.sh',
   'install-v0.9.1.sh',
+  'install-v0.9.2.sh',
   'marcar-versao-retirada.sh',
   'update-server.sh',
   'uninstall-linux.sh',

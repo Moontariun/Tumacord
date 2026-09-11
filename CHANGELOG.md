@@ -1,5 +1,65 @@
 # Histórico de versões
 
+## 0.9.2 — a janela fechada não fecha o Tumacord
+
+Esta versão sai da **0.9.1** e conserta três coisas que apareceram em uso.
+
+**O ícone da bandeja passou a servir para alguma coisa**
+
+Ele existia desde antes, e não adiantava nada: fechar a janela destruía a
+janela, e o aplicativo inteiro ia junto — inclusive o ícone. Não havia nada
+para trazer de volta.
+
+Agora **fechar a janela esconde**. O Tumacord continua rodando, o ícone fica lá,
+e clicar nele traz a janela de volta. O menu do ícone tem "Abrir", "Ocultar" e
+**"Sair do Tumacord"**, que é a única saída de verdade.
+
+Esconder, e não destruir, é o ponto: a janela é quem sustenta a call, a captura
+de tela e a live flutuante. Fechá-la de verdade e recriá-la derrubaria a sessão
+de mídia de quem só queria tirar a janela da frente. Da primeira vez que a
+janela some, um aviso curto explica para onde ela foi.
+
+No macOS nada muda: ali fechar a janela e manter o aplicativo no Dock é o que o
+sistema espera.
+
+**"Criar mesa" não fica mais preso em "Criando…"**
+
+Quem atualizou o aplicativo e não atualizou o servidor clicava em criar e ficava
+esperando para sempre. O motivo não era erro nenhum: era **silêncio**. Um
+servidor que não conhece o pedido simplesmente não responde, e a espera não
+tinha prazo.
+
+Duas coisas mudaram. O servidor agora **declara** que tem mesas, e o aplicativo
+pergunta antes de oferecer o botão: contra um servidor anterior à 0.9.1, onde o
+"+" ficava, aparece *"Este servidor ainda não tem mesas de desenho — atualize o
+servidor"*. E toda conversa da mesa ganhou prazo: se a resposta não vem, aparece
+uma explicação em vez de uma espera infinita.
+
+**Os arquivos de atualização param de se acumular**
+
+O Tumacord baixa a versão nova para `updates`, dentro da pasta de dados do
+aplicativo. Depois de aplicada, o arquivo era apagado no Linux — mas não em dois
+casos: o **instalador do Windows**, que não pode ser apagado enquanto está
+rodando, e qualquer download que alguém tenha feito e nunca aplicado. Cada um
+desses passa dos noventa megabytes, e eles ficavam lá para sempre.
+
+Agora a pasta é varrida na abertura e logo depois de cada atualização aplicada.
+O que está em uso resiste à varredura e some na abertura seguinte; um download
+em andamento nunca é tocado.
+
+**As configurações de desenho foram refeitas**
+
+A seção se chamava "Desenho na tela" e falava só de rabiscar sobre a
+transmissão de alguém. No Linux ela era uma página inteira sobre um recurso que
+não funciona ali — uma caixa desmarcada e desabilitada, e três parágrafos
+explicando por quê.
+
+Agora ela se chama **Desenho** e separa as duas coisas que passaram a existir: a
+**mesa**, que é um quadro do grupo e não tem configuração nenhuma ali (quem a
+criou manda nela, de dentro dela), e o **apontamento** sobre uma transmissão,
+que continua sendo o que sempre foi. Onde o apontamento não funciona, uma linha
+diz isso e acabou.
+
 ## 0.9.1 — uma mesa de desenho para o grupo
 
 Esta versão sai da **0.9.0** e acrescenta uma coisa: um quadro em branco dentro

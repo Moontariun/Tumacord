@@ -127,6 +127,14 @@ A procura acontece uma vez, na abertura, com a janela já de pé. Baixar e aplic
 
 No servidor, `scripts/update-server.sh` lê as mesmas Releases: `ultima` resolve a versão publicada mais nova que não foi retirada, o script recusa uma tag marcada como retirada antes de tocar no Docker, e só reconstrói quando o código mudou ou quando a versão no ar é outra — reiniciar um contêiner que já está certo derruba a call de alguém à toa.
 
+## Janela, bandeja e encerramento
+
+Fechar a janela esconde; quem encerra o aplicativo é o item **Sair** do menu da bandeja. A distinção existe porque a janela é quem sustenta a call, a captura de tela e a live flutuante: destruí-la e recriá-la derrubaria a sessão de mídia de quem só queria tirar a janela da frente. Até a 0.9.1 fechar destruía a janela, `window-all-closed` chamava `app.quit()` e o ícone da bandeja ia junto — ele existia sem nunca ter um aplicativo vivo para trazer de volta.
+
+A decisão mora em `desktop/tray-policy.cjs`, separada do Electron, porque é uma decisão e se testa sem abrir janela nenhuma. Um marcador ligado em `before-quit` é o que autoriza a janela a fechar de verdade — é por ele que passam tanto o **Sair** quanto o reinício da atualização. No macOS a regra é outra, e continua sendo a do sistema: fechar a janela fecha a janela, e `activate` reabre.
+
+A pasta de downloads da atualização (`updates`, dentro dos dados do aplicativo) é varrida na abertura e depois de cada aplicação. Um pacote passa dos noventa megabytes, e três caminhos deixavam um para trás: o instalador do Windows, que não pode ser apagado enquanto roda; o download que ninguém aplicou, já que a fase não sobrevive ao fechamento; e a sobra de uma tentativa interrompida. A varredura guarda só o arquivo que ainda pode ser aplicado, nunca toca em download em andamento, e o que estiver em uso some na abertura seguinte.
+
 ## Replicação pessoal
 
 Mensagens e perfis são mesclados entre os computadores online. Perfis usam o nome normalizado como identidade P2P e `updatedAt` como revisão: avatar, banner, bio e cor mais recentes vencem. As mídias de perfil são publicadas no host atual e baixadas para o servidor embutido de cada desktop, permitindo que qualquer participante assuma como host sem voltar para uma foto antiga.

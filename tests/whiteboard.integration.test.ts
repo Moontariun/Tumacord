@@ -139,6 +139,25 @@ function montar(snapshot: { revision: number; strokes: unknown[] } | undefined, 
   return state;
 }
 
+// O servidor precisa declarar que tem mesas.
+//
+// Não é enfeite: um servidor que não conhece `board:create` simplesmente não
+// responde ao pedido, e um `emit` com retorno espera para sempre. Foi assim que
+// "Criar mesa" ficou preso em "Criando…" contra um servidor 0.9.0 — não havia
+// erro, havia silêncio. A declaração é o que permite ao cliente dizer o motivo
+// em vez de oferecer um botão que não pode funcionar.
+test('o servidor declara que tem mesas, e diz se as guarda', { timeout: 60_000 }, async (context) => {
+  const { url } = await ambiente(context);
+  const saude = await (await fetch(`${url}/api/health`)).json() as { capabilities?: Record<string, unknown> };
+  assert.equal(saude.capabilities?.boards, true);
+  assert.equal(saude.capabilities?.boardPersistence, true, 'no dedicado a mesa é guardada');
+
+  const p2p = await ambiente(context, true);
+  const saudeP2p = await (await fetch(`${p2p.url}/api/health`)).json() as { capabilities?: Record<string, unknown> };
+  assert.equal(saudeP2p.capabilities?.boards, true, 'a mesa existe nos dois modos');
+  assert.equal(saudeP2p.capabilities?.boardPersistence, false, 'no P2P ela vive enquanto o grupo estiver reunido');
+});
+
 test('três pessoas desenham ao mesmo tempo e convergem para o mesmo quadro', { timeout: 60_000 }, async (context) => {
   const { entrar } = await ambiente(context);
   const ana = await entrar('Ana');

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, Notification, session, shell, Tray } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -6,6 +6,7 @@ const { TumacordDiscovery } = require('./discovery.cjs');
 const { DirectLink } = require('./direct-link.cjs');
 const { readNetworkPreferences, writeNetworkPreferences } = require('./network-preferences.cjs');
 const { createScreenAudioRouter } = require('./screen-audio.cjs');
+const { closeAction, trayClickAction, trayMenuState } = require('./tray-policy.cjs');
 const { detectLinuxGpuVendors, streamingFeatures } = require('./gpu-policy.cjs');
 const { appendRuntimeEvent, consumeSafeGpuMode, recordGpuFailure, safeRelaunchArgs } = require('./runtime-health.cjs');
 const { DrawingOverlay } = require('./drawing-overlay.cjs');
@@ -49,6 +50,10 @@ const directLink = new DirectLink({ key: networkPreferences.directKey, preferenc
 let discovery;
 let mainWindow;
 let tray;
+// Fechar a janela não é sair do aplicativo: ela é escondida e o ícone da
+// bandeja a traz de volta. Este marcador separa as duas coisas — só quando ele
+// é ligado a janela pode de fato ser destruída.
+let quitting = false;
 let mediaFullscreenActive = false;
 let mediaFullscreenWasActive = false;
 // O PCM da transmissão viaja por um canal próprio, não pelo IPC comum: são
@@ -99,10 +104,9 @@ function raiseLiveWindow(target) {
 
 if (!hasSingleInstanceLock) app.quit();
 app.on('second-instance', () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  // Abrir o Tumacord de novo com ele na bandeja precisa trazer a janela de
+  // volta, e não abrir uma segunda cópia sem mídia nenhuma.
+  mostrarJanela();
 });
 
 app.on('child-process-gone', (_event, details) => {
@@ -200,6 +204,24 @@ async function createWindow() {
     },
   });
   mainWindow = window;
+
+  // Fechar a janela esconde; quem fecha o aplicativo é o menu da bandeja.
+  //
+  // Antes disso, fechar a janela destruía a janela, `window-all-closed`
+  // chamava `app.quit()` e o ícone da bandeja ia junto — a bandeja existia
+  // sem servir para nada, porque nunca havia um aplicativo vivo para ela
+  // trazer de volta.
+  //
+  // Esconder, e não destruir, é o ponto: a janela é quem sustenta a call, a
+  // captura e a live flutuante. Destruí-la e recriá-la derrubaria a sessão de
+  // mídia de quem só queria tirar a janela da frente.
+  window.on('close', (event) => {
+    if (closeAction({ quitting, platform: process.platform }) === 'quit') return;
+    event.preventDefault();
+    window.hide();
+    avisarSobreBandeja();
+  });
+
   // Quando o renderizador morre, a janela fica simplesmente preta e o app
   // parece travado. Recarregar devolve a tela de login/sessão salva; o teto de
   // três tentativas evita um laço de recarga se a falha for permanente.
@@ -296,6 +318,47 @@ async function createWindow() {
   if (isDevelopment) window.webContents.openDevTools({ mode: 'detach' });
 }
 
+function mostrarJanela() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// Uma vez por sessão, e só na primeira vez que a janela some.
+//
+// Sem isso, fechar a janela parece fechar o aplicativo — e a pessoa procura o
+// Tumacord no menu, abre de novo e encontra a instância que já estava lá. Um
+// aviso curto explica para onde ele foi.
+let avisouSobreBandeja = false;
+function avisarSobreBandeja() {
+  if (avisouSobreBandeja || !tray) return;
+  avisouSobreBandeja = true;
+  try {
+    if (process.platform === 'win32' && typeof tray.displayBalloon === 'function') {
+      tray.displayBalloon({ title: 'Tumacord continua aberto', content: 'Ele ficou na bandeja. Clique no ícone para voltar, ou use Sair para fechar de vez.' });
+      return;
+    }
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Tumacord continua aberto', body: 'Ele ficou na bandeja. Clique no ícone para voltar, ou use Sair para fechar de vez.' }).show();
+    }
+  } catch { /* o aviso é cortesia; a bandeja funciona sem ele */ }
+}
+
+function atualizarMenuDaBandeja() {
+  if (!tray) return;
+  const visivel = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  const itens = trayMenuState({ windowVisible: visivel });
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { ...itens.open, click: () => mostrarJanela() },
+    { ...itens.hide, click: () => mainWindow?.hide() },
+    { type: 'separator' },
+    // A única saída de verdade. `app.quit()` liga o marcador em `before-quit`,
+    // e aí a janela finalmente pode ser destruída.
+    { ...itens.quit, click: () => app.quit() },
+  ]));
+}
+
 function createTray() {
   if (tray) return;
   const iconPath = path.join(__dirname, '../assets/tumacord-logo.png');
@@ -304,12 +367,21 @@ function createTray() {
   const icon = source.isEmpty() ? source : source.resize({ width: 32, height: 32 });
   tray = new Tray(icon);
   tray.setToolTip('Tumacord');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Abrir Tumacord', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
-    { type: 'separator' },
-    { label: 'Sair do Tumacord', click: () => app.quit() },
-  ]));
-  tray.on('click', () => { mainWindow?.show(); mainWindow?.focus(); });
+  atualizarMenuDaBandeja();
+  // Clicar no ícone alterna: é o gesto que as pessoas tentam primeiro, e em
+  // vários ambientes do Linux ele é o único que chega (o menu de contexto
+  // depende do suporte a SNI do painel).
+  const alternar = () => {
+    const visivel = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+    if (trayClickAction({ windowVisible: visivel }) === 'hide') mainWindow?.hide();
+    else mostrarJanela();
+  };
+  tray.on('click', alternar);
+  tray.on('double-click', () => mostrarJanela());
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.on('show', atualizarMenuDaBandeja);
+    mainWindow.on('hide', atualizarMenuDaBandeja);
+  }
 }
 
 // Reabrir na versão nova. Quem decide o executável é o jeito da instalação:
@@ -525,6 +597,10 @@ app.whenReady().then(async () => {
   createTray();
   // A procura acontece com a janela já de pé: ela não pode atrasar a abertura,
   // e uma falha de rede aqui não vira tela de erro nenhuma.
+  // Antes de procurar a próxima versão, limpar a anterior: o arquivo baixado
+  // passa dos noventa megabytes, e o instalador do Windows só pode ser apagado
+  // depois de ter terminado — ou seja, na abertura seguinte, que é esta.
+  try { updater.sweepDownloads(); } catch { /* a limpeza é cortesia, não pode impedir a abertura */ }
   if (updater.preferences.enabled) void updater.check().catch(() => undefined);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
 }).catch((error) => {
@@ -535,8 +611,14 @@ app.whenReady().then(async () => {
   console.error('Tumacord: falha ao iniciar.', error);
 });
 
+// Só chega aqui depois de a janela ter sido destruída de verdade — o que, fora
+// do macOS, só acontece quando alguém pediu para sair.
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', (event) => {
+  // Ligado antes de qualquer outra coisa: é ele que autoriza a janela a fechar
+  // em vez de se esconder. Sem isso, `app.quit()` — inclusive o da atualização
+  // e o do menu da bandeja — esbarraria na própria janela e não sairia nunca.
+  quitting = true;
   if (!hasSingleInstanceLock) return;
   if (quittingAfterAudioCleanup) return;
   quittingAfterAudioCleanup = true;

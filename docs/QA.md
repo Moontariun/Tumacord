@@ -193,6 +193,26 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
+## Bandeja, mesa e atualização — 0.9.2
+
+| Item | Estado |
+| --- | --- |
+| Fechar a janela esconde em vez de encerrar | TESTADO AUTOMATICAMENTE (política) |
+| Sair pelo menu da bandeja encerra de verdade | TESTADO AUTOMATICAMENTE (política) |
+| Sair nunca fica desabilitado com a janela escondida | TESTADO AUTOMATICAMENTE (política) |
+| No macOS fechar a janela continua fechando a janela | TESTADO AUTOMATICAMENTE (política) |
+| Ícone aparecendo no painel do KDE e restaurando a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Call e live continuam vivas com a janela escondida | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Servidor anterior à 0.9.1 não responde a `board:create` | TESTADO AUTOMATICAMENTE (servidor 0.9.0 real) |
+| O servidor declara `boards` e `boardPersistence` | TESTADO AUTOMATICAMENTE (servidor real, dedicado e P2P) |
+| Contra servidor velho, o motivo aparece e o botão some | TESTADO NO APLICATIVO (cliente 0.9.1 servido pelo servidor 0.9.0) |
+| Criar mesa contra servidor novo continua funcionando | TESTADO NO APLICATIVO |
+| Pedido da mesa sem resposta termina com explicação | VALIDADO POR ANÁLISE (prazo de 8 s em toda conversa da mesa) |
+| Pasta de downloads não acumula versão baixada | TESTADO AUTOMATICAMENTE |
+| Varredura não toca em download em andamento | TESTADO AUTOMATICAMENTE |
+| Instalador do Windows apagado na abertura seguinte | IMPLEMENTADO — REQUER TESTE MANUAL |
+| Configurações de desenho refeitas | TESTADO NO APLICATIVO |
+
 ## Mesa de desenho compartilhada — 0.9.1
 
 | Item | Estado |

@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
+import { readCapabilities, supports } from './capabilities';
 import {
   applyOrderedOp,
   BOARD_CURSOR_INTERVAL_MS,
@@ -39,6 +40,29 @@ import {
 const CURSOR_TTL_MS = 3_000;
 /** Intervalo de despacho da fila. Junta a mão de um piscar de olhos em um pedido. */
 const FLUSH_INTERVAL_MS = 60;
+/** Quanto se espera por uma resposta antes de dizer que ela não veio. */
+const RESPOSTA_MS = 8_000;
+
+// Um servidor que não conhece o pedido simplesmente não responde — e um
+// `emit` com retorno espera para sempre. Foi assim que "Criar mesa" ficou
+// eternamente em "Criando…" contra um servidor anterior à 0.9.1: não havia
+// erro nenhum, havia silêncio. Toda conversa da mesa passa por aqui, e o
+// silêncio vira uma resposta com prazo.
+function pedir<T>(socket: Socket, event: string, payload: unknown): Promise<T | null> {
+  return new Promise((resolve) => {
+    let respondeu = false;
+    const prazo = window.setTimeout(() => {
+      if (!respondeu) resolve(null);
+    }, RESPOSTA_MS);
+    socket.emit(event, payload, (reply: T) => {
+      respondeu = true;
+      window.clearTimeout(prazo);
+      resolve(reply);
+    });
+  });
+}
+
+const SEM_RESPOSTA = 'O servidor não respondeu. Se ele estiver em uma versão anterior à 0.9.1, ele ainda não tem mesas de desenho — atualize o servidor.';
 
 export interface BoardSession {
   board: BoardSummary;
@@ -81,10 +105,14 @@ export interface UseBoardsOptions {
   channelId: string;
   /** Call em que esta pessoa está agora, para devolver a mesa na troca de host. */
   voiceChannelId?: string;
+  /** Endereço do servidor, para perguntar a ele o que sabe fazer. */
+  serverUrl: string;
   onNotice: (message: string) => void;
 }
 
 export interface BoardsApi {
+  /** `false` só quando o servidor respondeu e disse que não tem mesas. */
+  supported: boolean | null;
   boards: BoardSummary[];
   active: BoardSession | null;
   /** O traço que a mão está fazendo agora, antes de a resposta voltar. */
@@ -104,7 +132,8 @@ export interface BoardsApi {
 }
 
 export function useBoards(options: UseBoardsOptions): BoardsApi {
-  const { socket, connected, userId, connectionMode, channelId, voiceChannelId, onNotice } = options;
+  const { socket, connected, userId, connectionMode, channelId, voiceChannelId, serverUrl, onNotice } = options;
+  const [supported, setSupported] = useState<boolean | null>(null);
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [active, setActive] = useState<BoardSession | null>(null);
   const [draft, setDraft] = useState<BoardStroke | null>(null);
@@ -131,20 +160,40 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
   // adivinhar em que canal ela nasceu. Quem decide o que aparece é o servidor.
   const refresh = useCallback(() => {
     if (!socket) return;
-    socket.emit('board:list', {}, (reply: { ok: boolean; boards?: BoardSummary[] }) => {
+    void pedir<{ ok: boolean; boards?: BoardSummary[] }>(socket, 'board:list', {}).then((reply) => {
       if (reply?.ok && Array.isArray(reply.boards)) setBoards(reply.boards);
     });
   }, [socket]);
+
+  // Perguntar ao servidor o que ele sabe fazer é melhor do que comparar
+  // números de versão: uma instalação parada ou um fork quebram a dedução, a
+  // declaração não. Sem isso, a única pista de que o servidor é velho seria um
+  // botão que não faz nada.
+  useEffect(() => {
+    if (!connected || !serverUrl) return;
+    let cancelado = false;
+    void fetch(`${serverUrl}/api/health`)
+      .then((resposta) => resposta.json())
+      .then((corpo) => {
+        if (cancelado) return;
+        const capacidades = readCapabilities(corpo);
+        // "Não respondeu" é diferente de "não tem": só um servidor que falou
+        // pode ser dito incompleto.
+        setSupported(capacidades.status === 'known' ? supports(capacidades, 'boards') : null);
+      })
+      .catch(() => undefined);
+    return () => { cancelado = true; };
+  }, [connected, serverUrl]);
 
   // Entrar na mesa é sempre o mesmo caminho: o que muda entre abrir pela
   // primeira vez e voltar depois de cair é só a revisão de onde se parte.
   const joinBoard = useCallback((boardId: string, observer: boolean) => {
     if (!socket) return;
     setActive((atual) => (atual && atual.board.id === boardId ? { ...atual, status: 'loading' } : atual));
-    socket.emit('board:join', { boardId, observer }, (reply: JoinReply) => {
+    void pedir<JoinReply>(socket, 'board:join', { boardId, observer }).then((reply) => {
       if (!reply?.ok || !reply.board) {
         if (activeIdRef.current === boardId) {
-          setActive((atual) => (atual ? { ...atual, status: 'gone', notice: reply?.error ?? 'Essa mesa não está mais disponível.' } : atual));
+          setActive((atual) => (atual ? { ...atual, status: 'gone', notice: reply ? (reply.error ?? 'Essa mesa não está mais disponível.') : SEM_RESPOSTA } : atual));
         }
         return;
       }
@@ -191,7 +240,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     if (!socket || !boardId || recoveringRef.current) return;
     recoveringRef.current = true;
     setActive((atual) => (atual ? { ...atual, status: 'recovering' } : atual));
-    socket.emit('board:sync', { boardId, since: revisionRef.current }, (reply: SyncReply) => {
+    void pedir<SyncReply>(socket, 'board:sync', { boardId, since: revisionRef.current }).then((reply) => {
       recoveringRef.current = false;
       if (!reply?.ok) {
         // Não estar mais na mesa do outro lado é o caso normal depois de uma
@@ -400,17 +449,21 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     return () => window.clearInterval(timer);
   }, [active?.cursors.length]);
 
-  const create = useCallback((name: string) => new Promise<BoardSummary | null>((resolve) => {
-    if (!socket) return resolve(null);
-    socket.emit('board:create', { channelId, name }, (reply: { ok: boolean; error?: string; board?: BoardSummary }) => {
-      if (!reply?.ok || !reply.board) {
-        noticeRef.current(reply?.error ?? 'Não foi possível criar a mesa.');
-        return resolve(null);
-      }
-      setBoards((lista) => mergeBoard(lista, reply.board!));
-      resolve(reply.board);
-    });
-  }), [channelId, socket]);
+  const create = useCallback(async (name: string): Promise<BoardSummary | null> => {
+    if (!socket) return null;
+    const reply = await pedir<{ ok: boolean; error?: string; board?: BoardSummary }>(socket, 'board:create', { channelId, name });
+    if (!reply) {
+      noticeRef.current(SEM_RESPOSTA);
+      setSupported(false);
+      return null;
+    }
+    if (!reply.ok || !reply.board) {
+      noticeRef.current(reply.error ?? 'Não foi possível criar a mesa.');
+      return null;
+    }
+    setBoards((lista) => mergeBoard(lista, reply.board!));
+    return reply.board;
+  }, [channelId, socket]);
 
   const enqueue = useCallback((op: BoardOp) => {
     queueRef.current.push(op);
@@ -448,14 +501,13 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     enqueue({ id: `desfazer-${crypto.randomUUID()}`, kind: 'undo', target: strokeId });
   }, [enqueue]);
 
-  const manage = useCallback((action: string, value?: string | boolean) => new Promise<boolean>((resolve) => {
+  const manage = useCallback(async (action: string, value?: string | boolean): Promise<boolean> => {
     const boardId = activeIdRef.current;
-    if (!socket || !boardId) return resolve(false);
-    socket.emit('board:manage', { boardId, action, value }, (reply: { ok: boolean; error?: string }) => {
-      if (!reply?.ok) noticeRef.current(reply?.error ?? 'Não foi possível fazer isso agora.');
-      resolve(Boolean(reply?.ok));
-    });
-  }), [socket]);
+    if (!socket || !boardId) return false;
+    const reply = await pedir<{ ok: boolean; error?: string }>(socket, 'board:manage', { boardId, action, value });
+    if (!reply?.ok) noticeRef.current(reply ? (reply.error ?? 'Não foi possível fazer isso agora.') : SEM_RESPOSTA);
+    return Boolean(reply?.ok);
+  }, [socket]);
 
   const moveCursor = useCallback((x: number, y: number, color: string) => {
     const agora = Date.now();
@@ -471,6 +523,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
   useEffect(() => () => { activeIdRef.current = ''; }, []);
 
   return useMemo(() => ({
+    supported,
     boards,
     active,
     draft,
@@ -486,7 +539,7 @@ export function useBoards(options: UseBoardsOptions): BoardsApi {
     manage,
     moveCursor,
     dismissNotice,
-  }), [active, beginStroke, boards, close, create, dismissNotice, draft, endStroke, erase, extendStroke, manage, moveCursor, open, refresh, undo]);
+  }), [active, beginStroke, boards, close, create, dismissNotice, draft, endStroke, erase, extendStroke, manage, moveCursor, open, refresh, supported, undo]);
 }
 
 function applyAll(base: BoardState, ops: readonly BoardOpEnvelope[]): BoardState {
