@@ -125,13 +125,17 @@ No dedicado, as mesas são gravadas no arquivo do servidor. A gravação é na b
 
 ## Atualização do aplicativo
 
-A fonte é o repositório do GitHub, e ela é a mesma para o aplicativo e para o servidor. `desktop/update-check.cjs` recebe a lista de Releases já baixada e devolve uma decisão — sem rede e sem disco, para poder ser testada inteira: qual versão oferecer, se ela foi retirada (lista embutida ou o marcador `<!-- tumacord:versao-quebrada -->` no corpo da Release), qual arquivo serve para o jeito daquela instalação (`linux-managed`, `linux-appimage`, `windows-installed`, `windows-portable`, `unknown`) e quais são as notas da versão instalada.
+A fonte é o **serviço de atualizações desta instalação**, na mesma VPS do servidor dedicado — e não o GitHub. O aplicativo não consulta o GitHub nem para verificar, nem para baixar, nem para aplicar.
 
-`desktop/updater.cjs` é a parte que precisa de rede e de disco: só `https` e só GitHub, cada redirecionamento conferido de novo, tamanho e SHA-256 conferidos antes de qualquer coisa ser executada, e um caminho de aplicação por tipo de instalação. No Linux gerenciado ele repete o que o instalador faz — build nova em pasta imutável, troca atômica do atalho `current`, anterior apontada por `previous` —, o que permite atualizar sem interromper a call em andamento.
+A origem vem do ambiente, de um arquivo local ou da build (`desktop/update-origin.cjs`), e nunca da rede: uma origem que chegasse numa resposta de servidor seria um jeito de trocar de onde vem o código. O dispositivo precisa estar autorizado: um convite de uso único vira uma credencial só de download, guardada com `safeStorage` (`desktop/update-credentials.cjs`) e revogável pelo dono.
 
-A procura acontece uma vez, na abertura, com a janela já de pé. Baixar e aplicar são cliques da interface (`src/components/UpdatePanel.tsx`); nada é automático. `update-state.json`, na pasta de dados do usuário, guarda três coisas: se a procura ao abrir está ligada, qual versão foi ignorada e qual versão já teve o "o que mudou" mostrado — é o que faz o changelog aparecer uma vez por versão, venha a atualização de onde vier.
+`desktop/update-check.cjs` recebe o catálogo e os manifestos já baixados e devolve uma decisão — sem rede e sem disco, para poder ser testada inteira: qual versão oferecer, se ela foi retirada, e qual artefato serve para o jeito daquela instalação (`linux-managed`, `linux-appimage`, `windows-installed`, `windows-portable`, `unknown`). Catálogo e manifesto são assinados com chaves de escopos separados, e a sequência do catálogo só anda para frente: um catálogo antigo reapresentado é recusado.
 
-No servidor, `scripts/update-server.sh` lê as mesmas Releases: `ultima` resolve a versão publicada mais nova que não foi retirada, o script recusa uma tag marcada como retirada antes de tocar no Docker, e só reconstrói quando o código mudou ou quando a versão no ar é outra — reiniciar um contêiner que já está certo derruba a call de alguém à toa.
+`desktop/update-source.cjs` é a parte que fala com a rede, e não segue redirecionamento. `desktop/updater.cjs` orquestra, e tem um caminho de aplicação por tipo de instalação. No Linux gerenciado ele repete o que o instalador faz — build nova em pasta imutável, troca atômica do atalho `current`, anterior apontada por `previous` —, o que permite atualizar sem interromper a call em andamento. No Windows o instalador é aberto com elevação (`desktop/windows-installer.cjs`): `spawn` não eleva, e um NSIS por máquina aberto sem elevação falhava com `EACCES` e derrubava o processo principal.
+
+A procura acontece uma vez, na abertura, com a janela já de pé. Baixar e aplicar são cliques da interface (`src/components/UpdatePanel.tsx`); nada é automático. `update-state.json`, na pasta de dados do usuário, guarda as preferências da procura e a maior sequência de catálogo já aceita.
+
+No servidor, quem troca a versão é o executor, descrito na seção *Atualizar o servidor pelo painel*, mais abaixo.
 
 ## Janela, bandeja e encerramento
 
@@ -225,19 +229,29 @@ por isso está cercada em camadas, nenhuma delas na interface:
   hospeda. Um servidor que ganhou esta versão não passa a aceitar troca de
   código porque atualizou;
 - **é do dono.** Administrador cuida de canais e de gente;
-- **o navegador só manda uma etiqueta.** A lista de versões é buscada pelo
-  servidor no GitHub; a etiqueta escolhida é conferida contra ela — na leitura
-  e de novo na hora de aplicar, contra uma lista buscada naquele momento. Não
-  há caminho, branch, URL, repositório nem comando vindo do navegador;
-- **o que roda é fixo.** `scripts/update-server.sh`, chamado com `execFile` e
-  uma lista de argumentos. Nunca por shell, nunca com interpolação;
-- **uma por vez, com limite e registro.** A tentativa entra na auditoria antes
-  de qualquer coisa acontecer — uma atualização que derruba o servidor no meio
-  não deixaria rastro se o registro viesse depois.
-
-Não funciona dentro do contêiner, e ele diz isso: a imagem carrega só o código
-compilado, sem `scripts/` e sem `.git`. Serve para quem roda o servidor direto
-no host a partir do clone.
+- **quem aplica está fora do contêiner.** O chat não executa nada: ele pede ao
+  executor (`tools/tumacordctl/executor.mjs`), um serviço systemd no host. Um
+  contêiner não reconstrói a si mesmo, e montar o socket do Docker dentro dele
+  entregaria a máquina a quem comprometesse o chat;
+- **a conversa é por socket Unix.** O executor escuta num socket que o
+  `docker-compose.executor.yml` monta no chat. Não há porta para alcançar pela
+  rede, e o executor recusa subir com o socket no mesmo ramo do diretório do
+  estado, onde mora o segredo;
+- **o navegador só manda uma etiqueta.** A lista vem do catálogo assinado do
+  serviço de atualizações desta VPS, e não do GitHub. A etiqueta é conferida
+  contra ela na leitura e de novo na hora de aplicar; o que segue para o
+  executor é só o `releaseId`, e a referência de git é derivada lá, do
+  manifesto assinado;
+- **copia antes, valida depois.** A aplicação pausa a escrita e copia o volume
+  antes de tocar no código, e só marca sucesso depois de conferir versão,
+  commit e `installationId` pelo endpoint interno. Sem destino de cópia, o
+  executor não aplica nada;
+- **uma por vez, com estado em disco.** O lock é um arquivo criado com `wx`, e
+  cada trabalho grava as etapas. A aplicação reinicia justamente o chat, e o
+  painel retoma o trabalho do executor quando volta;
+- **registrada antes de acontecer.** A tentativa entra na auditoria antes de
+  qualquer coisa — uma atualização que derruba o servidor no meio não deixaria
+  rastro se o registro viesse depois.
 
 ## Sons
 

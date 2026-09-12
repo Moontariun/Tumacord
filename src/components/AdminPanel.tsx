@@ -60,13 +60,16 @@ interface PainelDados {
 
 /** Uma versão publicada, como o servidor a oferece. */
 interface VersaoOferecida {
+  releaseId: string;
   tag: string;
   version: string;
   publishedAt: string;
-  pageUrl: string;
-  prerelease: boolean;
+  /** O canal de onde ela veio: campo explícito, e não sufixo da versão. */
+  channel: string;
   /** O motivo de não dever ser instalada, quando há um. */
   broken: string;
+  /** O aviso de parada obrigatória que a release declara, quando declara. */
+  requiredStop: string;
   current: boolean;
   newer: boolean;
 }
@@ -77,6 +80,7 @@ interface EstadoDaAtualizacao {
   startedAt: string;
   finishedAt: string;
   log: string;
+  jobId: string;
 }
 
 interface PainelDeVersao {
@@ -300,7 +304,7 @@ function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string
 
   useEffect(() => { void carregar(); }, [carregar]);
 
-  // Enquanto o script roda, o servidor reinicia no meio: a leitura vai falhar
+  // Enquanto o executor aplica, este servidor reinicia no meio: a leitura vai falhar
   // e voltar sozinha. Continuar perguntando é o que mostra o fim.
   const rodando = painel?.state.status === 'running';
   useEffect(() => {
@@ -324,7 +328,7 @@ function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string
 
   const alvo = painel.releases.find((entrada) => entrada.tag === escolhida);
   return <>
-    <p className="settings-intro">Este servidor está na <strong>v{painel.current}</strong>. As versões vêm da página de Releases do projeto, consultada por este servidor.</p>
+    <p className="settings-intro">Este servidor está na <strong>v{painel.current}</strong>. As versões vêm do catálogo assinado do serviço de atualizações desta instalação, e quem aplica é o executor no host.</p>
 
     {!painel.enabled
       ? <p className="invite-status">{painel.reason}</p>
@@ -337,7 +341,7 @@ function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string
             value={escolhida}
             options={painel.releases.map((entrada) => ({
               value: entrada.tag,
-              label: `${entrada.tag}${entrada.current ? ' · em uso' : entrada.newer ? '' : ' · anterior'}${entrada.broken ? ' · retirada' : ''}${entrada.prerelease ? ' · prévia' : ''}`,
+              label: `${entrada.tag}${entrada.current ? ' · em uso' : entrada.newer ? '' : ' · anterior'}${entrada.broken ? ' · retirada' : ''}${entrada.channel === 'test' ? ' · teste' : ''}`,
             }))}
             onChange={setEscolhida}
           />
@@ -345,15 +349,15 @@ function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string
         {alvo?.broken && <p className="invite-status error">A {alvo.tag} está marcada como retirada: {alvo.broken}. O servidor recusa aplicá-la.</p>}
         {alvo?.current && <p className="invite-status">Esta é a versão que já está rodando.</p>}
         {alvo && !alvo.current && !alvo.newer && !alvo.broken && <p className="invite-status">A {alvo.tag} é anterior à que está rodando. Voltar é possível, e é o caminho quando algo quebrou.</p>}
+        {alvo?.requiredStop && !alvo.current && <p className="invite-status">{alvo.requiredStop}</p>}
 
         <div className="update-actions">
           <button
             className="primary-button"
             disabled={enviando || rodando || !alvo || Boolean(alvo.broken) || alvo.current}
             onClick={() => setConfirmando(true)}
-            title="Baixa a versão escolhida, faz backup do volume e reinicia o servidor"
+            title="Copia os dados, aplica a versão escolhida e reinicia o servidor"
           >{rodando ? 'Atualizando…' : 'Atualizar servidor'}</button>
-          {alvo?.pageUrl && <a className="ghost update-link" href={alvo.pageUrl} target="_blank" rel="noreferrer noopener">Ver as notas da {alvo.tag}</a>}
         </div>
 
         {painel.state.status !== 'idle' && <p className={`invite-status ${painel.state.status === 'error' ? 'error' : ''}`}>
@@ -364,7 +368,7 @@ function Versao({ pedir, onNotice }: { pedir: <T,>(rota: string, metodo?: string
 
     {confirmando && alvo && <div className="modal-backdrop" onMouseDown={(evento) => { if (evento.target === evento.currentTarget) setConfirmando(false); }}><div className="confirm-dialog" role="alertdialog" aria-modal="true">
       <h2>Atualizar para {alvo.tag}?</h2>
-      <p>O servidor faz backup do volume, troca o código e reinicia. Quem estiver em uma call cai durante o reinício.</p>
+      <p>O executor copia os dados, troca o código e reinicia o servidor. Quem estiver em uma call cai durante o reinício. Se a cópia falhar, nada é aplicado.</p>
       <div className="confirm-actions">
         <button type="button" autoFocus onClick={() => setConfirmando(false)}>Cancelar</button>
         <button type="button" className="danger" disabled={enviando} onClick={() => void aplicar()}>{enviando ? 'Pedindo…' : 'Atualizar'}</button>

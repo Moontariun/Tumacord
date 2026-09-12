@@ -163,24 +163,62 @@ test('todo serviço citado nos guias existe no docker-compose.yml', () => {
   assert.deepEqual(inexistentes, [], `serviços citados que não existem no compose:\n  ${inexistentes.join('\n  ')}`);
 });
 
-// ── O que é declarado como não implementado não é prometido como pronto ───
+// ── Todo comando prometido pela documentação existe ───────────────────────
 
-test('o que não está implementado é dito nos guias que o citam', () => {
+test('todo `tumacordctl` citado nos guias existe de verdade', () => {
   // Um comando que a documentação promete e que não existe é a reclamação que
-  // originou esta revisão. Enquanto ele não existe, o guia precisa dizer.
-  const promessas: { guia: string; comando: string }[] = [
-    { guia: 'docs/backup-restore.md', comando: 'tumacordctl backup' },
-    { guia: 'docs/atualizacao-servidor.md', comando: 'tumacordctl server apply' },
-  ];
-  for (const { guia, comando } of promessas) {
-    const texto = readFileSync(path.join(raiz, guia), 'utf8');
-    if (!texto.includes(comando)) continue;
-    assert.match(
-      texto,
-      /não.{0,4}est(á|ão)\s+implementad|NÃO IMPLEMENTADO/i,
-      `${guia} cita \`${comando}\` sem dizer que ele ainda não existe`,
-    );
+  // originou esta revisão. Agora que eles existem, a garantia inverte: cada
+  // comando citado precisa ter rota no CLI.
+  const cli = readFileSync(path.join(raiz, 'tools/tumacordctl/tumacordctl.mjs'), 'utf8');
+  const faltando: string[] = [];
+  for (const documento of documentos) {
+    for (const achado of documento.texto.matchAll(/tumacordctl\s+([a-z]+)/g)) {
+      const comando = achado[1];
+      // `--help` e `version` são do próprio CLI; o resto precisa de case.
+      if (comando === 'version') continue;
+      if (!cli.includes(`case '${comando}':`)) faltando.push(`${documento.relativo}: tumacordctl ${comando}`);
+    }
   }
+  assert.deepEqual([...new Set(faltando)], [], 'comandos citados na documentação que o CLI não tem');
+});
+
+test('as opções citadas nos guias são opções que o CLI lê', () => {
+  // `--projeto` em vez de `--project` não falha: o CLI ignora a opção
+  // desconhecida e opera a instalação errada. Isso é pior do que um erro.
+  const cli = readFileSync(path.join(raiz, 'tools/tumacordctl/tumacordctl.mjs'), 'utf8');
+  const conhecidas = new Set(
+    [...cli.matchAll(/options(?:\.([a-zA-Z]+)|\['([a-z-]+)'\])/g)].map((achado) => achado[1] ?? achado[2]),
+  );
+  conhecidas.add('help');
+
+  const desconhecidas: string[] = [];
+  for (const documento of documentos) {
+    for (const linha of documento.texto.split('\n')) {
+      if (!linha.includes('tumacordctl')) continue;
+      for (const achado of linha.matchAll(/--([a-z][a-z-]*)/g)) {
+        if (!conhecidas.has(achado[1])) desconhecidas.push(`${documento.relativo}: --${achado[1]}`);
+      }
+    }
+  }
+  assert.deepEqual([...new Set(desconhecidas)], [], 'opções citadas na documentação que o CLI não lê');
+});
+
+test('os campos de `install show --json` citados nos guias são os que ele produz', () => {
+  // Um guia que lê `i.servicos[...]` de uma saída que traz `services` produz um
+  // script que falha em silêncio, e o operador segue achando que tem o volume.
+  const discovery = readFileSync(path.join(raiz, 'tools/tumacordctl/lib/discovery.mjs'), 'utf8');
+  const ausentes: string[] = [];
+  for (const documento of documentos) {
+    for (const linha of documento.texto.split('\n')) {
+      if (!linha.includes('install show') || !linha.includes('--json')) continue;
+      // As chaves usadas no trecho que consome a saída.
+      for (const achado of documento.texto.matchAll(/\bi\.([a-zA-Z]+)|\bm\[0\]\.([a-zA-Z]+)|x\.([a-zA-Z]+)\s*===/g)) {
+        const campo = achado[1] ?? achado[2] ?? achado[3];
+        if (!discovery.includes(`${campo}:`) && !discovery.includes(`${campo},`)) ausentes.push(`${documento.relativo}: ${campo}`);
+      }
+    }
+  }
+  assert.deepEqual([...new Set(ausentes)], [], 'campos citados que a descoberta não produz');
 });
 
 // ── Nenhum segredo na documentação ────────────────────────────────────────

@@ -178,7 +178,7 @@ Antes de considerar a instalação pronta, pergunte à máquina se ela está.
 
 ```bash
 cd "$TUMACORD_DIR"
-node tools/tumacordctl/tumacordctl.mjs doctor --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs doctor --project "$TUMACORD_PROJETO"
 ```
 
 **Saída esperada:** uma lista de verificações terminando em
@@ -286,7 +286,7 @@ Para autorizar o primeiro dispositivo:
 
 ```bash
 cd "$TUMACORD_DIR"
-node tools/tumacordctl/tumacordctl.mjs devices convidar --rotulo "Windows do Caio"
+node tools/tumacordctl/tumacordctl.mjs devices enroll --label "Windows do Caio"
 ```
 
 **Saída esperada:** um convite, e o aviso de que ele vale uma vez e não é

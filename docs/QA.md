@@ -39,14 +39,14 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
 |---|---|---|
-| Testes | **663** aprovados | **898** aprovados |
+| Testes | **663** aprovados | **952** aprovados |
 | Typecheck | limpo | limpo |
 | `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
 
 > A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
 > qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
-> desta revisão: os 235 casos novos existem porque cada um deles reprova no
-> código anterior.
+> desta revisão. Os 289 casos novos cobrem o que ela acrescentou ou corrigiu;
+> os que provam a correção de um defeito reprovam no código anterior.
 
 ### O que foi TESTADO
 
@@ -95,13 +95,30 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 | ↳ revogação corta na hora; retirada devolve 410 a quem já tinha a URL | | idem |
 | ↳ nenhuma resposta devolve token, convite ou hash; nenhum redirect | | idem |
 | ↳ quem assina catálogo não publica manifesto, e vice-versa | | idem |
-| Descoberta de instalação estruturada; ambiguidade para a operação | 24 casos | `tests/tumacordctl.test.ts` |
+| Descoberta de instalação estruturada; ambiguidade para a operação | 25 casos | `tests/tumacordctl.test.ts` |
 | Preflight: sem mount em `/data` **falha** em vez de seguir sem backup | | `tests/tumacordctl.test.ts` |
 | Valores de variáveis nunca saem da descoberta | | `tests/tumacordctl.test.ts` |
 | Anexos: preferência do P2P não atravessa para o dedicado | 6 casos | `tests/attachmentSync.test.ts` |
 | Criação de canal: socket e API produzem o mesmo canal, com posição e auditoria | integração com servidor real | `tests/adminAuthorization.integration.test.ts` |
-| Documentação: links locais, arquivos citados, variáveis, serviços, versões | 11 casos | `tests/documentacao.test.ts` |
-| `docker compose config` com exemplo | validado | manual, nesta máquina |
+| Cópia: o volume é o mount real de `/data`; sem mount ou com dois, **para** | 22 casos | `tests/executor.test.ts` |
+| ↳ o token vai por ambiente e chega ao contêiner (`-e T`); nunca na linha de comando | | idem |
+| ↳ o lock exclui entre processos; lock órfão é dito, e não removido | | idem |
+| ↳ pedido repetido não vira segundo deploy; o trabalho sobrevive ao processo | | idem |
+| ↳ segredo não entra no trabalho gravado nem no log | | idem |
+| ↳ só release publicada é aplicável; validar compara versão, commit e `installationId` | | idem |
+| **O executor de pé, num socket e numa porta** | 14 casos | `tests/executorService.integration.test.ts` |
+| ↳ sem segredo nada sai; recusa escutar fora do laço local | | idem |
+| ↳ socket no ramo do estado é recusado antes de criar arquivo; não apaga o que não é socket | | idem |
+| ↳ nenhuma rota aceita comando, caminho ou URL; corpo grande demais é recusado | | idem |
+| ↳ sem destino de cópia, a aplicação é recusada antes de qualquer conferência | | idem |
+| **O painel do dono falando com um executor, por socket** | 17 casos | `tests/selfUpdate.test.ts` |
+| ↳ só o `releaseId` atravessa; etiqueta malformada não gera consulta | | idem |
+| ↳ depois de o servidor reiniciar, o painel retoma o trabalho do executor | | idem |
+| ↳ executor fora do ar não declara a atualização como falha | | idem |
+| Oferta de versões a partir do catálogo assinado, e não do GitHub | 18 casos | `tests/serverUpdate.test.ts` |
+| O segredo do executor abre **só** a pausa de escrita, no servidor de verdade | 2 casos | `tests/adminAuthorization.integration.test.ts` |
+| Documentação: links, arquivos, variáveis, serviços, versões; comandos, opções e campos citados existem | 13 casos | `tests/documentacao.test.ts` |
+| `docker compose config` com e sem `docker-compose.executor.yml`; sem segredo, recusa dizendo de onde tirá-lo | validado | manual, nesta máquina |
 | `npm run build` (web + servidor + serviço) | ok | manual, nesta máquina |
 | `npm run package:linux` | produziu os dois pacotes com a revisão no nome | manual, nesta máquina |
 
@@ -123,7 +140,7 @@ instalados nem executados: isso exige uma máquina limpa e está na lista de
 |---|---|
 | `native/windows/audio-helper/build.ps1` | não há PowerShell nesta máquina. O **script** é conferido por teste; a execução é Windows |
 | Configuração do proxy (`packaging/proxy/`) | `nginx -t` exige Nginx instalado e certificados |
-| Unidade systemd do executor | é o desenho; o programa que ela chama não existe |
+| Unidade systemd do executor | instalá-la exige o usuário `tumacord` e `/var/lib/tumacord` nesta máquina. O programa que ela chama é testado de pé, num socket |
 
 ### NÃO EXECUTADO — com procedimento e critério
 
@@ -132,11 +149,14 @@ executados, **o gate correspondente fica pendente**.
 
 | Item | Procedimento | Critério de aceite |
 |---|---|---|
-| Instalação limpa numa VPS | [Instalação na VPS](instalacao-vps.md) | `doctor` sai 0; `/api/health` e `/v1/saude` respondem; `/v1/catalogo` dá 401 sem credencial |
+| Instalação limpa numa VPS | [Instalação na VPS](instalacao-vps.md) | `doctor` sai 0; `/api/health` e `/v1/health` respondem; `/v1/catalog` dá 401 sem credencial |
 | Atualização de instalação antiga com projeto/volume não padrão | [Atualização do servidor](atualizacao-servidor.md) | `version` e `commit` batem; `installationId` **inalterado** |
 | Backup e restauração ensaiados | [Backup e restauração](backup-restore.md) | restauração em volume separado sobe e mostra o mesmo `installationId` |
 | Falha e rollback | idem, seção 7 | volta ao deployment registrado, e a versão confirma |
 | Publicação e importação offline | [Publicação privada](publicacao-privada.md) | catálogo promovido; aplicativo recebe a versão |
+| Executor instalado, painel ligado por socket | [Atualização do servidor](atualizacao-servidor.md), "O executor" | o painel lista as versões do catálogo; aplicar gera um trabalho com `backup` e `validate` em `ok` |
+| Aplicação que falha na validação | idem | o trabalho termina `failed` em `validate`, e `server rollback` volta ao deployment registrado |
+| Cópia pelo executor, pausando a escrita do servidor real | [Backup e restauração](backup-restore.md) | a auditoria registra `executor` em `server.pause-writes` e `server.resume-writes` |
 | Migração para uma segunda VPS | ainda sem runbook próprio | — |
 | Windows: usuário comum e administrador, UAC aceito e cancelado | [Testar no Windows](windows-testing.md) | EACCES **não** derruba o app; UAC cancelado mantém o app aberto |
 | Windows: arquivo bloqueado, caminho com espaço e acento, portable | idem | cada causa é distinguida na mensagem |
@@ -151,10 +171,6 @@ executados, **o gate correspondente fica pendente**.
 
 | Item | Onde está dito |
 |---|---|
-| Executor de deploy (systemd) | `packaging/servidor/tumacord-executor.service`, com aviso |
-| `tumacordctl server apply` / `server rollback` | `--help` recusa e aponta o manual |
-| `tumacordctl backup` / `restore` / `jobs status` | idem |
-| Painel do dono para atualizações | o `tumacordctl` faz o mesmo pela linha de comando |
 | Identidade P2P com claims verificáveis | — |
 | Runbook de migração de VPS | — |
 
@@ -168,9 +184,10 @@ executados, **o gate correspondente fica pendente**.
 > assinada, importação, promoção, e o aplicativo recebendo e baixando — é
 > exercido em `tests/publisher.integration.test.ts`.
 >
-> O que **ainda não existe** é o executor que aplica uma release ao servidor
-> dedicado: isso continua sendo o procedimento manual de
-> [Atualização do servidor](atualizacao-servidor.md).
+> O executor que aplica uma release ao servidor dedicado também existe, e o
+> painel do dono conversa com ele por socket. Ele **não** foi exercido contra
+> uma VPS: os testes substituem o Docker e o git nas etapas que trocariam a
+> versão de um servidor em uso.
 >
 > E a **ponte manual continua sendo o caminho para a primeira distribuição**:
 > um aplicativo 0.9.9 instalado hoje não tem como receber a 0.9.9-1 pelo
@@ -185,13 +202,20 @@ executados, **o gate correspondente fica pendente**.
   seguintes. Os testes de integração sobem servidores reais, e a suíte ficou
   mais pesada com os novos. É contenção, não regressão — mas está registrado
   porque um teste instável esconde uma regressão no dia em que ela chegar.
+  Na rodada final a suíte inteira passou de primeira: 952 casos, 29 s.
+- **Defeitos achados antes de chegarem a uma VPS.** Três, no caminho novo, e
+  cada um tem agora um teste que reprova se ele voltar: o `docker exec` da
+  pausa não repassava o token ao contêiner (`-e T`), e a pausa falharia em toda
+  instalação; a aplicação declarava uma cópia prévia que não fazia; e o chat,
+  dentro do contêiner, não alcançaria um executor escutando no `127.0.0.1` do
+  host — por isso a conversa passou a ser por socket.
 
 ### Funções que não podiam regredir
 
 Verificadas pela suíte existente, que continua inteira: login e identidade,
 chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
 deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
-handoff P2P. **898 aprovados, nenhuma falha.**
+handoff P2P. **952 aprovados, nenhuma falha.**
 
 ---
 

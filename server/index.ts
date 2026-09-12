@@ -28,7 +28,7 @@ import { MAX_MESSAGE_BODY, canModify, deleteMessage, editMessage } from '../shar
 import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
 import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
-import { SelfUpdater, selfUpdateConfig, unavailableReason } from './selfUpdate.js';
+import { SelfUpdater, executorTokenMatches, selfUpdateConfig, unavailableReason } from './selfUpdate.js';
 import { JsonStore, type StoredUser } from './store.js';
 import { VoiceRooms } from './voiceRooms.js';
 import { Whiteboards, type StoredBoard } from './whiteboards.js';
@@ -62,7 +62,7 @@ const loginLimiter = new AuthRateLimiter();
 // Atualizar o próprio servidor pelo painel. Desligado por padrão, e por
 // decisão: um servidor que ganhou esta versão não passa a aceitar troca de
 // código porque atualizou. Quem hospeda liga isso sabendo o que é.
-const selfUpdateSettings = selfUpdateConfig(process.env, path.resolve(process.cwd()));
+const selfUpdateSettings = selfUpdateConfig(process.env);
 const selfUpdater = new SelfUpdater(selfUpdateSettings);
 const tlsCertificateFile = process.env.TLS_CERT_FILE?.trim();
 const tlsKeyFile = process.env.TLS_KEY_FILE?.trim();
@@ -956,6 +956,33 @@ app.get('/api/admin/overview', (request, response) => {
 //      novo dentro do `SelfUpdater`, contra uma lista buscada na hora;
 //   3. **fica registrado.** A tentativa entra na auditoria antes de qualquer
 //      coisa acontecer, com quem pediu e para qual versão.
+/**
+ * Quem pode pausar e liberar a escrita: o dono, ou o executor.
+ *
+ * O executor pausa antes da cópia que antecede cada aplicação, e não tem — nem
+ * deve ter — uma sessão de dono: uma sessão expira em dias, e a cópia pararia
+ * de funcionar sem ninguém perceber até a hora de restaurar. Ele se identifica
+ * pelo segredo que só ele e este servidor conhecem, e a auditoria registra
+ * `executor` como autor, e não um dono que não pediu nada.
+ *
+ * Só estas duas rotas aceitam o segredo. Ele não abre nenhuma outra porta do
+ * painel.
+ */
+function writeGateCaller(request: express.Request, response: express.Response): { audit: (action: string) => Promise<void> } | null {
+  if (executorTokenMatches(selfUpdateSettings, request.headers.authorization)) {
+    return { audit: (action) => auditExecutor(action) };
+  }
+  const context = requireOwner(request, response);
+  if (!context) return null;
+  return { audit: (action) => audit(context.user, action, '', 'ok') };
+}
+
+async function auditExecutor(action: string): Promise<void> {
+  await store.recordAudit(createAuditEntry({
+    id: randomUUID(), actorId: 'executor', actorUsername: 'executor', action, target: '', result: 'ok',
+  })).catch(() => undefined);
+}
+
 function requireOwner(request: express.Request, response: express.Response): AdminContext | null {
   const context = requireAdmin(request, response);
   if (!context) return null;
@@ -970,8 +997,13 @@ app.get('/api/admin/update', async (request, response) => {
   const context = requireOwner(request, response);
   if (!context) return;
   const reason = unavailableReason(selfUpdateSettings);
-  const estado = selfUpdater.snapshot();
-  if (reason) return response.json({ enabled: false, reason, current: serverVersion, releases: [], state: estado });
+  if (reason) {
+    return response.json({ enabled: false, reason, current: serverVersion, releases: [], state: selfUpdater.snapshot() });
+  }
+  // O estado vem do executor, e não da memória deste processo: uma aplicação
+  // reinicia justamente este servidor, e o trabalho precisa continuar legível
+  // depois disso.
+  const estado = await selfUpdater.refresh();
   try {
     response.json({ enabled: true, reason: '', current: serverVersion, releases: await selfUpdater.offers(serverVersion), state: estado });
   } catch (erro) {
@@ -996,12 +1028,12 @@ const updateBucket = new TokenBucket(3, 1);
  * que fica em espera são o envio de mensagem e de anexo, por segundos.
  */
 app.post('/api/admin/pause-writes', async (request, response) => {
-  const context = requireOwner(request, response);
-  if (!context) return;
+  const caller = writeGateCaller(request, response);
+  if (!caller) return;
   const parsed = z.object({ timeoutMs: z.number().int().min(1_000).max(30 * 60_000).optional() }).safeParse(request.body ?? {});
   if (!parsed.success) return refuse(response, 400, 'Tempo limite inválido.');
   await store.pauseWrites(parsed.data.timeoutMs);
-  await audit(context.user, 'server.pause-writes', '', 'ok');
+  await caller.audit('server.pause-writes');
   response.json({
     ok: true,
     paused: true,
@@ -1013,10 +1045,10 @@ app.post('/api/admin/pause-writes', async (request, response) => {
 
 /** Liberar as gravações que esperavam. */
 app.post('/api/admin/resume-writes', async (request, response) => {
-  const context = requireOwner(request, response);
-  if (!context) return;
+  const caller = writeGateCaller(request, response);
+  if (!caller) return;
   store.resumeWrites();
-  await audit(context.user, 'server.resume-writes', '', 'ok');
+  await caller.audit('server.resume-writes');
   response.json({ ok: true, paused: false });
 });
 

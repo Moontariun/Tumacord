@@ -65,7 +65,7 @@ async function entrar(url: string, username: string, password: string) {
 // servidor real nasce: o operador sobe o contêiner e faz a própria conta. Sem
 // isso, a primeira pessoa a entrar viraria dona — a proteção que impede um
 // servidor de existir sem ninguém capaz de administrá-lo.
-async function servidorDedicado(context: { after: (fn: () => Promise<void>) => void }, criarDono = true) {
+async function servidorDedicado(context: { after: (fn: () => Promise<void>) => void }, criarDono = true, extraEnv: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-admin-'));
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
@@ -76,6 +76,7 @@ async function servidorDedicado(context: { after: (fn: () => Promise<void>) => v
       HOST: '127.0.0.1', PORT: String(port), DATA_DIR: path.join(root, 'data'),
       TUMACORD_P2P_MODE: '0', TUMACORD_SERVE_WEB: '0', SERVER_ACCESS_KEY: '',
       ADMIN_USERNAME: 'Chefe', TUMACORD_DIRECT_KEY: '', TLS_CERT_FILE: '', TLS_KEY_FILE: '',
+      ...extraEnv,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -375,3 +376,38 @@ test('um corpo sem etiqueta de texto é recusado na porta', { timeout: 30_000 },
   }
 });
 
+// O executor pausa a escrita antes da cópia que antecede cada aplicação, e não
+// tem sessão de dono. O segredo dele precisa abrir exatamente essas duas
+// portas — e nenhuma outra.
+test('o segredo do executor pausa e libera a escrita, e não abre mais nada', { timeout: 30_000 }, async (context) => {
+  const segredo = 'segredo-do-executor-para-o-teste-0123456789';
+  const { url } = await servidorDedicado(context, true, { TUMACORD_EXECUTOR_TOKEN: segredo });
+  const comSegredo = { authorization: `Bearer ${segredo}`, 'content-type': 'application/json' };
+
+  const pausa = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: comSegredo, body: JSON.stringify({ timeoutMs: 5_000 }) });
+  assert.equal(pausa.status, 200);
+  const libera = await fetch(`${url}/api/admin/resume-writes`, { method: 'POST', headers: comSegredo });
+  assert.equal(libera.status, 200);
+
+  // O mesmo segredo não serve de sessão em nenhuma outra rota do painel.
+  assert.notEqual((await fetch(`${url}/api/admin/update`, { headers: comSegredo })).status, 200);
+  assert.notEqual((await fetch(`${url}/api/admin/update`, { method: 'POST', headers: comSegredo, body: JSON.stringify({ tag: 'v0.9.9-1' }) })).status, 200);
+
+  // Um segredo quase certo cai no caminho do dono, que recusa.
+  const quase = await fetch(`${url}/api/admin/pause-writes`, {
+    method: 'POST', headers: { ...comSegredo, authorization: `Bearer ${segredo.slice(0, -1)}x` }, body: '{}',
+  });
+  assert.ok(quase.status === 401 || quase.status === 403, `status ${quase.status}`);
+
+  // A escrita voltou de verdade: entrar cria sessão, e isso grava.
+  assert.equal((await entrar(url, 'Chefe', 'senha-do-chefe')).status, 200);
+});
+
+test('sem segredo configurado no servidor, nenhum portador vira executor', { timeout: 30_000 }, async (context) => {
+  const { url } = await servidorDedicado(context);
+  // Um cabeçalho vazio comparado com um segredo vazio não pode passar.
+  for (const authorization of ['Bearer ', 'Bearer undefined', '']) {
+    const resposta = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: '{}' });
+    assert.ok(resposta.status === 401 || resposta.status === 403, `${JSON.stringify(authorization)} respondeu ${resposta.status}`);
+  }
+});

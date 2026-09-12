@@ -37,7 +37,7 @@ grupo antes.** Quem estiver em call cai.
 
 ```bash
 cd "$TUMACORD_DIR"
-node tools/tumacordctl/tumacordctl.mjs doctor --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs doctor --project "$TUMACORD_PROJETO"
 ```
 
 **Só siga com código de saída 0.** Cada falha vem com o que resolver. As duas
@@ -204,24 +204,77 @@ O painel do dono mostra as versões publicadas e pede a aplicação. Quem aplica
 é o **executor**, um serviço systemd no host — e não o contêiner, que não
 consegue reconstruir a si mesmo.
 
-> ### NÃO IMPLEMENTADO nesta revisão
->
-> O executor **não** existe ainda. `packaging/servidor/tumacord-executor.service`
-> está versionado como o desenho dele — com as permissões restritas e a
-> interface local que ele terá —, mas o programa que a unidade chamaria ainda
-> não foi escrito. **Não habilite essa unidade**: ela falharia ao subir.
->
-> Enquanto isso: `TUMACORD_SELF_UPDATE` deve continuar em `0`, e a atualização
-> é o procedimento manual desta página. Ligar a variável sem o executor faz o
-> painel mostrar as versões e a aplicação falhar — que é exatamente a
-> inconsistência que o `.env.example` anterior carregava, e por isso ela está
-> escrita aqui em vez de escondida.
+O programa é `tools/tumacordctl/executor.mjs` e a unidade é
+`packaging/servidor/tumacord-executor.service`.
 
-Quando ele existir, o contrato já está definido: ele escuta numa interface
-local restrita, recebe **argumentos estruturados** — uma release por
-identificador exato, validada contra o catálogo aprovado — e nunca um comando,
-uma URL ou um caminho vindos do navegador. O socket do Docker não é montado no
-contêiner de chat em nenhuma hipótese.
+### O contrato dele
+
+Ele escuta num **socket Unix**, `/var/lib/tumacord/run/executor.sock`, que o
+`docker-compose.executor.yml` monta dentro do contêiner do chat. O `127.0.0.1`
+de dentro do contêiner é o próprio contêiner, e não o host: alcançar uma porta
+do host exigiria o executor escutar numa interface de rede. Um socket não é
+alcançável pela rede por construção.
+
+O executor **recusa subir** com o socket no mesmo ramo do diretório do estado,
+onde moram o segredo e o registro dos deployments: aquele diretório seria
+montado no chat junto.
+
+Recebe **argumentos estruturados**: um identificador de release, e no máximo
+um canal. Nunca um comando, uma URL, um caminho ou uma referência de git vindos
+do navegador.
+
+A referência de git é **derivada** do manifesto assinado daquela release, e não
+aceita de quem pede. O catálogo e o manifesto precisam concordar sobre a versão;
+discordando, nada é aplicado. O socket do Docker não é montado no contêiner de
+chat em nenhuma hipótese.
+
+### Instalar
+
+```bash
+sudo install -d -o tumacord -g tumacord -m 0750 /var/lib/tumacord/executor
+sudo install -d -o tumacord -g tumacord -m 0755 /var/lib/tumacord/run
+sudo install -d -o tumacord -g tumacord -m 0750 /var/lib/tumacord/backups
+sudo cp packaging/servidor/tumacord-executor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tumacord-executor
+```
+
+Ajuste `WorkingDirectory`, `User` e os `Environment` da unidade para a sua
+instalação antes de habilitar — os valores versionados são exemplo.
+
+Na primeira subida ele gera o segredo em
+`/var/lib/tumacord/executor/executor.token`, com permissão `0600`. Ele **não é
+impresso**, nem no journal: um journal inteiro vai parar dentro de um relato de
+problema.
+
+### Ligar o painel a ele
+
+No `.env` do projeto, preencha as três linhas que o `.env.example` já traz:
+
+- `TUMACORD_EXECUTOR_TOKEN` com o conteúdo daquele arquivo;
+- `COMPOSE_FILE=docker-compose.yml:docker-compose.executor.yml`, descomentada;
+- `TUMACORD_SELF_UPDATE=1`.
+
+`COMPOSE_FILE` no `.env` é o que faz **todo** `docker compose` desta pasta
+carregar o arquivo do executor — inclusive o que o próprio executor roda ao
+aplicar. Passar `-f` à mão funcionaria até a primeira aplicação, que subiria o
+chat sem o socket e desligaria o painel no meio do caminho.
+
+Depois, recrie o chat e confira:
+
+```bash
+docker compose -p "$TUMACORD_PROJETO" config >/dev/null && echo "válida"
+docker compose -p "$TUMACORD_PROJETO" up -d tumacord-server
+```
+
+Se `TUMACORD_EXECUTOR_TOKEN` ficou vazio, o `config` recusa com a mensagem que
+diz de onde tirá-lo. Ligar `TUMACORD_SELF_UPDATE` sem o executor de pé faz o
+painel mostrar as versões e a aplicação falhar — a inconsistência que o
+`.env.example` anterior carregava.
+
+O executor também é quem pausa a escrita antes da cópia. O servidor aceita o
+segredo dele **só** em `pause-writes` e `resume-writes`, e a auditoria registra
+`executor` como autor.
 
 ## Quando algo falha
 
@@ -237,10 +290,42 @@ contêiner de chat em nenhuma hipótese.
 
 ---
 
-## O que ainda é manual
+## O caminho automatizado
 
-`tumacordctl server apply` e `tumacordctl server rollback` **não** estão
-implementados nesta revisão. O comando diz isso e aponta para esta página, em
-vez de fingir que funcionou. Os passos acima são o caminho suportado.
+`tumacordctl server apply` faz os passos acima na mesma ordem, com as mesmas
+conferências, registrando cada etapa num trabalho que sobrevive ao processo.
+
+```bash
+tumacordctl server apply --release rel_stable_0-9-9-1 --ref v0.9.9-1 --out /var/lib/tumacord/backups --dry-run
+tumacordctl server apply --release rel_stable_0-9-9-1 --ref v0.9.9-1 --out /var/lib/tumacord/backups
+```
+
+`--out` faz a cópia consistente antes de tudo, e a aplicação para se ela
+falhar: voltar o código **não** volta os dados. Quem já tem uma cópia conferida
+dispensa com `--no-backup`, e a dispensa fica registrada no trabalho.
+`--dry-run` imprime o que vai acontecer — inclusive que quem estiver em call
+cai — antes de qualquer efeito.
+
+A referência precisa ser exata: uma etiqueta da convenção ou um commit de 40
+caracteres. Uma branch é recusada, porque ela muda de significado entre o
+momento em que você lê e o momento em que o comando roda.
+
+O sucesso só é marcado depois de **validar**, e a validação compara versão,
+commit e `installationId` pelo endpoint interno. Um `HTTP 200` diz que algum
+servidor respondeu; ele não diz que é o servidor certo nem que é a versão que
+acabou de subir.
+
+```bash
+tumacordctl jobs status          # os trabalhos, do mais recente
+tumacordctl jobs status <id>     # as etapas de um deles
+tumacordctl server rollback      # volta ao deployment REGISTRADO na aplicação
+```
+
+A volta atrás vai para o que foi registrado na aplicação, e não para um número
+escrito num guia — era essa divergência que fazia o README mandar voltar para
+`0.8.0` enquanto o script voltava para `0.9.6`.
+
+Os passos manuais acima continuam válidos e são o caminho quando o
+`tumacordctl` não está disponível na máquina.
 
 Veja [QA da release](QA.md) para o que foi executado e o que ficou pendente.

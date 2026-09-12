@@ -11,7 +11,7 @@ Antes de qualquer investigação, pergunte à máquina:
 
 ```bash
 cd "$TUMACORD_DIR"
-node tools/tumacordctl/tumacordctl.mjs doctor --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs doctor --project "$TUMACORD_PROJETO"
 ```
 
 Ele não muda nada, pode rodar com gente na call, e **não imprime o valor de
@@ -20,7 +20,7 @@ variável nenhuma** — a saída dele pode ser colada num relato.
 Para o retrato completo da instalação:
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs instalacao --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs install show --project "$TUMACORD_PROJETO"
 ```
 
 ---
@@ -56,7 +56,7 @@ docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server
 cópia de outra instalação. Não escreva mais nada até entender.
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs instalacao --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs install show --project "$TUMACORD_PROJETO"
 ```
 
 Confira qual volume está montado em `/data`.
@@ -106,7 +106,7 @@ Ele tenta renovar sozinho. Se não conseguir, a credencial foi revogada ou o
 prazo passou muito — peça um convite novo:
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs devices convidar --rotulo "<a máquina>"
+node tools/tumacordctl/tumacordctl.mjs devices enroll --label "<a máquina>"
 ```
 
 Renovar exige credencial que ainda vale, de propósito: aceitar uma vencida ou
@@ -243,8 +243,8 @@ em silêncio. O relatório sai sem hash e sem senha, e a resolução é do dono.
 Colete, nesta ordem:
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs doctor --projeto "$TUMACORD_PROJETO" --json > /tmp/doctor.json
-node tools/tumacordctl/tumacordctl.mjs instalacao --projeto "$TUMACORD_PROJETO" --json > /tmp/instalacao.json
+node tools/tumacordctl/tumacordctl.mjs doctor --project "$TUMACORD_PROJETO" --json > /tmp/doctor.json
+node tools/tumacordctl/tumacordctl.mjs install show --project "$TUMACORD_PROJETO" --json > /tmp/instalacao.json
 docker compose -p "$TUMACORD_PROJETO" logs --tail 200 > /tmp/logs.txt
 ```
 

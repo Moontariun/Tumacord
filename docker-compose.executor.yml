@@ -1,0 +1,36 @@
+# Liga o painel do dono ao executor de atualizações.
+#
+# Este arquivo é OPCIONAL, e separado de propósito: uma instalação sem executor
+# não deve ganhar um mount de um diretório do host que não existe nela, nem uma
+# variável obrigatória que ela não tem como preencher.
+#
+# Para usar, acrescente ao `.env` do projeto:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.executor.yml
+#
+# Com `COMPOSE_FILE` no `.env`, todo `docker compose` rodado nesta pasta —
+# inclusive o que o próprio executor roda ao aplicar uma release — carrega os
+# dois arquivos. Passar `-f` à mão funcionaria até a primeira aplicação, que
+# subiria o chat sem este arquivo e desligaria o painel no meio do caminho.
+#
+# ## Por que um socket, e não uma porta
+#
+# O chat roda num contêiner, e o 127.0.0.1 de dentro dele é o próprio
+# contêiner, não o host. Alcançar uma porta do host exigiria o executor escutar
+# numa interface de rede — e o executor troca a versão do servidor. Um socket
+# Unix não é alcançável pela rede por construção.
+#
+# O diretório montado é `/var/lib/tumacord/run`, e NÃO o do estado do executor:
+# lá moram os trabalhos, o registro dos deployments e o arquivo do segredo, que
+# o chat não tem por que ler. O executor recusa subir com o socket ali. A
+# montagem é somente leitura: conectar num socket não exige escrita no sistema
+# de arquivos, e o chat não precisa criar nem apagar nada naquele diretório.
+
+services:
+  tumacord-server:
+    environment:
+      TUMACORD_SELF_UPDATE: ${TUMACORD_SELF_UPDATE:-0}
+      TUMACORD_EXECUTOR_SOCKET: /run/tumacord-executor/executor.sock
+      TUMACORD_EXECUTOR_TOKEN: ${TUMACORD_EXECUTOR_TOKEN:?Defina TUMACORD_EXECUTOR_TOKEN no .env com o conteúdo de /var/lib/tumacord/executor/executor.token}
+    volumes:
+      - /var/lib/tumacord/run:/run/tumacord-executor:ro

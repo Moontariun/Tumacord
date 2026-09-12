@@ -5,71 +5,119 @@ import { TAG_PATTERN, compareVersions, defaultChoice, installableTag, offeredRel
 // A metade que decide quais versões o painel do servidor pode oferecer.
 //
 // A regra de segurança que este arquivo sustenta: o navegador manda uma
-// etiqueta, e só vale a etiqueta que estiver na lista que o próprio servidor
-// buscou. Tudo o que não passa por `installableTag` não chega ao disco.
+// etiqueta, e só vale a etiqueta que estiver no catálogo que o próprio
+// servidor leu. Tudo o que não passa por `installableTag` não chega ao
+// executor.
 
-const releases = [
-  { tag_name: 'v0.9.9', published_at: '2026-09-12T10:00:00Z', html_url: 'https://exemplo/0.9.9' },
-  { tag_name: 'v0.9.8', published_at: '2026-09-11T10:00:00Z', html_url: 'https://exemplo/0.9.8' },
-  // Uma revisão de manutenção: a correção da 0.9.8, que vem *depois* dela.
-  { tag_name: 'v0.9.8-1', published_at: '2026-09-11T20:00:00Z', html_url: 'https://exemplo/0.9.8-1' },
-  // `rc` deixou de fazer parte da convenção de versão na 0.9.9-1: quem é
-  // ensaio passou a ser decidido pelo canal, que é um campo separado. Uma
-  // etiqueta assim não é mais uma versão deste projeto e fica de fora.
-  { tag_name: 'v0.9.0-rc1', published_at: '2026-09-01T10:00:00Z', prerelease: true },
-  { tag_name: 'v0.8.10', published_at: '2026-08-20T10:00:00Z' },
-  { tag_name: 'v0.8.9', published_at: '2026-08-10T10:00:00Z' },
-  { tag_name: 'rascunho', draft: true },
-  { tag_name: 'nao-e-versao' },
-];
+function entry(version: string, extra: Record<string, unknown> = {}) {
+  return {
+    releaseId: `rel_stable_${version.replace(/[^0-9A-Za-z]/g, '-')}`,
+    version,
+    state: 'published',
+    publishedAt: '2026-09-12T10:00:00Z',
+    ...extra,
+  };
+}
+
+/** O catálogo como o serviço de atualizações o publica: assinado, com canais. */
+const catalog = {
+  payload: {
+    sequence: 7,
+    channels: {
+      stable: {
+        entries: [
+          entry('0.9.9'),
+          entry('0.9.8'),
+          // Uma revisão de manutenção: a correção da 0.9.8, que vem *depois* dela.
+          entry('0.9.8-1'),
+          entry('0.8.10'),
+          entry('0.8.9', { state: 'withdrawn', withdrawn: { reason: 'as resoluções e o FPS da transmissão saem errados' } }),
+          // `rc` deixou de fazer parte da convenção de versão na 0.9.9-1: quem é
+          // ensaio passou a ser decidido pelo canal, que é um campo separado.
+          { releaseId: 'rel_stable_rc', version: '0.9.0-rc1', state: 'published' },
+          { releaseId: 'rel_nao_versao', version: 'nao-e-versao', state: 'published' },
+          // Sem identificador o executor não teria o que aplicar.
+          { version: '0.9.7', state: 'published' },
+        ],
+      },
+    },
+  },
+  signature: { keyId: 'nao-importa-aqui', value: '' },
+};
 
 test('0.8.10 é maior que 0.8.9, e a lista vem da mais nova para a mais antiga', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1, 'a comparação textual diria o contrário');
-  assert.deepEqual(offeredReleases(releases, '0.9.8').map((entrada) => entrada.tag),
+  assert.deepEqual(offeredReleases(catalog, '0.9.8').map((item) => item.tag),
     ['v0.9.9', 'v0.9.8-1', 'v0.9.8', 'v0.8.10', 'v0.8.9']);
 });
 
-test('rascunho, pré-versão e o que não é versão ficam de fora', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  assert.equal(lista.some((entrada) => entrada.tag.includes('rascunho')), false);
-  assert.equal(lista.some((entrada) => entrada.tag.includes('nao-e-versao')), false);
-  assert.equal(lista.some((entrada) => entrada.tag.includes('rc1')), false, 'rc não é versão desta convenção');
+test('pré-versão, o que não é versão e o que não tem identificador ficam de fora', () => {
+  const offers = offeredReleases(catalog, '0.9.8');
+  assert.equal(offers.some((item) => item.version.includes('rc1')), false, 'rc não é versão desta convenção');
+  assert.equal(offers.some((item) => item.releaseId === 'rel_nao_versao'), false);
+  assert.equal(offers.some((item) => item.version === '0.9.7'), false, 'sem releaseId não há o que aplicar');
+});
+
+test('cada oferta carrega o identificador exato com que o executor a aplica', () => {
+  const offers = offeredReleases(catalog, '0.9.8');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.8-1')?.releaseId, 'rel_stable_0-9-8-1');
 });
 
 // A regressão que dá nome à 0.9.9-1: o painel precisa oferecer a revisão de
 // manutenção como o passo *seguinte*, e não como um passo atrás.
 test('a revisão de manutenção é oferecida acima da versão que ela corrige', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  const revisao = lista.find((entrada) => entrada.tag === 'v0.9.8-1');
-  assert.equal(revisao?.newer, true, '0.9.8-1 é mais nova que 0.9.8');
-  assert.equal(lista.find((entrada) => entrada.tag === 'v0.9.8')?.current, true);
+  const offers = offeredReleases(catalog, '0.9.8');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.8-1')?.newer, true, '0.9.8-1 é mais nova que 0.9.8');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.8')?.current, true);
 });
 
 test('a versão em uso é apontada como tal', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  assert.deepEqual(lista.filter((entrada) => entrada.current).map((entrada) => entrada.tag), ['v0.9.8']);
+  const offers = offeredReleases(catalog, '0.9.8');
+  assert.deepEqual(offers.filter((item) => item.current).map((item) => item.tag), ['v0.9.8']);
 });
 
-// Esconder a versão quebrada faria a página do GitHub mostrar uma coisa e o
-// painel outra, sem explicação. Ela aparece, com o motivo, e não é aplicável.
+// Esconder a versão retirada faria o catálogo ter uma coisa e o painel outra,
+// sem explicação. Ela aparece, com o motivo, e não é aplicável.
 test('uma versão retirada continua na lista, dita, e não pode ser aplicada', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  const quebrada = lista.find((entrada) => entrada.tag === 'v0.8.9');
-  assert.ok(quebrada?.broken, 'a 0.8.9 é a que já estava quebrada quando esta cópia foi compilada');
-  assert.equal(installableTag(lista, 'v0.8.9'), null);
+  const offers = offeredReleases(catalog, '0.9.8');
+  const withdrawn = offers.find((item) => item.tag === 'v0.8.9');
+  assert.equal(withdrawn?.broken, 'as resoluções e o FPS da transmissão saem errados');
+  assert.equal(installableTag(offers, 'v0.8.9'), null);
 });
 
-test('o marcador nas notas retira uma versão publicada depois desta cópia', () => {
-  const lista = offeredReleases([{ tag_name: 'v1.2.3', body: 'texto\n<!-- tumacord:versao-quebrada -->\nmais texto' }], '0.9.8');
-  assert.ok(lista[0].broken);
-  assert.equal(installableTag(lista, 'v1.2.3'), null);
+test('uma retirada sem motivo escrito continua retirada', () => {
+  const offers = offeredReleases({ channels: { stable: { entries: [entry('1.2.3', { state: 'withdrawn' })] } } }, '0.9.8');
+  assert.ok(offers[0].broken, 'um motivo em branco não pode virar "pode instalar"');
+  assert.equal(installableTag(offers, 'v1.2.3'), null);
+});
+
+test('o documento assinado e o conteúdo dele produzem a mesma lista', () => {
+  // O executor devolve só o conteúdo; um teste com o documento inteiro prova
+  // que desembrulhar numa camada a mais não deixa o painel vazio sem dizer.
+  assert.deepEqual(offeredReleases(catalog, '0.9.8'), offeredReleases(catalog.payload, '0.9.8'));
+});
+
+test('o canal é um campo, e vem dito em cada oferta', () => {
+  const offers = offeredReleases({
+    channels: {
+      stable: { entries: [entry('0.9.9-1')] },
+      test: { entries: [entry('0.9.9-2', { releaseId: 'rel_test_0-9-9-2' })] },
+    },
+  }, '0.9.9');
+  assert.equal(offers.find((item) => item.version === '0.9.9-1')?.channel, 'stable');
+  assert.equal(offers.find((item) => item.version === '0.9.9-2')?.channel, 'test');
+});
+
+test('o aviso de parada obrigatória chega ao painel', () => {
+  const offers = offeredReleases({ channels: { stable: { entries: [entry('1.0.0', { requiredStop: 'Passe pela 0.9.9-1 antes.' })] } } }, '0.9.8');
+  assert.equal(offers[0].requiredStop, 'Passe pela 0.9.9-1 antes.');
 });
 
 // --- o que o navegador não consegue fazer -----------------------------------
 
 test('só a forma de etiqueta deste projeto é aceita', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  for (const tentativa of [
+  const offers = offeredReleases(catalog, '0.9.8');
+  for (const attempt of [
     'main',
     'release/entrada-e-contas-v0.9.8',
     'v0.9.9; rm -rf /',
@@ -81,27 +129,27 @@ test('só a forma de etiqueta deste projeto é aceita', () => {
     'v0.9',
     '',
   ]) {
-    assert.equal(TAG_PATTERN.test(tentativa), false, `${JSON.stringify(tentativa)} não tem a forma de uma etiqueta`);
-    assert.equal(installableTag(lista, tentativa), null, `${JSON.stringify(tentativa)} não pode ser aplicado`);
+    assert.equal(TAG_PATTERN.test(attempt), false, `${JSON.stringify(attempt)} não tem a forma de uma etiqueta`);
+    assert.equal(installableTag(offers, attempt), null, `${JSON.stringify(attempt)} não pode ser aplicado`);
   }
 });
 
 test('uma etiqueta bem formada que não está publicada também é recusada', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  assert.equal(installableTag(lista, 'v9.9.9'), null, 'o servidor só aplica o que ele mesmo viu publicado');
-  assert.equal(installableTag(lista, 'v0.9.9')?.tag, 'v0.9.9');
+  const offers = offeredReleases(catalog, '0.9.8');
+  assert.equal(installableTag(offers, 'v9.9.9'), null, 'o servidor só aplica o que ele mesmo viu publicado');
+  assert.equal(installableTag(offers, 'v0.9.9')?.tag, 'v0.9.9');
 });
 
 test('nada que não seja texto atravessa', () => {
-  const lista = offeredReleases(releases, '0.9.8');
-  for (const tentativa of [null, undefined, 42, {}, ['v0.9.9'], { tag: 'v0.9.9' }]) {
-    assert.equal(installableTag(lista, tentativa), null);
+  const offers = offeredReleases(catalog, '0.9.8');
+  for (const attempt of [null, undefined, 42, {}, ['v0.9.9'], { tag: 'v0.9.9' }]) {
+    assert.equal(installableTag(offers, attempt), null);
   }
 });
 
-test('uma lista que não é lista não vira oferta nenhuma', () => {
-  for (const tentativa of [null, undefined, 'v0.9.9', { releases: [] }]) {
-    assert.deepEqual(offeredReleases(tentativa, '0.9.8'), []);
+test('o que não é catálogo não vira oferta nenhuma', () => {
+  for (const attempt of [null, undefined, 'v0.9.9', [], { channels: null }, { channels: { stable: { entries: 'x' } } }]) {
+    assert.deepEqual(offeredReleases(attempt, '0.9.8'), []);
   }
   assert.equal(parseVersion('sem versão'), null);
 });
@@ -110,27 +158,25 @@ test('uma lista que não é lista não vira oferta nenhuma', () => {
 // atrás: "a primeira da lista que não é a atual" oferecia a versão anterior
 // quando o servidor já estava na mais nova.
 test('a escolha padrão é a mais nova acima da que está rodando', () => {
-  assert.equal(defaultChoice(offeredReleases(releases, '0.9.7')), 'v0.9.9');
-  assert.equal(defaultChoice(offeredReleases(releases, '0.8.10')), 'v0.9.9');
+  assert.equal(defaultChoice(offeredReleases(catalog, '0.9.7')), 'v0.9.9');
+  assert.equal(defaultChoice(offeredReleases(catalog, '0.8.10')), 'v0.9.9');
 });
 
 test('já na mais nova, a escolha padrão é ela mesma — e não a anterior', () => {
-  assert.equal(defaultChoice(offeredReleases(releases, '0.9.9')), 'v0.9.9');
+  assert.equal(defaultChoice(offeredReleases(catalog, '0.9.9')), 'v0.9.9');
 });
 
-test('uma versão quebrada não vira a escolha padrão', () => {
-  const lista = offeredReleases([
-    { tag_name: 'v2.0.0', body: '<!-- tumacord:versao-quebrada -->' },
-    { tag_name: 'v1.5.0' },
-  ], '1.0.0');
-  assert.equal(defaultChoice(lista), 'v1.5.0');
+test('uma versão retirada não vira a escolha padrão', () => {
+  const offers = offeredReleases({
+    channels: { stable: { entries: [entry('2.0.0', { state: 'withdrawn', withdrawn: { reason: 'quebra a call' } }), entry('1.5.0')] } },
+  }, '1.0.0');
+  assert.equal(defaultChoice(offers), 'v1.5.0');
 });
 
 test('voltar para uma versão anterior continua possível, e vem dito', () => {
-  const lista = offeredReleases(releases, '0.9.9');
-  const anterior = lista.find((entrada) => entrada.tag === 'v0.9.8');
-  assert.equal(anterior?.newer, false);
-  assert.equal(anterior?.current, false);
-  assert.equal(installableTag(lista, 'v0.9.8')?.tag, 'v0.9.8', 'voltar é caminho legítimo quando algo quebrou');
+  const offers = offeredReleases(catalog, '0.9.9');
+  const previous = offers.find((item) => item.tag === 'v0.9.8');
+  assert.equal(previous?.newer, false);
+  assert.equal(previous?.current, false);
+  assert.equal(installableTag(offers, 'v0.9.8')?.tag, 'v0.9.8', 'voltar é caminho legítimo quando algo quebrou');
 });
-

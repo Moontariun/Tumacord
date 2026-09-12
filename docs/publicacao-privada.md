@@ -147,7 +147,7 @@ caminho que o manifesto declara.
 
 ```bash
 # Descubra o volume real, sem presumir o nome:
-ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs install show --projeto tumacord"
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs install show --project tumacord"
 
 rsync -av release/ vps:/var/lib/docker/volumes/<volume-de-pacotes>/_data/releases/$TUMACORD_VERSAO/
 
@@ -261,9 +261,9 @@ Cada aplicativo precisa de uma credencial para baixar. Ela é obtida por
 **convite de uso único**, passado por canal privado.
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs devices convidar --rotulo "Windows do Caio"
+node tools/tumacordctl/tumacordctl.mjs devices enroll --label "Windows do Caio"
 node tools/tumacordctl/tumacordctl.mjs devices listar
-node tools/tumacordctl/tumacordctl.mjs devices revogar <deviceId> --motivo "máquina perdida"
+node tools/tumacordctl/tumacordctl.mjs devices revoke <deviceId> --reason "máquina perdida"
 ```
 
 > **Por que não um segredo embutido no executável.** Ele seria o mesmo para
@@ -309,26 +309,29 @@ quando o GitHub não estiver disponível ou não for usado:
 # Os bytes.
 rsync -av bundle/pacotes/ vps:/var/lib/docker/volumes/<projeto>_tumacord-pacotes/_data/
 # Os documentos.
-node tools/tumacordctl/tumacordctl.mjs releases importar --manifesto bundle/manifesto.json
-node tools/tumacordctl/tumacordctl.mjs releases publicar --catalogo bundle/catalogo.json
+node tools/tumacordctl/tumacordctl.mjs releases import --manifest bundle/manifesto.json
+node tools/tumacordctl/tumacordctl.mjs releases publish --catalog bundle/catalogo.json
 ```
 
 Nada nesse caminho consulta a rede além da própria VPS.
 
 ---
 
-## O que ainda não está implementado
+## O que foi exercido, e o que não foi
 
 O caminho de publicação acima está implementado e exercido de ponta a ponta em
 `tests/publisher.integration.test.ts`: uma pasta de build vira release assinada,
 é importada e publicada, e o aplicativo a recebe e a baixa.
 
-O que **falta** é do outro lado da operação:
+O outro lado da operação também existe nesta entrega: o executor que aplica uma
+release ao servidor ([Atualização do servidor](atualizacao-servidor.md)),
+`tumacordctl backup` e `restore` ([Backup e restauração](backup-restore.md)), e
+o painel do dono, que conversa com o executor por socket.
 
-| Item | Enquanto isso |
-|---|---|
-| o executor que aplica uma release ao servidor | [Atualização do servidor](atualizacao-servidor.md), manual |
-| `tumacordctl backup` / `restore` | [Backup e restauração](backup-restore.md), manual |
-| o painel do dono para atualizações | `tumacordctl` faz o mesmo pela linha de comando |
+**Nenhum deles foi exercido contra uma VPS de verdade.** Os testes sobem o
+executor num socket real e conferem a conversa com o painel, mas substituem o
+Docker e o git nas etapas que trocariam a versão de um servidor em uso. Aplicar
+uma release numa instalação real é o procedimento marcado como NÃO EXECUTADO no
+QA.
 
 Veja [QA da release](QA.md) para o que foi executado e o que ficou pendente.

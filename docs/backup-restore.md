@@ -57,7 +57,7 @@ contêiner em `/data`:
 
 ```bash
 cd "$TUMACORD_DIR"
-node tools/tumacordctl/tumacordctl.mjs instalacao --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs install show --project "$TUMACORD_PROJETO"
 ```
 
 **Saída esperada:** entre outras linhas,
@@ -72,14 +72,14 @@ Dados do chat: volume <nome-real-do-volume>
 porque não se sabe o que copiar, e é exatamente aqui que o guia antigo seguia
 adiante.
 
-**Se houver mais de uma instalação**, o comando recusa e pede `--projeto`.
+**Se houver mais de uma instalação**, o comando recusa e pede `--project`.
 Escolher sozinho seria escolher de qual instalação você perde os dados.
 
 Guarde o nome para os comandos seguintes:
 
 ```bash
-export TUMACORD_VOLUME="$(node tools/tumacordctl/tumacordctl.mjs instalacao --projeto "$TUMACORD_PROJETO" --json \
-  | node -e 'let t="";process.stdin.on("data",d=>t+=d).on("end",()=>{const i=JSON.parse(t);const m=(i.servicos["tumacord-server"]?.mounts??[]).filter(x=>x.destino==="/data");if(m.length!==1){console.error("descoberta ambígua ou vazia: "+m.length+" mounts em /data");process.exit(1)}process.stdout.write(m[0].nome||m[0].origem)})')"
+export TUMACORD_VOLUME="$(node tools/tumacordctl/tumacordctl.mjs install show --project "$TUMACORD_PROJETO" --json \
+  | node -e 'let t="";process.stdin.on("data",d=>t+=d).on("end",()=>{const i=JSON.parse(t);const m=(i.services["tumacord-server"]?.mounts??[]).filter(x=>x.destination==="/data");if(m.length!==1){console.error("descoberta ambígua ou vazia: "+m.length+" mounts em /data");process.exit(1)}process.stdout.write(m[0].name||m[0].source)})')"
 echo "volume de dados: $TUMACORD_VOLUME"
 ```
 
@@ -327,10 +327,48 @@ docker compose -p "$TUMACORD_PROJETO" logs --tail 30 tumacord-server
 
 ---
 
-## O que ainda não está automatizado
+## O caminho automatizado
 
-`tumacordctl backup` e `tumacordctl restore` ainda **não** estão
-implementados nesta revisão; o comando diz isso e aponta para este guia em vez
-de fingir que funcionou. O procedimento manual acima é o caminho suportado, e
-é ele que foi ensaiado. Veja [QA da release](QA.md) para o que foi executado e
-o que ficou pendente.
+`tumacordctl backup` e `tumacordctl restore` fazem exatamente os passos acima,
+na mesma ordem e com as mesmas recusas.
+
+```bash
+tumacordctl backup --out /var/backups/tumacord
+```
+
+Ele pausa a escrita, copia o volume que o contêiner **tem** montado em `/data`,
+libera a escrita — inclusive quando a cópia falha —, confere que o arquivo abre
+e contém `tumacord.json`, e grava o `.sha256` ao lado. **Sem conseguir a pausa,
+ele para**: não continuar em silêncio é o ponto inteiro.
+
+A pausa exige autorização. Rodando como o usuário do executor, o `tumacordctl`
+usa o segredo dele, que o servidor aceita para pausar a escrita — e só para
+isso:
+
+```bash
+sudo -u tumacord node tools/tumacordctl/tumacordctl.mjs backup --out /var/lib/tumacord/backups
+```
+
+Sem executor instalado, use a sessão de um dono **pelo ambiente**. Nunca pela
+linha de comando, que é legível por qualquer processo da máquina pelo `/proc`:
+
+```bash
+TUMACORD_OWNER_TOKEN=... node tools/tumacordctl/tumacordctl.mjs backup --out /var/backups/tumacord
+```
+
+```bash
+tumacordctl restore --from /var/backups/tumacord/tumacord-...tar.gz
+```
+
+Ele confere o `.sha256` **antes** de criar coisa alguma, restaura num volume de
+ensaio novo, lê o `installationId` de dentro dele e o compara com o da
+instalação em uso. Se forem diferentes, ele para: restaurar a cópia de outra
+instalação por cima desta é o erro que mais custa.
+
+`restore` **nunca substitui** o que está em uso. Ele deixa o volume de ensaio
+pronto para você conferir por dentro (seção 4) e diz como seguir para a
+substituição (seção 5), que continua sendo uma decisão explícita.
+
+O procedimento manual acima continua válido e é o caminho quando o `tumacordctl`
+não está disponível na máquina. Veja [QA da release](QA.md) para o que foi
+executado e o que ficou pendente.

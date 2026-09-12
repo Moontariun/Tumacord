@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 // @ts-expect-error — módulo .mjs sem tipos, e é assim que o operador o usa.
@@ -7,7 +7,7 @@ import { chooseInstallation, dataMount, discoverInstallations } from '../tools/t
 // @ts-expect-error — idem.
 import { preflight, preflightPorts, worstLevel } from '../tools/tumacordctl/lib/preflight.mjs';
 // @ts-expect-error — idem.
-import { COMMAND_HELP, HELP, NOT_IMPLEMENTED, parseArgs, serviceUrl } from '../tools/tumacordctl/tumacordctl.mjs';
+import { COMMAND_HELP, HELP, parseArgs, serviceUrl } from '../tools/tumacordctl/tumacordctl.mjs';
 
 // A descoberta da instalação, que é onde o guia antigo errava três vezes no
 // mesmo lugar: escolhia "o primeiro volume que combina com a regex", presumia
@@ -45,7 +45,7 @@ function fakeDocker(containers: Record<string, unknown>[]) {
 
 // ── Descoberta ─────────────────────────────────────────────────────────────
 
-test('a instalação é achada pelo rótulo do Compose, com qualquer name de project', async () => {
+test('a instalação é achada pelo rótulo do Compose, com qualquer nome de projeto', async () => {
   // O ponto: o nome do volume aqui é `projeto-do-renan_tumacord-data`, que
   // nenhuma regex por `tumacord-data` acharia como nome exato.
   const { ok, installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
@@ -56,7 +56,7 @@ test('a instalação é achada pelo rótulo do Compose, com qualquer name de pro
   assert.equal(installations[0].services['tumacord-server'].status, 'running');
 });
 
-test('o volume de data é o mount real em /data, e não um name presumido', async () => {
+test('o volume de dados é o mount real em /data, e não um nome presumido', async () => {
   const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
   const data = dataMount(installations[0].services['tumacord-server'], '/data');
   assert.equal(data.name, 'project-do-renan_tumacord-data');
@@ -98,7 +98,7 @@ test('nenhuma instalação não é tratada como instalação vazia', async () =>
 test('contêineres de outros projetos não entram', async () => {
   const alheio = { ...CONTÊINER_CHAT, Id: 'zzz', Config: { ...CONTÊINER_CHAT.Config, Labels: { 'com.docker.compose.project': 'outra-coisa', 'com.docker.compose.service': 'postgres' } } };
   const { installations } = await discoverInstallations(fakeDocker([alheio]));
-  assert.equal(installations.length, 0, 'só os serviços deste project');
+  assert.equal(installations.length, 0, 'só os serviços deste projeto');
 });
 
 // ── Preflight ──────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ test('dois mounts em /data param a operação', async () => {
   assert.match(result.checks.find((c: { title: string }) => c.title === 'Volume de dados').howToFix, /ambígua/);
 });
 
-test('data montados somente para leitura é falha', async () => {
+test('dados montados somente para leitura é falha', async () => {
   const readOnly = {
     ...healthyInstallation,
     services: { ...healthyInstallation.services, 'tumacord-server': { ...healthyInstallation.services['tumacord-server'], mounts: [{ kind: 'volume', name: 'x', source: '/x', destination: '/data', writable: false }] } },
@@ -205,7 +205,7 @@ test('variável obrigatória ausente é falha, e o valor continua fora da saída
   const result = await preflight(withoutKey, baseOptions);
   assert.equal(result.level, 'fail');
   const check = result.checks.find((item: { title: string }) => item.title === 'Configuração');
-  assert.match(check.detail, /SERVER_ACCESS_KEY/, 'o name que falta é dito');
+  assert.match(check.detail, /SERVER_ACCESS_KEY/, 'o nome que falta é dito');
 });
 
 test('o serviço de atualizações ausente é aviso, não falha', async () => {
@@ -231,7 +231,7 @@ test('o pior nível é o que decide se a operação segue', () => {
   assert.equal(worstLevel([]), 'ok');
 });
 
-test('ports ocupadas são detectadas, e o command para descobrir quem as usa é dito', async () => {
+test('portas ocupadas são detectadas, e o comando para descobrir quem as usa é dito', async () => {
   const result = await preflightPorts([4600, 4300], async (porta: number) => porta !== 4600);
   assert.equal(result.level, 'fail');
   const busy = result.checks.find((item: { title: string }) => item.title === 'Porta 4600');
@@ -241,7 +241,7 @@ test('ports ocupadas são detectadas, e o command para descobrir quem as usa é 
 
 // ── A interface do comando ─────────────────────────────────────────────────
 
-test('a ajuda cita os guides que existem, e os comandos que ela promete', () => {
+test('a ajuda cita os guias que existem, e os comandos que ela promete', () => {
   for (const command of ['doctor', 'install show', 'releases import', 'releases publish', 'devices enroll', 'devices revoke', 'backup', 'restore']) {
     assert.ok(HELP.includes(command), `\`${command}\` não aparece na ajuda`);
   }
@@ -255,7 +255,7 @@ test('a ajuda cita os guides que existem, e os comandos que ela promete', () => 
   }
 });
 
-test('cada guide citado nas ajudas por command também existe', () => {
+test('cada guia citado nas ajudas por comando também existe', () => {
   for (const [command, text] of Object.entries(COMMAND_HELP as Record<string, string>)) {
     for (const guide of [...text.matchAll(/docs\/[a-z0-9-]+\.md/g)].map((found) => found[0])) {
       assert.ok(existsSync(new URL(`../${guide}`, import.meta.url)), `${guide}, citado em \`${command} --help\`, não existe`);
@@ -263,20 +263,45 @@ test('cada guide citado nas ajudas por command também existe', () => {
   }
 });
 
-test('o que ainda não está implementado é dito, e não finge funcionar', () => {
-  // Um comando que responde "ok" sem fazer nada é pior do que um que recusa.
-  for (const [command, description] of Object.entries(NOT_IMPLEMENTED as Record<string, string>)) {
-    assert.ok(description.length > 5, command);
-    assert.ok(HELP.includes(command.split(' ')[0]), `${command} sumiu da ajuda`);
+test('todo comando anunciado na ajuda tem rota de verdade', () => {
+  // Um comando que aparece no --help e cai em "Comando desconhecido" é pior do
+  // que um que não aparece: quem leu a ajuda confiou nela.
+  const source = readFileSync(new URL('../tools/tumacordctl/tumacordctl.mjs', import.meta.url), 'utf8');
+  const section = HELP.slice(HELP.indexOf('COMANDOS'), HELP.indexOf('OPÇÕES GERAIS'));
+  const announced = new Set(
+    section.split('\n')
+      .map((line) => /^ {2}([a-z]+)(?: [a-z]+)?\s{2,}/.exec(line)?.[1] ?? '')
+      .filter(Boolean),
+  );
+  assert.ok(announced.size >= 6, `a ajuda anuncia poucos commands: ${[...announced].join(', ')}`);
+  for (const command of announced) {
+    assert.ok(source.includes(`case '${command}':`), `\`${command}\` está na ajuda e não tem case no switch`);
   }
 });
 
-test('cada command com ajuda própria explica o que NÃO faz também', () => {
+test('o executor recusa referência que não é exata', async () => {
+  // Uma branch muda de significado entre o momento em que a pessoa lê e o
+  // momento em que o comando roda. Isso é recusa, e não aviso.
+  const { validateRef } = await import('../tools/tumacordctl/lib/deploy.mjs');
+  assert.equal(validateRef('main').ok, false);
+  assert.equal(validateRef('0.9.9-1').ok, false, 'sem o v não é a etiqueta da convenção');
+  assert.equal(validateRef('v0.9.9-1').ok, true);
+  assert.equal(validateRef('a'.repeat(40)).ok, true);
+  assert.equal(validateRef('a'.repeat(39)).ok, false);
+});
+
+test('cada comando com ajuda própria explica o que NÃO faz também', () => {
   assert.match(COMMAND_HELP.doctor, /Não muda nada/);
   assert.match(COMMAND_HELP.doctor, /não imprime valor/i);
   assert.match(COMMAND_HELP.backup, /para/i);
-  assert.match(COMMAND_HELP.restore, /destino separado/);
+  // A garantia do restore é que ele não troca nada sozinho: ensaia num volume
+  // novo e para por ali.
+  assert.match(COMMAND_HELP.restore, /de ensaio/);
+  assert.match(COMMAND_HELP.restore, /nunca substitui/);
   assert.match(COMMAND_HELP.restore, /perda/i);
+  // E a aplicação precisa dizer que voltar o código não volta os dados.
+  assert.match(COMMAND_HELP.server, /volta os dados/);
+  assert.match(COMMAND_HELP.server, /branch é recusada/);
 });
 
 test('as opções são lidas sem shell e sem concatenação', () => {

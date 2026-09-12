@@ -12,11 +12,18 @@
 // mais recente" muda de significado entre o momento em que o operador lê e o
 // momento em que o comando roda.
 
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { chooseInstallation, dataMount, discoverInstallations } from './lib/discovery.mjs';
 import { preflight, preflightPorts } from './lib/preflight.mjs';
+import {
+  dropVolume, installationIdOf, planBackup, rehearsalVolumeName, restoreToNewVolume, sha256OfFile,
+} from './lib/backup.mjs';
+import { JobStore } from './lib/jobs.mjs';
+import { planApply, planRollback, releaseIsApproved, validateRef } from './lib/deploy.mjs';
+import { previousDeployment, runApply, runBackup, runRollback } from './lib/operations.mjs';
 
 const TOOL_VERSION = '0.9.9-1';
 
@@ -112,20 +119,70 @@ CONSISTÊNCIA
   Sem conseguir a pausa, o comando **para**. Não continuar em silêncio é o
   ponto: um backup que não aconteceu só avisa na hora de restaurar.
 `,
-  restore: `tumacordctl restore — restaura uma cópia
+  restore: `tumacordctl restore — restaura uma cópia num volume de ensaio
 
 USO
-  tumacordctl restore --from <arquivo> --to <destino> [--verify]
+  tumacordctl restore --from <arquivo.tar.gz> [--project <nome>]
 
 ORDEM
-  A restauração acontece primeiro num **destino separado** e é validada lá,
-  antes de qualquer coisa substituir o que está em uso. Nunca há \`rm -rf\` sobre
-  um caminho que não foi conferido.
+  A restauração acontece num volume **novo**, de ensaio, e é validada lá. Este
+  comando nunca substitui o que está em uso: substituir é uma decisão separada,
+  e o procedimento está em docs/backup-restore.md seção 5.
+
+O QUE ELE CONFERE, NESTA ORDEM
+  1. O resumo SHA-256 ao lado da cópia, antes de criar coisa alguma.
+  2. Que a cópia abre e contém \`tumacord.json\`.
+  3. Que o \`installationId\` de dentro dela é o da instalação em uso. Restaurar
+     a cópia de OUTRA instalação por cima desta é o erro que mais custa, e é
+     este o passo que o impede.
 
 PERDA POTENCIAL
   Restaurar dados devolve a instalação ao ponto da cópia. Tudo o que foi
-  escrito depois dela — mensagens, contas, anexos — não está lá. O comando diz
-  a data da cópia e pede confirmação explícita antes de substituir.
+  escrito depois dela — mensagens, contas, anexos — não está lá.
+`,
+  jobs: `tumacordctl jobs — os trabalhos do executor
+
+USO
+  tumacordctl jobs status [<id>] [--json]
+  tumacordctl jobs unlock --force-unlock
+
+POR QUE ELES TÊM ESTADO EM DISCO
+  Um deploy para o servidor. Se o estado vivesse na memória do processo,
+  reiniciar no meio faria o trabalho sumir sem desfecho: ninguém saberia se ele
+  terminou, e a próxima tentativa repetiria uma migração que já rodou.
+
+O LOCK
+  Um lock de um processo que não existe mais é **dito**, e não removido
+  sozinho: aquele trabalho pode ter parado no meio de uma migração. Confira com
+  \`jobs status\` antes de liberar com \`--force-unlock\`.
+`,
+  server: `tumacordctl server — aplicar uma release, e voltar atrás
+
+USO
+  tumacordctl server apply --release <releaseId> --ref <v0.9.9-1|commit> --out <diretório> [--dry-run]
+  tumacordctl server apply --release <releaseId> --ref <v0.9.9-1|commit> --no-backup
+  tumacordctl server rollback [--dry-run]
+
+O QUE ENTRA
+  Uma release publicada no catálogo aprovado e uma referência **exata** de git:
+  etiqueta da convenção ou commit de 40 caracteres. Uma branch é recusada de
+  propósito — ela muda de significado entre o momento em que você lê e o
+  momento em que o comando roda.
+
+A ORDEM
+  preflight → registrar o deployment atual → buscar a referência → construir →
+  subir → **validar**. O sucesso só é marcado depois da validação, e ela
+  compara versão, commit e identidade da instalação. Um \`HTTP 200\` diz que
+  algum servidor respondeu; ele não diz que é a versão que acabou de subir.
+
+A CÓPIA
+  \`--out\` faz a cópia consistente antes de tudo, e a aplicação para se ela
+  falhar. Voltar o código NÃO volta os dados. Quem já tem uma cópia conferida
+  dispensa com \`--no-backup\`, e a dispensa fica registrada no trabalho.
+
+A VOLTA ATRÁS
+  Vai para o deployment que foi **registrado** na aplicação, e não para um
+  número escrito num guia.
 `,
 };
 
@@ -223,6 +280,50 @@ async function installCommand(positionals, options) {
   console.log(`\nDados do chat: ${data ? `${data.kind} ${data.name || data.source}` : 'NÃO ENCONTRADOS — nada deve ser aplicado assim'}`);
   console.log('\n(Os valores das variáveis não são impressos: esta saída pode ser colada num relato.)');
   return 0;
+}
+
+/** Onde o estado dos trabalhos mora. Fora do checkout, que é descartável. */
+function stateDir(options) {
+  const raw = typeof options.state === 'string' ? options.state : (process.env.TUMACORD_EXECUTOR_STATE || '/var/lib/tumacord/executor');
+  return path.resolve(raw);
+}
+
+/**
+ * Abre o estado dos trabalhos, dizendo o que fazer quando não dá.
+ *
+ * O padrão é `/var/lib/tumacord/executor`, que na VPS pertence ao usuário do
+ * executor. Um `EACCES` cru aqui não diz nada a quem está operando.
+ */
+async function openJobStore(options) {
+  const directory = stateDir(options);
+  const store = new JobStore(directory);
+  try {
+    await store.init();
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Não consegui usar ${directory} para o estado dos trabalhos: ${error?.message ?? error}\n`
+        + 'Rode como o usuário do executor, ou aponte outro lugar com --state <diretório> ou TUMACORD_EXECUTOR_STATE.',
+    };
+  }
+  return { ok: true, store };
+}
+
+/**
+ * A autorização para pausar a escrita, de onde ela pode vir sem passar por
+ * linha de comando — que é legível por qualquer processo da máquina.
+ *
+ * Primeiro a sessão de um dono, se foi dada pelo ambiente. Senão, o segredo do
+ * executor, que o servidor aceita para isso: rodando como o usuário do
+ * executor, a cópia não depende de uma sessão que expira em dias.
+ */
+function ownerToken(options) {
+  if (process.env.TUMACORD_OWNER_TOKEN) return process.env.TUMACORD_OWNER_TOKEN;
+  try {
+    return readFileSync(path.join(stateDir(options), 'executor.token'), 'utf8').trim();
+  } catch {
+    return '';
+  }
 }
 
 /** A administração do serviço de atualizações, sempre no laço local. */
@@ -352,19 +453,277 @@ async function releasesCommand(positionals, options) {
   return 1;
 }
 
-/**
- * O que ainda não existe, e o que ele faria.
- *
- * Dizer isto é melhor do que um comando que finge funcionar: um que responde
- * "ok" sem fazer nada é pior do que um que recusa.
- */
-const NOT_IMPLEMENTED = {
-  'server apply': 'aplicar uma release ao dedicado',
-  'server rollback': 'voltar ao deployment anterior',
-  backup: 'a cópia consistente',
-  restore: 'a restauração',
-  'jobs status': 'a lista de trabalhos',
-};
+// ── Backup ──────────────────────────────────────────────────────────────────
+
+async function backupCommand(options) {
+  const choice = await selectedInstallation(options);
+  if (!choice.ok) { console.error(choice.error); return choice.code; }
+
+  const out = typeof options.out === 'string' ? options.out : '';
+  if (!out) { console.error('Informe --out <diretório>: onde a cópia será escrita.'); return 1; }
+
+  const result = await runBackup({
+    installation: choice.installation,
+    outputDir: out,
+    token: ownerToken(options),
+    report: ({ step, state, detail }) => {
+      if (state === 'running') return;
+      console.log(`  ${state === 'ok' ? '·' : '!'} ${step}${detail ? `: ${detail}` : ''}`);
+    },
+  });
+  if (!result.ok) { console.error(`\n${result.error}`); return 1; }
+
+  console.log(`\n${result.archive}`);
+  console.log(`${result.archive}.sha256  (${result.sha256})\n`);
+  console.log('Leve uma cópia para FORA desta máquina: uma cópia que mora na VPS não');
+  console.log('protege contra a perda da VPS, que é justamente o caso em que se precisa dela.');
+  return 0;
+}
+
+// ── Restauração ─────────────────────────────────────────────────────────────
+
+async function restoreCommand(options) {
+  const from = typeof options.from === 'string' ? options.from : '';
+  if (!from) { console.error('Informe --from <arquivo.tar.gz>: a cópia a restaurar.'); return 1; }
+  const archive = path.resolve(from);
+
+  // A origem é conferida **antes** de qualquer coisa ser criada.
+  try {
+    const expected = (await readFile(`${archive}.sha256`, 'utf8')).trim().split(/\s+/)[0];
+    const actual = await sha256OfFile(archive);
+    if (expected && expected !== actual) {
+      console.error(`A cópia não confere com o resumo guardado:\n  esperado ${expected}\n  lido     ${actual}`);
+      console.error('NÃO restaure: use outra cópia.');
+      return 1;
+    }
+    console.log(`· resumo confere (${actual})`);
+  } catch {
+    console.log('! sem arquivo `.sha256` ao lado: a integridade não pôde ser conferida antes.');
+  }
+
+  const rehearsal = rehearsalVolumeName();
+  console.log(`· restaurando num volume de ensaio: ${rehearsal}`);
+  const restored = await restoreToNewVolume({ archive, volume: rehearsal });
+  if (!restored.ok) {
+    console.error(restored.error);
+    await dropVolume({ volume: rehearsal });
+    return 1;
+  }
+
+  const identity = await installationIdOf({ volume: rehearsal });
+  if (!identity.ok) {
+    console.error(identity.error);
+    await dropVolume({ volume: rehearsal });
+    return 1;
+  }
+  console.log(`· a cópia é da instalação ${identity.installationId}`);
+
+  // Compara com a instalação em uso, quando há uma. Restaurar a cópia de
+  // **outra** instalação por cima desta é o erro que mais custa.
+  const choice = await selectedInstallation(options);
+  if (choice.ok) {
+    const live = planBackup({ installation: choice.installation, outputDir: '/tmp' });
+    if (live.ok) {
+      const atual = await installationIdOf({ volume: live.volume });
+      if (atual.ok && atual.installationId !== identity.installationId) {
+        console.error(`\nPARE: a instalação em uso é ${atual.installationId} e esta cópia é ${identity.installationId}.`);
+        console.error('Restaurar isto por cima trocaria os dados de uma instalação pelos de outra.');
+        await dropVolume({ volume: rehearsal });
+        return 1;
+      }
+      if (atual.ok) console.log(`· confere com a instalação em uso (${atual.installationId})`);
+    }
+  }
+
+  console.log(`\nA cópia foi restaurada e validada no volume de ensaio \`${rehearsal}\`.`);
+  console.log('Ela NÃO substituiu nada: substituir é uma decisão separada.\n');
+  console.log('Para conferir por dentro, suba um servidor de teste contra ele — o');
+  console.log('procedimento está em docs/backup-restore.md, seção 4.\n');
+  console.log('Quando terminar o ensaio:');
+  console.log(`  docker volume rm ${rehearsal}`);
+  console.log('\nPara substituir os dados em uso, siga docs/backup-restore.md seção 5:');
+  console.log('ele diz a perda potencial por extenso e pede confirmação explícita.');
+  return 0;
+}
+
+// ── Trabalhos ───────────────────────────────────────────────────────────────
+
+async function jobsCommand(positionals, options) {
+  const sub = positionals[0] ?? 'status';
+  const opened = await openJobStore(options);
+  if (!opened.ok) { console.error(opened.error); return 1; }
+  const { store } = opened;
+
+  if (sub === 'status') {
+    const id = positionals[1] ?? (typeof options.id === 'string' ? options.id : '');
+    if (id) {
+      const job = await store.read(id);
+      if (!job) { console.error(`Não há trabalho ${id}.`); return 1; }
+      if (options.json) { console.log(JSON.stringify(job, null, 2)); return 0; }
+      console.log(`\n${job.kind}  ${job.id}`);
+      console.log(`estado:   ${job.state}`);
+      console.log(`criado:   ${job.createdAt}`);
+      if (job.finishedAt) console.log(`terminou: ${job.finishedAt}`);
+      if (job.error) console.log(`erro:     ${job.error}`);
+      console.log('\netapas:');
+      for (const step of job.steps) {
+        const mark = step.state === 'failed' ? '×' : step.state === 'ok' ? '·' : step.state === 'skipped' ? '-' : '…';
+        console.log(`  ${mark} ${step.name}${step.detail ? `: ${step.detail}` : ''}`);
+      }
+      return job.state === 'failed' ? 1 : 0;
+    }
+    const jobs = await store.list();
+    if (options.json) { console.log(JSON.stringify(jobs, null, 2)); return 0; }
+    if (!jobs.length) { console.log('Nenhum trabalho registrado.'); return 0; }
+    for (const job of jobs.slice(0, 20)) {
+      console.log(`  ${job.state.padEnd(10)} ${job.kind.padEnd(16)} ${job.id}  ${job.createdAt}`);
+    }
+    return 0;
+  }
+
+  if (sub === 'unlock') {
+    if (!options['force-unlock']) {
+      console.error('Liberar o lock exige --force-unlock: um lock órfão pode ser de um trabalho que parou no meio de uma migração,');
+      console.error('e assumir que ele terminou é o jeito de rodar a migração duas vezes. Confira com `jobs status` antes.');
+      return 1;
+    }
+    await store.releaseLock();
+    console.log('Lock liberado.');
+    return 0;
+  }
+
+  console.error(`Subcomando desconhecido: ${sub}. Use status ou unlock.`);
+  return 1;
+}
+
+// ── Aplicar e voltar atrás ──────────────────────────────────────────────────
+
+async function serverCommand(positionals, options) {
+  const sub = positionals[0] ?? '';
+  if (sub === 'apply') return applyCommand(options);
+  if (sub === 'rollback') return rollbackCommand(options);
+  console.error(`Subcomando desconhecido: ${sub || '(nenhum)'}. Use apply ou rollback.`);
+  return 1;
+}
+
+async function applyCommand(options) {
+  const choice = await selectedInstallation(options);
+  if (!choice.ok) { console.error(choice.error); return choice.code; }
+  const { installation } = choice;
+
+  const ref = validateRef(options.ref);
+  if (!ref.ok) { console.error(ref.error); return 1; }
+  const releaseId = typeof options.release === 'string' ? options.release : '';
+  if (!releaseId) { console.error('Informe --release <releaseId>: a aplicação usa uma release exata, e não uma branch.'); return 1; }
+  const out = typeof options.out === 'string' ? options.out : '';
+  if (!out && !options['no-backup']) {
+    console.error('Informe --out <diretório> para a cópia que antecede a aplicação.');
+    console.error('Voltar o código NÃO volta os dados: sem cópia, uma migração que dê errado não tem para onde voltar.');
+    console.error('Se você já tem uma cópia conferida desta instalação, dispense com --no-backup — e isso fica registrado no trabalho.');
+    return 1;
+  }
+  const channel = typeof options.channel === 'string' ? options.channel : 'stable';
+
+  // A release precisa estar publicada no catálogo aprovado. Aplicar o que
+  // ninguém revisou é exatamente o que esta conferência impede.
+  const { status, body } = await ask(options, '/admin/catalog');
+  if (status !== 200 || !body) { console.error('Não consegui ler o catálogo publicado para conferir a release.'); return 1; }
+  const approved = releaseIsApproved(body, { releaseId, channel });
+  if (!approved.ok) { console.error(approved.error); return 1; }
+
+  const plan = planApply({ installation, ref: ref.ref, releaseId, version: approved.entry.version });
+  console.log(`\nAplicar ${approved.entry.version} (${releaseId}) em "${plan.project}"\n`);
+  for (const effect of plan.effects) console.log(`  · ${effect}`);
+  console.log(`\netapas: ${plan.steps.join(' → ')}\n`);
+  if (options['dry-run']) { console.log('--dry-run: nada foi feito.'); return 0; }
+
+  const opened = await openJobStore(options);
+  if (!opened.ok) { console.error(opened.error); return 1; }
+  const { store } = opened;
+
+  // O lock antes de qualquer trabalho: um duplo clique não lança dois deploys,
+  // e a linha de comando não atropela o executor.
+  const lock = store.acquireLock({ owner: `apply:${releaseId}` });
+  if (!lock.ok) { console.error(lock.error); return 1; }
+
+  try {
+    const { job, created } = await store.create({
+      kind: 'server-apply',
+      key: `apply:${releaseId}:${ref.ref}`,
+      input: { releaseId, ref: ref.ref, version: approved.entry.version, project: plan.project },
+    });
+    if (!created && job.state === 'succeeded') {
+      console.log(`Esta release já foi aplicada pelo trabalho ${job.id}. Nada a fazer.`);
+      return 0;
+    }
+
+    const result = await runApply({
+      installation, releaseId, ref: ref.ref, version: approved.entry.version,
+      store, job, stateDirectory: stateDir(options),
+      backup: out ? { outputDir: out, token: ownerToken(options) } : 'skip',
+      report: ({ step, state, detail }) => {
+        if (state === 'running') return;
+        console.log(`  ${state === 'ok' ? '·' : state === 'skipped' ? '-' : '×'} ${step}${detail ? `: ${detail}` : ''}`);
+      },
+    });
+
+    if (!result.ok) {
+      console.error(`\nFALHOU: ${result.error}`);
+      console.error(`Trabalho ${result.job.id} — veja \`tumacordctl jobs status ${result.job.id}\`.`);
+      console.error('O deployment anterior está registrado: `tumacordctl server rollback`.');
+      return 1;
+    }
+    console.log(`\nAplicado. Trabalho ${result.job.id}.`);
+    console.log(`  versão ${approved.entry.version}, commit ${result.commit.slice(0, 12)}`);
+    console.log('\nA volta atrás está registrada: `tumacordctl server rollback`.');
+    return 0;
+  } finally {
+    await store.releaseLock();
+  }
+}
+
+async function rollbackCommand(options) {
+  const choice = await selectedInstallation(options);
+  if (!choice.ok) { console.error(choice.error); return choice.code; }
+  const { installation } = choice;
+
+  const registered = await previousDeployment(stateDir(options));
+  if (!registered.ok) { console.error(registered.error); return 1; }
+
+  const plan = planRollback({ installation, previous: registered.previous });
+  console.log(`\nVoltar "${plan.project}" para ${plan.ref || plan.to} (${String(plan.to).slice(0, 12)})\n`);
+  for (const effect of plan.effects) console.log(`  · ${effect}`);
+  console.log('');
+  if (options['dry-run']) { console.log('--dry-run: nada foi feito.'); return 0; }
+
+  const opened = await openJobStore(options);
+  if (!opened.ok) { console.error(opened.error); return 1; }
+  const { store } = opened;
+  const lock = store.acquireLock({ owner: 'rollback' });
+  if (!lock.ok) { console.error(lock.error); return 1; }
+
+  try {
+    const { job } = await store.create({ kind: 'server-rollback', key: `rollback:${plan.to}`, input: { to: plan.to, project: plan.project } });
+    const result = await runRollback({
+      installation, previous: registered.previous, store, job,
+      report: ({ step, state, detail }) => {
+        if (state === 'running') return;
+        console.log(`  ${state === 'ok' ? '·' : state === 'skipped' ? '-' : '×'} ${step}${detail ? `: ${detail}` : ''}`);
+      },
+    });
+    if (!result.ok) {
+      console.error(`\nFALHOU: ${result.error}`);
+      console.error(`Trabalho ${result.job.id}. O procedimento manual está em docs/atualizacao-servidor.md.`);
+      return 1;
+    }
+    console.log(`\nDe volta em ${result.health?.version ?? plan.ref}. Trabalho ${result.job.id}.`);
+    console.log('\nVoltar o código NÃO volta os dados. Se a versão nova migrou o formato e esta');
+    console.log('não sabe ler o que ela escreveu, restaure a cópia: docs/backup-restore.md.');
+    return 0;
+  } finally {
+    await store.releaseLock();
+  }
+}
 
 async function main(argv) {
   const { positionals, options } = parseArgs(argv);
@@ -386,15 +745,12 @@ async function main(argv) {
       case 'install': return await installCommand(rest, options);
       case 'devices': return await devicesCommand(rest, options);
       case 'releases': return await releasesCommand(rest, options);
+      case 'backup': return await backupCommand(options);
+      case 'restore': return await restoreCommand(options);
+      case 'jobs': return await jobsCommand(rest, options);
+      case 'server': return await serverCommand(rest, options);
       case 'version': console.log(TOOL_VERSION); return 0;
       default: {
-        const key = rest.length ? `${command} ${rest[0]}` : command;
-        if (NOT_IMPLEMENTED[key]) {
-          // Dizer o que falta é melhor do que um comando que finge funcionar.
-          console.error(`\`${key}\` ainda não está implementado nesta revisão: ${NOT_IMPLEMENTED[key]}.`);
-          console.error('O procedimento manual equivalente está em docs/atualizacao-servidor.md e docs/backup-restore.md.');
-          return 3;
-        }
         console.error(`Comando desconhecido: ${command}\n`);
         console.log(HELP);
         return 1;
@@ -406,7 +762,7 @@ async function main(argv) {
   }
 }
 
-export { COMMAND_HELP, HELP, NOT_IMPLEMENTED, main, parseArgs, serviceUrl };
+export { COMMAND_HELP, HELP, main, parseArgs, serviceUrl };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
   main(process.argv.slice(2)).then((code) => process.exit(code));

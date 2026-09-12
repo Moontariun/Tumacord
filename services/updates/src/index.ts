@@ -308,6 +308,20 @@ admin.get('/admin/catalog', (_request, response) => {
   response.json(store.state.catalog ?? null);
 });
 
+/**
+ * O manifesto de uma release, do lado administrativo.
+ *
+ * O executor precisa do **commit** que a release declara para aplicar a
+ * referência exata de onde ela saiu — e ele não tem, nem deve ter, credencial
+ * de dispositivo. Aceitar a referência vinda de quem pede seria aceitar um
+ * alvo arbitrário; aqui ela é derivada do que foi assinado e publicado.
+ */
+admin.get('/admin/releases/:releaseId/manifest', (request, response) => {
+  const document = store.state.manifests[String(request.params.releaseId)];
+  if (!document) return response.status(404).json({ error: 'Essa release não tem manifesto importado.', reason: 'unknown-release' });
+  response.json(document);
+});
+
 admin.post('/admin/keys', async (request, response) => {
   const body = request.body as { keys?: unknown };
   if (!Array.isArray(body?.keys)) return response.status(400).json({ error: 'Informe a lista de chaves.' });

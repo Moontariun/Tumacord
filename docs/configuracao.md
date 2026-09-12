@@ -105,14 +105,28 @@ docker compose -p "$TUMACORD_PROJETO" restart coturn
 
 ## Atualização automática do servidor
 
+No `.env` do projeto:
+
 | Variável | Padrão | O que faz |
 |---|---|---|
 | `TUMACORD_SELF_UPDATE` | `0` | permite o dono trocar a versão do servidor pelo painel |
+| `TUMACORD_EXECUTOR_TOKEN` | vazio | o segredo do executor, tirado de `/var/lib/tumacord/executor/executor.token` |
+| `COMPOSE_FILE` | comentada | `docker-compose.yml:docker-compose.executor.yml` monta o socket do executor no chat |
 
-> **Importante, e o guia antigo errava aqui.** Ligar esta variável **não** torna
-> uma instalação Docker autoatualizável. O contêiner não consegue reconstruir a
-> si mesmo: quem faz isso é o **executor**, que roda no host. Sem o executor
-> instalado, o painel mostra as versões e a aplicação falha.
+Na unidade systemd do executor (`packaging/servidor/tumacord-executor.service`):
+
+| Variável | Exemplo | O que faz |
+|---|---|---|
+| `TUMACORD_PROJETO` | `tumacord` | qual instalação ele opera; nunca vem do pedido |
+| `TUMACORD_EXECUTOR_STATE` | `/var/lib/tumacord/executor` | trabalhos, registro dos deployments e o segredo |
+| `TUMACORD_EXECUTOR_SOCKET` | `/var/lib/tumacord/run/executor.sock` | onde o chat o encontra; recusado no ramo do estado |
+| `TUMACORD_BACKUP_DIR` | `/var/lib/tumacord/backups` | a cópia antes de cada aplicação; vazio desliga a aplicação pelo painel |
+| `TUMACORD_UPDATES_ADMIN` | `http://127.0.0.1:4301` | de onde ele lê o catálogo e o manifesto |
+
+> **Importante, e o guia antigo errava aqui.** Ligar `TUMACORD_SELF_UPDATE`
+> **não** torna uma instalação Docker autoatualizável. O contêiner não consegue
+> reconstruir a si mesmo: quem faz isso é o **executor**, que roda no host. Sem
+> o executor instalado, o painel mostra as versões e a aplicação falha.
 >
 > A instalação do executor está em [Atualização do servidor](atualizacao-servidor.md).
 
@@ -132,7 +146,7 @@ docker compose -p "$TUMACORD_PROJETO" restart coturn
 ```bash
 cd "$TUMACORD_DIR"
 docker compose -p "$TUMACORD_PROJETO" config >/dev/null && echo "válida"
-node tools/tumacordctl/tumacordctl.mjs doctor --projeto "$TUMACORD_PROJETO"
+node tools/tumacordctl/tumacordctl.mjs doctor --project "$TUMACORD_PROJETO"
 ```
 
 O `doctor` lista os **nomes** das variáveis definidas e nunca os valores: a
