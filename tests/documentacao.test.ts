@@ -28,7 +28,9 @@ function markdownFiles(): string[] {
 
 const documents = markdownFiles().map((filePath) => ({
   filePath: filePath,
-  relative: path.relative(repoRoot, filePath),
+  // Sempre com barra: no Windows o separador é a barra invertida, e as
+  // conferências abaixo reconhecem os relatórios históricos por `docs/`.
+  relative: path.relative(repoRoot, filePath).split(path.sep).join('/'),
   text: readFileSync(filePath, 'utf8'),
 }));
 

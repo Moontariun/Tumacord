@@ -209,7 +209,9 @@ test('o nome do arquivo não parte a resposta', () => {
 
 test('o caminho do pacote é resolvido contra a raiz, e não confiado', () => {
   const rootDir = '/var/lib/tumacord/pacotes';
-  assert.equal(resolveStoragePath(rootDir, 'releases/0.9.9-1/x.exe'), path.join(rootDir, 'releases/0.9.9-1/x.exe'));
+  // `resolve`, e não `join`: no Windows a raiz ganha a letra do disco, e é
+  // contra ela que o caminho é conferido.
+  assert.equal(resolveStoragePath(rootDir, 'releases/0.9.9-1/x.exe'), path.resolve(rootDir, 'releases/0.9.9-1/x.exe'));
   // Um `..` pode vir codificado, vir de um documento assinado antigo, ou
   // aparecer só depois da junção. Comparar o resultado com a raiz fecha isso.
   assert.equal(resolveStoragePath(rootDir, '../../etc/passwd'), null);

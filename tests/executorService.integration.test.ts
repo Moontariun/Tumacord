@@ -17,6 +17,10 @@ import {
   bearer, createExecutor, loadSecret, secretMatches, settings, socketPlacementError, validReleaseId,
 } from '../tools/tumacordctl/executor.mjs';
 
+// O executor roda no host Linux da VPS, e um socket Unix não existe no Windows.
+// Lá o teste do socket não diria nada sobre o que roda em produção.
+const SOCKETS_UNAVAILABLE = process.platform === 'win32' ? 'socket Unix não existe no Windows; o executor roda no host Linux' : false;
+
 /** Sobe o executor num diretório de estado descartável. */
 async function startExecutor(t: { after: (fn: () => unknown) => void }, overrides: Record<string, unknown> = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'tumacord-executor-'));
@@ -129,7 +133,8 @@ test('o segredo é gerado uma vez, com permissão restrita, e não muda na subid
   const { statSync } = await import('node:fs');
   // 0600: o ambiente de um processo é legível por quem lê /proc; um arquivo
   // com dono e permissão não é.
-  assert.equal(statSync(first.file).mode & 0o777, 0o600);
+  // O Windows não tem permissão de arquivo nesse formato; lá quem protege é a pasta do usuário.
+  if (process.platform !== 'win32') assert.equal(statSync(first.file).mode & 0o777, 0o600);
 
   const second = await loadSecret(directory);
   assert.equal(second.created, false);
@@ -194,7 +199,7 @@ function requestOverSocket(socketPath: string, route: string, token = ''): Promi
   });
 }
 
-test('pelo socket, o segredo continua sendo exigido', async (t) => {
+test('pelo socket, o segredo continua sendo exigido', { skip: SOCKETS_UNAVAILABLE }, async (t) => {
   const stateFolder = await mkdtemp(path.join(tmpdir(), 'tumacord-executor-'));
   const run = await mkdtemp(path.join(tmpdir(), 'tumacord-run-'));
   const socket = path.join(run, 'executor.sock');

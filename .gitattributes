@@ -1,0 +1,4 @@
+# As adaptações CJS são geradas e comparadas byte a byte com a fonte. No
+# Windows o checkout trocaria o fim de linha por CRLF, e a comparação acusaria
+# uma divergência que não existe.
+desktop/*.generated.cjs text eol=lf

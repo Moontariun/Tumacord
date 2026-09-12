@@ -6,6 +6,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { SelfUpdater, executorTokenMatches, selfUpdateConfig, unavailableReason } from '../server/selfUpdate';
 
+/** O prefixo de um named pipe no Windows. */
+const PIPE_PREFIX = '\\\\.\\pipe\\';
+
 // A atualização do servidor pelo painel, do lado que decide se ela acontece.
 //
 // Este servidor não executa mais nada: ele pede ao executor, que roda no host.
@@ -22,7 +25,10 @@ type Responder = (incoming: RecordedRequest) => { status: number; body: unknown 
 /** Um executor de mentira, num socket Unix de verdade. */
 async function fakeExecutor(t: { after: (fn: () => unknown) => void }, responder: Responder) {
   const folder = await mkdtemp(path.join(tmpdir(), 'tumacord-exec-falso-'));
-  const socketPath = path.join(folder, 'executor.sock');
+  // No Windows um servidor HTTP escuta num named pipe, e não num arquivo de socket.
+  const socketPath = process.platform === 'win32'
+    ? `${PIPE_PREFIX}tumacord-executor-${path.basename(folder)}`
+    : path.join(folder, 'executor.sock');
   const requests: RecordedRequest[] = [];
   const server = createServer((request, response) => {
     let text = '';
