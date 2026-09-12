@@ -17,6 +17,7 @@ import { iceServers } from '../lib/iceServers';
 import { selectedCandidatePath, type SelectedPath } from '../lib/iceDiagnostics';
 import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/mediaDiagnostics';
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
+import { intentAfterAnnouncement, intentAfterBroadcasters, mediaBelongsToPeer, pendingWatchRequests } from '../lib/liveSubscription';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 import { discardPendingScreenAudioPort, openScreenAudioStream, primeScreenAudioBridge, type ScreenAudioStream } from '../lib/screenAudioBridge';
@@ -453,6 +454,22 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const localStreams = useRef(new Map<'microphone' | 'camera' | 'screen', MediaStream>());
   const streamMeta = useRef(new Map<string, StreamMeta['kind']>());
   const selfId = useRef('');
+  // A qual live desta pessoa eu disse sim, por peer. É a **intenção**, e ela
+  // vive num ref de propósito: o estado React some do enlace, mas a intenção
+  // não deve sumir com ele.
+  //
+  // Este é o defeito que a 0.9.9-1 corrige. Até a 0.9.9 o `rtc:watch` era
+  // emitido uma vez, no clique, e nada o reemitia. Todo enlace refeito —
+  // recuperação forçada, troca de host no P2P, reconexão — nasce com
+  // `watchingStream` vazio do lado de quem transmite, e a partir daí a tela
+  // parava de ser anexada. O espectador ficava sem vídeo, o detector de
+  // travamento pedia outra recuperação vinte segundos depois, e o ciclo se
+  // alimentava: só reabrir o aplicativo devolvia a live, porque só isso fazia
+  // a pessoa clicar em "Assistir" de novo.
+  const watchIntent = useRef<Record<string, string>>({});
+  // O que já foi pedido a cada peer, na geração atual do enlace dele. Zerado
+  // quando o enlace é reconstruído, e é isso que dispara o pedido de novo.
+  const watchSent = useRef(new Map<string, string>());
   const handoffStarted = useRef(false);
   const speakingRef = useRef(false);
   const speakingMonitor = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; timer: number } | null>(null);
@@ -712,6 +729,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     const local: LocalTrack[] = [];
     const tracksById = new Map<string, MediaStreamTrack>();
     for (const [media, stream] of localStreams.current) {
+      // A tela só é mídia deste enlace se esta pessoa assinou *esta*
+      // transmissão. Sem esta condição a reconciliação tratava a live como
+      // qualquer outra faixa local: ela encaixava a tela em qualquer sender de
+      // vídeo livre do peer — inclusive o de quem nunca pediu para assistir —
+      // e, dez segundos depois de alguém fechar a live, devolvia a faixa ao
+      // sender esvaziado, desfazendo em silêncio o "parar de assistir".
+      //
+      // Fora da inscrição, as faixas ficam de fora de `wanted`, e o passo que
+      // limpa sender órfão do plano recolhe o que tiver sobrado.
+      if (!mediaBelongsToPeer(media, stream.id, state.watchingStream)) continue;
       for (const track of stream.getTracks()) {
         local.push({ media, trackId: track.id, kind: track.kind as TrackKind, streamId: stream.id, readyState: track.readyState });
         tracksById.set(track.id, track);
@@ -803,8 +830,17 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       selectedPath: null,
     };
     peers.current.set(peerId, state);
+    // O enlace é novo, então o outro lado não sabe mais que esta pessoa estava
+    // assistindo a live dele: o `watchingStream` dele para nós nasceu vazio.
+    // A intenção sobreviveu — ela não mora no enlace — e é reafirmada aqui.
+    //
+    // Sem isto, toda reconstrução de enlace derrubava a live em silêncio e ela
+    // não voltava: o detector de travamento pedia outra recuperação, que
+    // reconstruía o enlace de novo, e a única saída era reabrir o aplicativo.
+    watchSent.current.delete(peerId);
     updatePeerHealth(peerId, 'connecting');
     syncLocalMediaToPeer(peerId, state);
+    reafirmarInscricoesRef.current();
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
     // Terminada a negociação, o descarte de ICE daquela colisão deixa de valer.
     // Sem isto o sinalizador ficava travado e o enlace podia chegar a
@@ -1572,7 +1608,24 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       // O anúncio de uma live chega mesmo sem nenhuma faixa: é ele que dá à
       // pessoa a que dizer sim. Uma live nova troca o id, e por isso o "sim"
       // da anterior não a alcança.
-      if (meta.kind === 'screen') setLiveOffers((atual) => (atual[from] === meta.streamId ? atual : { ...atual, [from]: meta.streamId }));
+      if (meta.kind === 'screen') {
+        // Uma live nova — outro id de transmissão da mesma pessoa — exige uma
+        // escolha nova. O "sim" dado à anterior não a alcança, e a intenção
+        // antiga é descartada para a reafirmação não inscrever ninguém numa
+        // tela que ele nunca escolheu ver.
+        const seguinte = intentAfterAnnouncement(watchIntent.current, from, meta.streamId);
+        if (seguinte !== watchIntent.current) {
+          watchIntent.current = seguinte;
+          watchSent.current.delete(from);
+          setWatching((atual) => {
+            if (!(from in atual)) return atual;
+            const restante = { ...atual };
+            delete restante[from];
+            return restante;
+          });
+        }
+        setLiveOffers((atual) => (atual[from] === meta.streamId ? atual : { ...atual, [from]: meta.streamId }));
+      }
       refreshRemote();
     };
     const onStreamHealth = ({ from, frozen }: { from: string; frozen?: boolean }) => {
@@ -1615,16 +1668,21 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (!peerId || !state) return;
       const tela = localStreams.current.get('screen');
       const querAssistir = payload.watching === true && Boolean(tela) && payload.stream === tela?.id;
-      if (querAssistir === Boolean(state.watchingStream)) {
-        state.watchingStream = querAssistir ? (tela?.id ?? '') : '';
-        return;
-      }
-      state.watchingStream = querAssistir ? (tela?.id ?? '') : '';
+      const desejado = querAssistir ? (tela?.id ?? '') : '';
+      const anterior = state.watchingStream;
+      state.watchingStream = desejado;
+      // A comparação é entre *qual* transmissão está inscrita, e não entre
+      // "inscrito ou não". Comparar só o booleano fazia a troca de uma live
+      // pela outra na mesma pessoa cair no atalho de saída: o pedido novo
+      // parecia igual ao antigo e as faixas da live nova nunca eram anexadas.
+      if (desejado === anterior) return;
       if (!tela) return;
       if (querAssistir) {
         for (const track of tela.getTracks()) {
           if (state.pc.getSenders().some((candidate) => candidate.track === track)) continue;
-          state.pc.addTrack(track, tela);
+          // O papel do sender é registrado junto: sem isso a reconciliação vê
+          // um sender sem dono e pode tratá-lo como livre para outra faixa.
+          state.senderMedia.set(state.pc.addTrack(track, tela), 'screen');
         }
         sendStreamMeta(peerId, tela, 'screen');
       } else {
@@ -1632,6 +1690,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           const sender = state.pc.getSenders().find((candidate) => candidate.track === track);
           if (sender) {
             try { state.pc.removeTrack(sender); } catch { /* o enlace já foi encerrado */ }
+            state.senderMedia.delete(sender);
           }
         }
       }
@@ -1695,25 +1754,65 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   const watchLive = useCallback((peerId: string, streamId: string) => {
     if (!peerId || !streamId) return;
+    watchIntent.current = { ...watchIntent.current, [peerId]: streamId };
     setWatching((atual) => (atual[peerId] === streamId ? atual : { ...atual, [peerId]: streamId }));
     socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
+    watchSent.current.set(peerId, streamId);
   }, [socket]);
 
   const stopWatchingLive = useCallback((peerId: string) => {
-    const streamId = watchingRef.current[peerId];
+    const streamId = watchIntent.current[peerId] ?? watchingRef.current[peerId];
+    const proximaIntencao = { ...watchIntent.current };
+    delete proximaIntencao[peerId];
+    watchIntent.current = proximaIntencao;
     setWatching((atual) => {
       if (!(peerId in atual)) return atual;
       const proximo = { ...atual };
       delete proximo[peerId];
       return proximo;
     });
+    // O pedido de parar é registrado como "já dito" para a reconciliação não
+    // reabrir o que esta pessoa acabou de fechar.
+    watchSent.current.delete(peerId);
     if (streamId) socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: false });
   }, [socket]);
 
+  /**
+   * Reafirma as inscrições que o outro lado pode ter perdido.
+   *
+   * Chamada quando um enlace é criado e, como rede de segurança, a cada volta
+   * do laço de estatísticas. `watchSent` guarda o que já foi pedido na geração
+   * atual de cada enlace e é zerado em `createPeer`: um enlace novo faz o
+   * pedido sair de novo, porque o `watchingStream` do outro lado nasceu vazio.
+   *
+   * Só reafirma o que continua valendo. Uma live nova — outro id de
+   * transmissão anunciado pela mesma pessoa — exige uma escolha nova, e não
+   * herda o "sim" dado à anterior.
+   */
+  const reafirmarInscricoes = useCallback(() => {
+    if (!socket) return;
+    for (const { peerId, streamId } of pendingWatchRequests(watchIntent.current, watchSent.current, new Set(peers.current.keys()))) {
+      socket.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
+      watchSent.current.set(peerId, streamId);
+    }
+  }, [socket]);
+  const reafirmarInscricoesRef = useRef(reafirmarInscricoes);
+  reafirmarInscricoesRef.current = reafirmarInscricoes;
+
   // Quem parou de transmitir deixa de ter inscrição. Sem isto, o "sim" ficaria
   // pendurado e a próxima live começaria já assistida.
+  //
+  // A intenção segue junto: ela é a mesma coisa vista de outro lugar, e deixá-la
+  // para trás faria a reafirmação ressuscitar uma live encerrada.
   useEffect(() => {
     const transmitindo = new Set(members.filter((member) => member.screen).map((member) => member.socketId));
+    const seguinte = intentAfterBroadcasters(watchIntent.current, transmitindo);
+    if (seguinte !== watchIntent.current) {
+      for (const peerId of Object.keys(watchIntent.current)) {
+        if (!(peerId in seguinte)) watchSent.current.delete(peerId);
+      }
+      watchIntent.current = seguinte;
+    }
     setWatching((atual) => {
       const chaves = Object.keys(atual).filter((peerId) => !transmitindo.has(peerId));
       if (!chaves.length) return atual;
@@ -1747,6 +1846,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     let running = false;
     const publishLatency = async () => {
       reconcileTick.current += 1;
+      // Rede de segurança da inscrição: se algum enlace foi refeito por um
+      // caminho que não passou por `createPeer`, o pedido sai aqui. Custa um
+      // laço sobre um punhado de entradas e evita a live que não volta.
+      reafirmarInscricoesRef.current();
       if (running) return;
       running = true;
       const samples: number[] = [];
