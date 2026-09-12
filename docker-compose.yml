@@ -33,6 +33,52 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # O serviço que serve as atualizações para os aplicativos.
+  #
+  # Contêiner separado de propósito: ele precisa continuar de pé enquanto o
+  # `tumacord-server` reinicia, que é exatamente o momento de uma atualização.
+  # Um serviço de atualização que caísse junto com o que ele atualiza não
+  # serviria para nada.
+  #
+  # Ele não fala com o GitHub, não executa nada e não assina documento nenhum:
+  # a chave privada de assinatura vive no ambiente de publicação, não aqui.
+  tumacord-atualizacoes:
+    build:
+      context: .
+      dockerfile: Dockerfile.atualizacoes
+    container_name: tumacord-atualizacoes
+    init: true
+    restart: unless-stopped
+    environment:
+      TUMACORD_UPDATES_HOST: 0.0.0.0
+      TUMACORD_UPDATES_PORT: 4300
+      # A administração — importar, publicar, retirar — escuta numa porta
+      # separada que **não** é publicada para a internet. Quem a opera é o
+      # executor, que já está na máquina.
+      TUMACORD_UPDATES_ADMIN_HOST: 0.0.0.0
+      TUMACORD_UPDATES_ADMIN_PORT: 4301
+      TUMACORD_UPDATES_STATE_DIR: /estado
+      TUMACORD_UPDATES_STORAGE_DIR: /pacotes
+      # A VPS divide rede com o chat e com o TURN: sem teto, um mutirão de
+      # atualização tira a call de todo mundo.
+      TUMACORD_UPDATES_MAX_DOWNLOADS: ${TUMACORD_UPDATES_MAX_DOWNLOADS:-6}
+    ports:
+      # As duas só no laço local. O proxy HTTPS é quem publica a 4300 para a
+      # internet, com o domínio de updates; a 4301 — importar, publicar,
+      # retirar — nunca sai daqui: ela é alcançada pelo executor, que roda no
+      # próprio host. Publicar a administração na internet exporia a operação
+      # mais sensível do sistema no lugar mais exposto dele.
+      - "127.0.0.1:4300:4300"
+      - "127.0.0.1:4301:4301"
+    volumes:
+      - tumacord-catalogo:/estado
+      - tumacord-pacotes:/pacotes
+    stop_grace_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # O relay entra com `docker compose --profile turn up -d`. Ele fica fora do
   # padrão porque só faz sentido em uma máquina com IP público, e porque é a
   # única peça que chega a carregar mídia — e, portanto, banda.
@@ -100,3 +146,9 @@ services:
 
 volumes:
   tumacord-data:
+  # O catálogo, os manifestos e as autorizações de dispositivo.
+  tumacord-catalogo:
+  # Os bytes dos pacotes. Volume próprio: ele cresce com o número de versões
+  # guardadas, e misturá-lo com os dados do chat faria uma release grande
+  # ameaçar o espaço das mensagens.
+  tumacord-pacotes:

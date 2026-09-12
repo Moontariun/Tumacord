@@ -1,0 +1,32 @@
+# O serviço de distribuição, que roda na mesma VPS do dedicado.
+#
+# É uma imagem separada de propósito. O serviço de atualização precisa
+# continuar de pé enquanto o dedicado reinicia — que é exatamente o momento de
+# uma atualização —, e no mesmo contêiner ele cairia junto com o que atualiza.
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build:atualizacoes
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production \
+    TUMACORD_UPDATES_HOST=0.0.0.0 \
+    TUMACORD_UPDATES_PORT=4300 \
+    TUMACORD_UPDATES_ADMIN_HOST=0.0.0.0 \
+    TUMACORD_UPDATES_ADMIN_PORT=4301 \
+    TUMACORD_UPDATES_STATE_DIR=/estado \
+    TUMACORD_UPDATES_STORAGE_DIR=/pacotes
+COPY --from=build /app/dist-atualizacoes ./dist-atualizacoes
+# Os pacotes e o estado ficam FORA do checkout, que é descartável: ele é
+# apagado e refeito a cada release. E ficam fora de qualquer webroot — não há
+# caminho estático para eles, e a única porta é a rota autorizada.
+RUN mkdir -p /estado /pacotes && chown -R node:node /app /estado /pacotes
+VOLUME ["/estado", "/pacotes"]
+EXPOSE 4300
+USER node
+HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4300/v1/saude').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "dist-atualizacoes/servico.cjs"]

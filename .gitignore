@@ -11,3 +11,4 @@ work/
 
 # O componente nativo do Windows é compilado, não versionado.
 native/windows/audio-helper/build/
+dist-atualizacoes/

@@ -14,7 +14,7 @@
     "desktop:dev": "cross-env TUMACORD_WEB_URL=http://localhost:5173 TUMACORD_EXTERNAL_SERVER=1 electron .",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json --noEmit && esbuild server/index.ts --bundle --platform=node --format=cjs --outfile=dist-server/server-bundle.cjs",
-    "build": "npm run build:web && npm run build:server",
+    "build": "npm run build:web && npm run build:server && npm run build:atualizacoes",
     "start": "node dist-server/server-bundle.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "node --test --import tsx tests/**/*.test.ts",
@@ -23,7 +23,8 @@
     "preview": "vite preview --host 0.0.0.0",
     "build:native:win": "powershell -NoProfile -ExecutionPolicy Bypass -File native/windows/audio-helper/build.ps1",
     "build:icon:win": "node scripts/build-windows-icon.cjs",
-    "package:windows": "npm run build && npm run build:native:win && electron-builder --win nsis portable --publish never"
+    "package:windows": "npm run build && npm run build:native:win && electron-builder --win nsis portable --publish never",
+    "build:atualizacoes": "esbuild services/atualizacoes/src/index.ts --bundle --platform=node --format=cjs --outfile=dist-atualizacoes/servico.cjs"
   },
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.4.0",
