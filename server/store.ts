@@ -43,6 +43,31 @@ export interface StoredInvite {
   expiresAt: number;
 }
 
+/**
+ * Um nome que já pertenceu a alguém neste servidor.
+ *
+ * A reserva sobrevive à remoção da conta de propósito. Sem ela, apagar uma
+ * conta liberava o nome para qualquer pessoa: quem chegasse depois herdaria a
+ * identidade de quem saiu — as menções antigas, o que os outros lembram do
+ * nome, a confiança que ele carrega. O `userId` é preservado para uma
+ * recuperação autorizada devolver a mesma conta, e não uma conta nova com o
+ * mesmo nome.
+ *
+ * A reserva **não é autenticação**: ela só diz que o nome está tomado. Quem
+ * quiser reaver precisa de um procedimento do dono, auditado, e não de
+ * informar uma senha nova.
+ */
+export interface UsernameReservation {
+  normalizedUsername: string;
+  /** Como o nome foi escrito quando reservado, para a interface mostrá-lo. */
+  username: string;
+  /** A conta que o teve. Preservado para a recuperação autorizada. */
+  userId: string;
+  createdAt: string;
+  /** Quando a conta foi removida. Ausente enquanto ela existe. */
+  releasedAt?: string;
+}
+
 interface StoredData {
   users: StoredUser[];
   channels: Channel[];
@@ -73,6 +98,11 @@ interface StoredData {
   // Até onde vai o histórico anterior à separação. O que veio antes está
   // misturado e não dá para saber de onde: ele não é apagado nem publicado.
   legacyHistoryUntil?: string;
+  // Nomes já usados neste servidor, inclusive os de contas removidas.
+  // Ausente nos arquivos anteriores à 0.9.9-1: a primeira subida preenche a
+  // partir das contas que existem, que é o histórico que de fato existe. Um
+  // nome apagado antes disso não deixou registro e não é possível reconstruí-lo.
+  usernameReservations?: UsernameReservation[];
 }
 
 export interface MirroredHistory {
@@ -102,10 +132,47 @@ const initialData = (): StoredData => ({
   boards: [],
   deletedBoards: [],
   mirrors: {},
+  usernameReservations: [],
 });
 
 function profileKey(username: string): string {
   return username.normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+}
+
+/** Um nome que aparece em mais de uma conta, e as contas que o carregam. */
+export interface DuplicateUsernameGroup {
+  normalizedUsername: string;
+  /** Só o que o dono precisa para decidir. **Nunca** hash nem senha. */
+  accounts: { id: string; username: string; createdAt: string; role?: Role; lastSeenAt?: string }[];
+}
+
+/**
+ * As contas que dividem o mesmo nome normalizado.
+ *
+ * Isto é diagnóstico, não conserto: qual conta fica é decisão de quem
+ * administra, porque envolve mensagens, papéis e vínculos de pessoas
+ * diferentes. O relatório sai sem hash e sem senha — ele é para ser lido, e
+ * pode acabar colado em algum lugar.
+ */
+export function duplicateUsernames(users: readonly StoredUser[]): DuplicateUsernameGroup[] {
+  const porNome = new Map<string, StoredUser[]>();
+  for (const user of users) {
+    const chave = user.normalizedUsername;
+    const grupo = porNome.get(chave);
+    if (grupo) grupo.push(user);
+    else porNome.set(chave, [user]);
+  }
+  const duplicadas: DuplicateUsernameGroup[] = [];
+  for (const [normalizedUsername, grupo] of porNome) {
+    if (grupo.length < 2) continue;
+    duplicadas.push({
+      normalizedUsername,
+      accounts: grupo
+        .map((user) => ({ id: user.id, username: user.username, createdAt: user.createdAt, role: user.role, lastSeenAt: user.lastSeenAt }))
+        .sort((esquerda, direita) => esquerda.createdAt.localeCompare(direita.createdAt)),
+    });
+  }
+  return duplicadas.sort((esquerda, direita) => esquerda.normalizedUsername.localeCompare(direita.normalizedUsername));
 }
 
 export class JsonStore {
@@ -181,7 +248,17 @@ export class JsonStore {
         installationId: parsed.installationId,
         mirrors: parsed.mirrors ?? {},
         legacyHistoryUntil: parsed.legacyHistoryUntil,
+        usernameReservations: parsed.usernameReservations ?? [],
       };
+      // As reservas nascem do histórico que de fato existe: as contas que
+      // estão aqui. Um nome apagado antes desta versão não deixou registro, e
+      // prometer reconstruí-lo seria inventar histórico.
+      const migratedReservations = this.seedReservations();
+      // Duplicatas de nome vindas da corrida que esta versão corrige são
+      // **detectadas** e ditas, e nada é decidido por conta própria. Escolher
+      // "a última senha" ou descartar a conta mais nova apagaria a conta de
+      // alguém em silêncio.
+      this.duplicateUsernameReport = duplicateUsernames(this.data.users);
       // A instalação ganha identidade na primeira subida, e a linha de corte
       // do histórico antigo é traçada junto: daqui em diante o que chegar tem
       // origem conhecida, e o que já estava aqui fica marcado como anterior.
@@ -194,7 +271,7 @@ export class JsonStore {
         this.data.legacyHistoryUntil = ultima;
         migratedInstallation = true;
       }
-      if (migratedInstallation || migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || !parsed.profiles || !parsed.attachments) await this.save();
+      if (migratedInstallation || migratedLegacySessions || migratedLegacyProfiles || repairedMissingProfileMedia || precisaPosicionar || migratedReservations || !parsed.profiles || !parsed.attachments) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       // Instalação nova: identidade agora, e nenhum histórico anterior.
@@ -211,6 +288,95 @@ export class JsonStore {
   get profiles(): readonly ReplicatedProfile[] { return this.data.profiles; }
   get sessions(): readonly StoredSession[] { return this.data.sessions; }
 
+  /**
+   * Duplicatas de nome encontradas na carga, para o dono resolver.
+   *
+   * Vazio quando não há. Nenhuma delas é resolvida automaticamente: a decisão
+   * de qual conta fica é de quem administra, e envolve dados de pessoas.
+   */
+  duplicateUsernameReport: DuplicateUsernameGroup[] = [];
+
+  /**
+   * Garante uma reserva para cada nome que existe agora.
+   *
+   * Devolve `true` se algo mudou, para a carga saber que precisa gravar.
+   */
+  private seedReservations(): boolean {
+    const existentes = new Set(this.usernameReservations.map((reserva) => reserva.normalizedUsername));
+    let mudou = false;
+    for (const user of this.data.users) {
+      if (existentes.has(user.normalizedUsername)) continue;
+      existentes.add(user.normalizedUsername);
+      this.data.usernameReservations!.push({
+        normalizedUsername: user.normalizedUsername,
+        username: user.username,
+        userId: user.id,
+        createdAt: user.createdAt || new Date(0).toISOString(),
+      });
+      mudou = true;
+    }
+    return mudou;
+  }
+
+  /** As reservas de nome deste servidor. Ausência é lista vazia. */
+  get usernameReservations(): readonly UsernameReservation[] {
+    return this.data.usernameReservations ?? (this.data.usernameReservations = []);
+  }
+
+  /** A reserva de um nome, se ele já pertenceu a alguém aqui. */
+  reservationFor(normalizedUsername: string): UsernameReservation | undefined {
+    return this.usernameReservations.find((candidate) => candidate.normalizedUsername === normalizedUsername);
+  }
+
+  /**
+   * Cria uma conta, ou diz quem já tem aquele nome.
+   *
+   * **A conferência e a inserção acontecem sem `await` no meio**, e é isso que
+   * dá a garantia. Até a 0.9.9 a unicidade era conferida na rota, antes de
+   * `hashPassword` — que é assíncrono e devolve o laço de eventos. Seis
+   * pedidos simultâneos do mesmo nome passavam todos pela conferência antes de
+   * qualquer um chegar à inserção, e o resultado eram seis contas com o mesmo
+   * nome. A reprodução está em `tests/accountUniqueness.test.ts`.
+   *
+   * A conta só é aceita se o nome não estiver em uso **e** não estiver
+   * reservado por uma conta anterior. O `save` vem depois, e uma falha de
+   * gravação desfaz a inserção: metade de uma conta na memória e nada no disco
+   * é pior do que nenhuma conta.
+   */
+  async createUser(user: StoredUser): Promise<{ created: true; user: StoredUser } | { created: false; conflict: 'user' | 'reservation'; existing?: StoredUser }> {
+    const existing = this.data.users.find((candidate) => candidate.normalizedUsername === user.normalizedUsername);
+    if (existing) return { created: false, conflict: 'user', existing };
+    const reservada = this.reservationFor(user.normalizedUsername);
+    if (reservada) return { created: false, conflict: 'reservation' };
+
+    const replicated = this.profileForUsername(user.username);
+    if (replicated && profileIsNewer(replicated, user.profile)) user.profile = replicated;
+    this.data.users.push(user);
+    this.usernameReservations;
+    this.data.usernameReservations!.push({
+      normalizedUsername: user.normalizedUsername,
+      username: user.username,
+      userId: user.id,
+      createdAt: user.createdAt,
+    });
+    try {
+      await this.save();
+    } catch (erro) {
+      // A gravação falhou: a memória volta ao que era. Deixar a conta viva só
+      // aqui faria o servidor aceitar um login que some no próximo reinício.
+      const indice = this.data.users.indexOf(user);
+      if (indice >= 0) this.data.users.splice(indice, 1);
+      const reserva = this.data.usernameReservations!.findIndex((candidate) => candidate.userId === user.id);
+      if (reserva >= 0) this.data.usernameReservations!.splice(reserva, 1);
+      throw erro;
+    }
+    return { created: true, user };
+  }
+
+  /**
+   * @deprecated Use `createUser`, que garante a unicidade. Mantido só para os
+   * caminhos de migração/importação, que já conferiram o nome antes.
+   */
   async addUser(user: StoredUser): Promise<void> {
     const replicated = this.profileForUsername(user.username);
     if (replicated && profileIsNewer(replicated, user.profile)) user.profile = replicated;
@@ -320,10 +486,26 @@ export class JsonStore {
   async removeUser(userId: string): Promise<boolean> {
     const index = this.data.users.findIndex((candidate) => candidate.id === userId);
     if (index < 0) return false;
-    this.data.users.splice(index, 1);
+    const [removido] = this.data.users.splice(index, 1);
     // As sessões do removido morrem junto; deixá-las vivas seria manter o
     // acesso de quem acabou de perder a conta.
     this.data.sessions = this.data.sessions.filter((session) => session.userId !== userId);
+    // O nome **não** volta a ficar livre. Quem chegasse depois herdaria a
+    // identidade de quem saiu: as menções antigas, o que os outros lembram do
+    // nome. A reserva guarda o `userId` para uma recuperação autorizada
+    // devolver a mesma conta, e não uma conta nova com o mesmo nome.
+    this.usernameReservations;
+    const reserva = this.data.usernameReservations!.find((candidate) => candidate.normalizedUsername === removido.normalizedUsername);
+    if (reserva) reserva.releasedAt = new Date().toISOString();
+    else {
+      this.data.usernameReservations!.push({
+        normalizedUsername: removido.normalizedUsername,
+        username: removido.username,
+        userId: removido.id,
+        createdAt: removido.createdAt,
+        releasedAt: new Date().toISOString(),
+      });
+    }
     await this.save();
     return true;
   }

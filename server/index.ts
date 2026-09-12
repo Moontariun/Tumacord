@@ -498,8 +498,17 @@ app.post('/api/auth/register', async (request, response) => {
     return;
   }
   const normalizedUsername = normalizeUsername(parsed.data.username);
+  // A recusa rápida, antes de gastar um hash de senha. Ela é conveniência e
+  // **não** é a garantia: entre esta linha e a inserção há um `await`, e é
+  // nessa janela que seis pedidos simultâneos do mesmo nome produziam seis
+  // contas. Quem garante é `store.createUser`, que confere e insere sem
+  // devolver o laço de eventos no meio.
   if (store.users.some((candidate) => candidate.normalizedUsername === normalizedUsername)) {
     response.status(409).json({ error: 'Esse usuário já existe. Escolha outro nome ou entre na conta.' });
+    return;
+  }
+  if (store.reservationFor(normalizedUsername)) {
+    response.status(409).json({ error: 'Esse nome já pertenceu a alguém neste servidor. Escolha outro, ou peça ao dono para recuperar a conta.' });
     return;
   }
   const user = {
@@ -510,7 +519,15 @@ app.post('/api/auth/register', async (request, response) => {
     createdAt: new Date().toISOString(),
     role: p2pMode ? 'member' : roleForNewUser(store.users, normalizedUsername, adminUsername),
   } satisfies StoredUser;
-  await store.addUser(user);
+  const resultado = await store.createUser(user);
+  if (!resultado.created) {
+    response.status(409).json({
+      error: resultado.conflict === 'reservation'
+        ? 'Esse nome já pertenceu a alguém neste servidor. Escolha outro, ou peça ao dono para recuperar a conta.'
+        : 'Esse usuário já existe. Escolha outro nome ou entre na conta.',
+    });
+    return;
+  }
   response.status(201).json({ token: await issueSession(user), user: publicUser(user), serverName, created: true });
 });
 
@@ -542,8 +559,14 @@ app.post('/api/auth/login', async (request, response) => {
     return;
   }
   if (!user) {
-    created = true;
-    user = {
+    if (store.reservationFor(normalizedUsername)) {
+      // O nome já pertenceu a alguém aqui. Criar uma conta nova com ele
+      // entregaria a identidade de quem saiu a quem chegou — e informar uma
+      // senha nova não é prova de ser a mesma pessoa.
+      response.status(409).json({ error: 'Esse nome já pertenceu a alguém neste servidor. Peça ao dono para recuperar a conta.' });
+      return;
+    }
+    const candidato = {
       id: randomUUID(),
       username: parsed.data.username.trim(),
       normalizedUsername,
@@ -551,7 +574,22 @@ app.post('/api/auth/login', async (request, response) => {
       createdAt: new Date().toISOString(),
       role: p2pMode ? 'member' : roleForNewUser(store.users, normalizedUsername, adminUsername),
     } satisfies StoredUser;
-    await store.addUser(user);
+    // O mesmo caminho protegido do cadastro. Este era o segundo lugar que
+    // inseria conta sem garantia de unicidade, e conferir só na rota não
+    // bastava: `hashPassword` devolve o laço de eventos antes da inserção.
+    const resultado = await store.createUser(candidato);
+    if (resultado.created) {
+      created = true;
+      user = candidato;
+    } else if (resultado.conflict === 'user' && resultado.existing) {
+      // Alguém ganhou a corrida com o mesmo nome. Isto não vira conta nova:
+      // segue pela conferência de senha da conta que existe, exatamente como
+      // um login normal — senha errada é recusada, e não cria nada.
+      user = resultado.existing;
+    } else {
+      response.status(409).json({ error: 'Esse nome já pertenceu a alguém neste servidor. Peça ao dono para recuperar a conta.' });
+      return;
+    }
   }
   if (!(await verifyPassword(parsed.data.password, user.passwordHash))) {
     loginLimiter.fail(identity, origin);
