@@ -154,12 +154,12 @@ test('a ordenação decrescente descarta o que não for versão, sem lançar', (
 // testes são o que impede a segunda cópia de virar uma segunda regra.
 
 test('a adaptação CJS está em dia com shared/version.ts', async () => {
-  const { gerar } = await import('../scripts/gerar-versao.mjs');
+  const { gerar } = await import('../scripts/generate-version.mjs');
   const { readFileSync } = await import('node:fs');
   assert.equal(
     readFileSync(new URL('../desktop/version.generated.cjs', import.meta.url), 'utf8'),
     gerar(),
-    'rode `node scripts/gerar-versao.mjs` — a fonte é shared/version.ts, não o arquivo gerado',
+    'rode `node scripts/generate-version.mjs` — a fonte é shared/version.ts, não o arquivo gerado',
   );
 });
 
@@ -186,7 +186,7 @@ test('a adaptação CJS decide igual à fonte, nos mesmos vetores', async () => 
 // `version` = `0.9.9-1`, o electron-builder sozinho produz `0.9.9.0` — o
 // **mesmo número** da 0.9.9 —, porque ele lê `parseInt("9-1")` como 9 e
 // preenche o quarto campo com o número de build. O `buildNumber` derivado pelo
-// `scripts/gerar-versao.mjs` é o que põe a revisão no lugar certo.
+// `scripts/generate-version.mjs` é o que põe a revisão no lugar certo.
 //
 // Um teste com processo simulado não provaria nada aqui: quem decide o número
 // é a biblioteca, e é ela que precisa ser perguntada.
@@ -195,7 +195,7 @@ test('o electron-builder produz uma versão numérica diferente para a revisão'
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
   const { AppInfo } = require('app-builder-lib/out/appInfo.js');
-  const { camposDoPacote } = await import('../scripts/gerar-versao.mjs');
+  const { camposDoPacote } = await import('../scripts/generate-version.mjs');
 
   const numero = (version: string) => {
     const app = new AppInfo({ metadata: { version, name: 'tumacord' }, config: { ...camposDoPacote(version) }, framework: {} }, null);
@@ -225,7 +225,7 @@ test('o electron-builder produz uma versão numérica diferente para a revisão'
 test('o package.json declara a versão do produto e os campos derivados dela', async () => {
   const { createRequire } = await import('node:module');
   const pkg = createRequire(import.meta.url)('../package.json');
-  const { camposDoPacote } = await import('../scripts/gerar-versao.mjs');
+  const { camposDoPacote } = await import('../scripts/generate-version.mjs');
   assert.equal(pkg.version, '0.9.9-1', 'esta é a revisão que a branch entrega');
   assert.equal(isVersion(pkg.version), true, 'a versão publicada precisa caber na convenção');
   assert.deepEqual({ buildNumber: pkg.build.buildNumber, buildVersion: pkg.build.buildVersion }, camposDoPacote(pkg.version));

@@ -39,36 +39,36 @@ export type RangeOutcome =
 export function parseRange(header: unknown, size: number): RangeOutcome {
   if (header === undefined || header === null || header === '') return { kind: 'full', start: 0, end: Math.max(0, size - 1), length: size };
   if (typeof header !== 'string') return { kind: 'malformed' };
-  const achado = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!achado) return { kind: 'malformed' };
-  const [, inicioTexto, fimTexto] = achado;
-  if (!inicioTexto && !fimTexto) return { kind: 'malformed' };
+  const found = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!found) return { kind: 'malformed' };
+  const [, startText, endText] = found;
+  if (!startText && !endText) return { kind: 'malformed' };
 
   // Um arquivo de tamanho zero não tem faixa nenhuma que satisfaça. Ele é
   // recusado antes, na conferência do pacote, mas a resposta certa aqui é 416
   // e não "pedido malformado": quem pediu não errou o pedido.
   if (size <= 0) return { kind: 'unsatisfiable' };
 
-  let inicio: number;
-  let fim: number;
-  if (!inicioTexto) {
+  let start: number;
+  let end: number;
+  if (!startText) {
     // `bytes=-500`: os últimos 500 bytes.
-    const ultimos = Number(fimTexto);
-    if (!Number.isSafeInteger(ultimos) || ultimos <= 0) return { kind: 'malformed' };
-    inicio = Math.max(0, size - ultimos);
-    fim = size - 1;
+    const lastBytes = Number(endText);
+    if (!Number.isSafeInteger(lastBytes) || lastBytes <= 0) return { kind: 'malformed' };
+    start = Math.max(0, size - lastBytes);
+    end = size - 1;
   } else {
-    inicio = Number(inicioTexto);
-    if (!Number.isSafeInteger(inicio) || inicio < 0) return { kind: 'malformed' };
-    fim = fimTexto ? Number(fimTexto) : size - 1;
-    if (!Number.isSafeInteger(fim) || fim < 0) return { kind: 'malformed' };
+    start = Number(startText);
+    if (!Number.isSafeInteger(start) || start < 0) return { kind: 'malformed' };
+    end = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(end) || end < 0) return { kind: 'malformed' };
   }
-  if (size === 0 || inicio >= size) return { kind: 'unsatisfiable' };
-  fim = Math.min(fim, size - 1);
-  if (fim < inicio) return { kind: 'unsatisfiable' };
+  if (start >= size) return { kind: 'unsatisfiable' };
+  end = Math.min(end, size - 1);
+  if (end < start) return { kind: 'unsatisfiable' };
   // O teto protege memória e banda: a VPS divide rede com o chat e com o TURN.
-  fim = Math.min(fim, inicio + MAX_RANGE_BYTES - 1);
-  return { kind: 'partial', start: inicio, end: fim, length: fim - inicio + 1 };
+  end = Math.min(end, start + MAX_RANGE_BYTES - 1);
+  return { kind: 'partial', start, end, length: end - start + 1 };
 }
 
 /**
@@ -81,10 +81,10 @@ export function parseRange(header: unknown, size: number): RangeOutcome {
 export function resolveStoragePath(root: string, storagePath: string): string | null {
   if (typeof storagePath !== 'string' || !storagePath) return null;
   if (storagePath.includes('\0')) return null;
-  const raiz = path.resolve(root);
-  const alvo = path.resolve(raiz, storagePath);
-  if (alvo !== raiz && !alvo.startsWith(raiz + path.sep)) return null;
-  return alvo;
+  const base = path.resolve(root);
+  const target = path.resolve(base, storagePath);
+  if (target !== base && !target.startsWith(base + path.sep)) return null;
+  return target;
 }
 
 export interface DeliveryPlan {
@@ -109,8 +109,8 @@ export function planDelivery(options: {
   sha256: string;
 }): DeliveryPlan {
   const { filePath, size, method, rangeHeader, fileName, sha256 } = options;
-  const faixa = parseRange(rangeHeader, size);
-  const comuns: Record<string, string> = {
+  const range = parseRange(rangeHeader, size);
+  const common: Record<string, string> = {
     'accept-ranges': 'bytes',
     'content-type': 'application/octet-stream',
     // Nome entre aspas e sem caractere de controle: ele vem do manifesto
@@ -126,25 +126,25 @@ export function planDelivery(options: {
     vary: 'Authorization',
   };
 
-  if (faixa.kind === 'malformed' || faixa.kind === 'unsatisfiable') {
-    return { status: 416, headers: { ...comuns, 'content-range': `bytes */${size}` } };
+  if (range.kind === 'malformed' || range.kind === 'unsatisfiable') {
+    return { status: 416, headers: { ...common, 'content-range': `bytes */${size}` } };
   }
 
-  const parcial = faixa.kind === 'partial';
+  const partial = range.kind === 'partial';
   const headers = {
-    ...comuns,
-    'content-length': String(faixa.length),
-    ...(parcial ? { 'content-range': `bytes ${faixa.start}-${faixa.end}/${size}` } : {}),
+    ...common,
+    'content-length': String(range.length),
+    ...(partial ? { 'content-range': `bytes ${range.start}-${range.end}/${size}` } : {}),
   };
-  if (method === 'HEAD') return { status: parcial ? 206 : 200, headers };
-  return { status: parcial ? 206 : 200, headers, stream: { path: filePath, start: faixa.start, end: faixa.end } };
+  if (method === 'HEAD') return { status: partial ? 206 : 200, headers };
+  return { status: partial ? 206 : 200, headers, stream: { path: filePath, start: range.start, end: range.end } };
 }
 
 /** O tamanho real de um arquivo do armazenamento, ou `null` se não houver. */
 export async function fileSize(filePath: string): Promise<number | null> {
   try {
-    const estado = await stat(filePath);
-    return estado.isFile() ? estado.size : null;
+    const info = await stat(filePath);
+    return info.isFile() ? info.size : null;
   } catch {
     return null;
   }
@@ -163,15 +163,15 @@ export function openRange(filePath: string, start: number, end: number): NodeJS.
  * coisas.
  */
 export class ConcurrencyGate {
-  private ativos = 0;
-  constructor(private readonly limite: number) {}
-  get active(): number { return this.ativos; }
+  private active_ = 0;
+  constructor(private readonly limit: number) {}
+  get active(): number { return this.active_; }
   tryAcquire(): boolean {
-    if (this.ativos >= this.limite) return false;
-    this.ativos += 1;
+    if (this.active_ >= this.limit) return false;
+    this.active_ += 1;
     return true;
   }
   release(): void {
-    this.ativos = Math.max(0, this.ativos - 1);
+    this.active_ = Math.max(0, this.active_ - 1);
   }
 }

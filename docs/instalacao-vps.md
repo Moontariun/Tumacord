@@ -15,7 +15,7 @@ as atualizações — os dois na mesma máquina, como o desenho da 0.9.9-1 prev�
 | Peça | Onde | Porta | Para quê |
 |---|---|---|---|
 | `tumacord-server` | contêiner | 4600 | chat, call, web |
-| `tumacord-atualizacoes` | contêiner | 4300 (público), 4301 (local) | catálogo e download dos pacotes |
+| `tumacord-updates` | contêiner | 4300 (público), 4301 (local) | catálogo e download dos pacotes |
 | `coturn` | contêiner, opcional | 3478 UDP/TCP, 5349 TLS | relay de mídia quando não há caminho direto |
 | proxy HTTPS | host | 443 | TLS e os dois domínios |
 
@@ -150,7 +150,7 @@ não está no `.env`. O erro nomeia qual.
 
 ```bash
 cd "$TUMACORD_DIR"
-docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-atualizacoes
+docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-updates
 ```
 
 **Saída esperada:** duas linhas terminando em `Started`. A compilação da
@@ -161,11 +161,11 @@ primeira vez leva alguns minutos.
 ```bash
 docker compose -p "$TUMACORD_PROJETO" ps
 curl -fsS http://127.0.0.1:4600/api/health | head -c 200; echo
-curl -fsS http://127.0.0.1:4300/v1/saude | head -c 200; echo
+curl -fsS http://127.0.0.1:4300/v1/health | head -c 200; echo
 ```
 
 O primeiro `curl` responde um JSON com `installationId`. O segundo responde
-`{"ok":true,"servico":"tumacord-atualizacoes",...}` com `"catalogo":null` — é o
+`{"ok":true,"servico":"tumacord-updates",...}` com `"catalogo":null` — é o
 esperado: ainda não há nada publicado.
 
 **Efeito sobre dados e chamadas:** nenhum. Esta é uma instalação nova.
@@ -225,7 +225,7 @@ sudo systemctl reload nginx
 
 ```bash
 curl -fsS "https://$TUMACORD_DOMINIO_CHAT/api/health" | head -c 120; echo
-curl -fsS "https://$TUMACORD_DOMINIO_UPDATES/v1/saude" | head -c 120; echo
+curl -fsS "https://$TUMACORD_DOMINIO_UPDATES/v1/health" | head -c 120; echo
 ```
 
 **Se o segundo responder 401**, está certo: o catálogo exige credencial. Se ele
@@ -324,8 +324,8 @@ Não é o mesmo estrago.
 | `doctor` diz que não achou instalação | rodou fora do diretório, ou o projeto tem outro nome | `--projeto <nome>`; veja `docker compose ls` |
 | `doctor` acha mais de uma instalação | há outra na mesma máquina | `--projeto <nome>`. Ele não escolhe sozinho de propósito |
 | `curl` da saúde não responde | o contêiner não subiu | `docker compose -p "$TUMACORD_PROJETO" logs tumacord-server` |
-| `/v1/saude` responde e `/v1/catalogo` dá 401 | normal | o catálogo exige credencial de dispositivo |
-| `/v1/catalogo` responde **sem** credencial | o proxy está contornando a autorização | pare e confira o bloco do proxy |
+| `/v1/health` responde e `/v1/catalog` dá 401 | normal | o catálogo exige credencial de dispositivo |
+| `/v1/catalog` responde **sem** credencial | o proxy está contornando a autorização | pare e confira o bloco do proxy |
 
 Mais casos em [Solução de problemas](solucao-de-problemas.md).
 

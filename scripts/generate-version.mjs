@@ -19,8 +19,8 @@
 // `.1` no lugar certo.
 //
 // Uso:
-//   node scripts/gerar-versao.mjs           escreve os arquivos
-//   node scripts/gerar-versao.mjs --check    só confere, sem escrever (CI)
+//   node scripts/generate-version.mjs           escreve os arquivos
+//   node scripts/generate-version.mjs --check    só confere, sem escrever (CI)
 
 import { buildSync } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -28,11 +28,26 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projeto = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const fonte = resolve(projeto, 'shared/version.ts');
-const destino = resolve(projeto, 'desktop/version.generated.cjs');
 const pacote = resolve(projeto, 'package.json');
 
-const AVISO = `// ATENÇÃO: arquivo gerado por scripts/gerar-versao.mjs a partir de
+/**
+ * O que é gerado, e de onde.
+ *
+ * O processo principal do Electron carrega `desktop/*.cjs` sem bundler: ele
+ * não importa TypeScript. Cada entrada aqui é uma regra que precisa existir
+ * dos dois lados e **não pode divergir** — a política de versão e os contratos
+ * da distribuição. `tests/version.test.ts` regera e compara.
+ */
+const MODULOS = [
+  { fonte: 'shared/version.ts', destino: 'desktop/version.generated.cjs' },
+  { fonte: 'shared/distribution.ts', destino: 'desktop/distribution.generated.cjs' },
+  { fonte: 'shared/distributionCrypto.ts', destino: 'desktop/distribution-crypto.generated.cjs' },
+];
+
+const fonte = resolve(projeto, MODULOS[0].fonte);
+const destino = resolve(projeto, MODULOS[0].destino);
+
+const AVISO = `// ATENÇÃO: arquivo gerado por scripts/generate-version.mjs a partir de
 // shared/version.ts. Não edite aqui — a edição seria perdida na próxima
 // geração, e \`tests/version.test.ts\` falha quando os dois divergem.
 //
@@ -40,6 +55,20 @@ const AVISO = `// ATENÇÃO: arquivo gerado por scripts/gerar-versao.mjs a parti
 // adaptação CJS dela, para o processo principal do Electron, que carrega
 // \`desktop/*.cjs\` sem bundler.
 `;
+
+/** Gera a adaptação CJS de um módulo TypeScript. */
+export function gerarModulo(caminhoRelativo) {
+  const { outputFiles } = buildSync({
+    entryPoints: [resolve(projeto, caminhoRelativo)],
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node20',
+    write: false,
+    legalComments: 'none',
+  });
+  return `${AVISO}\n${outputFiles[0].text}`;
+}
 
 export function gerar() {
   const { outputFiles } = buildSync({
@@ -62,6 +91,8 @@ export function gerar() {
  * `buildVersion` é fixado para o electron-builder não montar `0.9.9-1.1`
  * concatenando os dois.
  */
+export { MODULOS };
+
 export function camposDoPacote(version) {
   const { revision, text } = lerVersao(version);
   return { buildNumber: String(revision), buildVersion: text };
@@ -103,16 +134,25 @@ function principal() {
   })();
 
   let falhou = false;
-  if (gerado !== atual) {
-    if (conferir) {
-      console.error('desktop/version.generated.cjs está fora de sincronia com shared/version.ts.');
-      falhou = true;
-    } else {
-      writeFileSync(destino, gerado);
-      console.log('desktop/version.generated.cjs gerado a partir de shared/version.ts.');
+  void gerado;
+  void atual;
+  for (const modulo of MODULOS) {
+    const saida = gerarModulo(modulo.fonte);
+    const caminho = resolve(projeto, modulo.destino);
+    const emDisco = (() => {
+      try { return readFileSync(caminho, 'utf8'); } catch { return null; }
+    })();
+    if (saida === emDisco) {
+      if (!conferir) console.log(`${modulo.destino} já está em dia.`);
+      continue;
     }
-  } else if (!conferir) {
-    console.log('desktop/version.generated.cjs já está em dia.');
+    if (conferir) {
+      console.error(`${modulo.destino} está fora de sincronia com ${modulo.fonte}.`);
+      falhou = true;
+      continue;
+    }
+    writeFileSync(caminho, saida);
+    console.log(`${modulo.destino} gerado a partir de ${modulo.fonte}.`);
   }
 
   const pacoteResultado = sincronizarPacote(!conferir);
@@ -127,7 +167,7 @@ function principal() {
     console.log('package.json já está em dia.');
   }
 
-  if (falhou) console.error('Rode: node scripts/gerar-versao.mjs');
+  if (falhou) console.error('Rode: node scripts/generate-version.mjs');
   return falhou ? 1 : 0;
 }
 

@@ -44,13 +44,13 @@ export function pendingWatchRequests(
   sent: ReadonlyMap<string, string>,
   connectedPeers: ReadonlySet<string>,
 ): WatchRequest[] {
-  const pedidos: WatchRequest[] = [];
+  const requests: WatchRequest[] = [];
   for (const [peerId, streamId] of Object.entries(intent)) {
     if (!streamId || !connectedPeers.has(peerId)) continue;
     if (sent.get(peerId) === streamId) continue;
-    pedidos.push({ peerId, streamId });
+    requests.push({ peerId, streamId });
   }
-  return pedidos;
+  return requests;
 }
 
 /**
@@ -62,11 +62,11 @@ export function pendingWatchRequests(
  * existia quando disse sim.
  */
 export function intentAfterAnnouncement(intent: WatchIntent, peerId: string, announcedStreamId: string): WatchIntent {
-  const atual = intent[peerId];
-  if (!atual || !announcedStreamId || atual === announcedStreamId) return intent;
-  const proximo = { ...intent };
-  delete proximo[peerId];
-  return proximo;
+  const current = intent[peerId];
+  if (!current || !announcedStreamId || current === announcedStreamId) return intent;
+  const next = { ...intent };
+  delete next[peerId];
+  return next;
 }
 
 /**
@@ -76,11 +76,11 @@ export function intentAfterAnnouncement(intent: WatchIntent, peerId: string, ann
  * pendurado e a próxima live daquela pessoa começaria já assistida.
  */
 export function intentAfterBroadcasters(intent: WatchIntent, broadcasting: ReadonlySet<string>): WatchIntent {
-  const orfas = Object.keys(intent).filter((peerId) => !broadcasting.has(peerId));
-  if (!orfas.length) return intent;
-  const proximo = { ...intent };
-  for (const peerId of orfas) delete proximo[peerId];
-  return proximo;
+  const orphaned = Object.keys(intent).filter((peerId) => !broadcasting.has(peerId));
+  if (!orphaned.length) return intent;
+  const next = { ...intent };
+  for (const peerId of orphaned) delete next[peerId];
+  return next;
 }
 
 /**

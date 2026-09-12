@@ -17,7 +17,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CHANNELS, CONTRACT_VERSION, type Catalog, type CatalogEntry, type ReleaseManifest, type Signed, type TrustedKey } from '../../../shared/distribution.js';
-import type { DeviceRecord, InviteRecord } from './dispositivos.js';
+import type { DeviceRecord, InviteRecord } from './devices.js';
 
 export interface DistributionState {
   /** O catálogo assinado, exatamente como ele é servido. */
@@ -49,11 +49,11 @@ export function emptyCatalog(now: number, ttlMs: number): Catalog {
 
 export class StateStore {
   private data: DistributionState = emptyState();
-  private fila: Promise<void> = Promise.resolve();
-  private readonly arquivo: string;
+  private queue: Promise<void> = Promise.resolve();
+  private readonly file: string;
 
   constructor(private readonly directory: string) {
-    this.arquivo = path.resolve(directory, 'distribuicao.json');
+    this.file = path.resolve(directory, 'distribution.json');
   }
 
   get state(): DistributionState { return this.data; }
@@ -61,17 +61,17 @@ export class StateStore {
   async load(): Promise<void> {
     await mkdir(this.directory, { recursive: true });
     try {
-      const lido = JSON.parse(await readFile(this.arquivo, 'utf8')) as Partial<DistributionState>;
+      const loaded = JSON.parse(await readFile(this.file, 'utf8')) as Partial<DistributionState>;
       this.data = {
-        catalog: lido.catalog ?? null,
-        manifests: lido.manifests ?? {},
-        devices: lido.devices ?? [],
-        invites: lido.invites ?? [],
-        trustedKeys: lido.trustedKeys ?? [],
-        history: lido.history ?? [],
+        catalog: loaded.catalog ?? null,
+        manifests: loaded.manifests ?? {},
+        devices: loaded.devices ?? [],
+        invites: loaded.invites ?? [],
+        trustedKeys: loaded.trustedKeys ?? [],
+        history: loaded.history ?? [],
       };
-    } catch (erro) {
-      if ((erro as NodeJS.ErrnoException).code !== 'ENOENT') throw erro;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       this.data = emptyState();
       await this.save();
     }
@@ -85,18 +85,18 @@ export class StateStore {
    * do armazenamento do chat, pelo mesmo motivo.
    */
   private async save(): Promise<void> {
-    const proxima = this.fila.then(async () => {
-      const temporario = `${this.arquivo}.novo`;
-      await writeFile(temporario, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
+    const next = this.queue.then(async () => {
+      const temporary = `${this.file}.next`;
+      await writeFile(temporary, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
       // Renomear é atômico: ninguém lê meio arquivo.
-      await rename(temporario, this.arquivo);
+      await rename(temporary, this.file);
     });
-    this.fila = proxima.catch(() => undefined);
-    await proxima;
+    this.queue = next.catch(() => undefined);
+    await next;
   }
 
-  async mutate(alterar: (state: DistributionState) => void): Promise<void> {
-    alterar(this.data);
+  async mutate(change: (state: DistributionState) => void): Promise<void> {
+    change(this.data);
     await this.save();
   }
 }
@@ -128,29 +128,29 @@ export const PUBLISH_MESSAGES: Record<PublishFailure, string> = {
  * versão.
  */
 export function validateCatalog(
-  proximo: Catalog,
-  atual: Catalog | null,
+  next: Catalog,
+  current: Catalog | null,
   manifests: Record<string, Signed<ReleaseManifest>>,
 ): PublishFailure | null {
-  if (atual && proximo.sequence <= atual.sequence) return 'sequence-not-advancing';
-  const publicadasAntes = new Map<string, string>();
-  for (const canal of CHANNELS) {
-    for (const entrada of atual?.channels?.[canal]?.entries ?? []) {
-      publicadasAntes.set(`${canal}:${entrada.version}`, entrada.releaseId);
+  if (current && next.sequence <= current.sequence) return 'sequence-not-advancing';
+  const alreadyPublished = new Map<string, string>();
+  for (const channel of CHANNELS) {
+    for (const entry of current?.channels?.[channel]?.entries ?? []) {
+      alreadyPublished.set(`${channel}:${entry.version}`, entry.releaseId);
     }
   }
-  for (const canal of Object.keys(proximo.channels ?? {})) {
-    if (!CHANNELS.includes(canal as never)) return 'unknown-channel';
+  for (const channel of Object.keys(next.channels ?? {})) {
+    if (!CHANNELS.includes(channel as never)) return 'unknown-channel';
   }
-  for (const canal of CHANNELS) {
-    const vistas = new Set<string>();
-    for (const entrada of proximo.channels?.[canal]?.entries ?? []) {
-      if (!entrada?.version || !entrada.releaseId) return 'entry-version-invalid';
-      if (vistas.has(entrada.version)) return 'duplicate-version';
-      vistas.add(entrada.version);
-      const antes = publicadasAntes.get(`${canal}:${entrada.version}`);
-      if (antes && antes !== entrada.releaseId) return 'reused-version';
-      if (!manifests[entrada.releaseId]) return 'manifest-missing';
+  for (const channel of CHANNELS) {
+    const seen = new Set<string>();
+    for (const entry of next.channels?.[channel]?.entries ?? []) {
+      if (!entry?.version || !entry.releaseId) return 'entry-version-invalid';
+      if (seen.has(entry.version)) return 'duplicate-version';
+      seen.add(entry.version);
+      const before = alreadyPublished.get(`${channel}:${entry.version}`);
+      if (before && before !== entry.releaseId) return 'reused-version';
+      if (!manifests[entry.releaseId]) return 'manifest-missing';
     }
   }
   return null;
@@ -165,10 +165,10 @@ export function withdrawEntry(catalog: Catalog, channel: 'stable' | 'test', rele
     channels: {
       ...catalog.channels,
       [channel]: {
-        entries: (catalog.channels[channel]?.entries ?? []).map((entrada): CatalogEntry => (
-          entrada.releaseId === releaseId
-            ? { ...entrada, state: 'withdrawn', withdrawn: { reason, at: new Date(now).toISOString() } }
-            : entrada
+        entries: (catalog.channels[channel]?.entries ?? []).map((entry): CatalogEntry => (
+          entry.releaseId === releaseId
+            ? { ...entry, state: 'withdrawn', withdrawn: { reason, at: new Date(now).toISOString() } }
+            : entry
         )),
       },
     },

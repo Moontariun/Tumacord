@@ -65,7 +65,7 @@ Confira qual volume está montado em `/data`.
 
 ## Atualizações
 
-### `/v1/catalogo` responde 401
+### `/v1/catalog` responde 401
 
 Normal: ele exige credencial de dispositivo. Se responde **sem** credencial,
 pare — algo no proxy está contornando a autorização.
@@ -137,7 +137,7 @@ Se `0.9.9` e `0.9.9-1` aparecem como o mesmo número, os campos derivados do
 `package.json` estão fora de sincronia:
 
 ```bash
-node scripts/gerar-versao.mjs --check
+node scripts/generate-version.mjs --check
 ```
 
 Veja [Versionamento](versionamento.md#a-versão-numérica-do-windows).

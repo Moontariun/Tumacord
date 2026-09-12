@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run build:atualizacoes
+RUN npm run build:updates
 
 FROM node:22-alpine
 WORKDIR /app
@@ -19,7 +19,7 @@ ENV NODE_ENV=production \
     TUMACORD_UPDATES_ADMIN_PORT=4301 \
     TUMACORD_UPDATES_STATE_DIR=/estado \
     TUMACORD_UPDATES_STORAGE_DIR=/pacotes
-COPY --from=build /app/dist-atualizacoes ./dist-atualizacoes
+COPY --from=build /app/dist-updates ./dist-updates
 # Os pacotes e o estado ficam FORA do checkout, que é descartável: ele é
 # apagado e refeito a cada release. E ficam fora de qualquer webroot — não há
 # caminho estático para eles, e a única porta é a rota autorizada.
@@ -28,5 +28,5 @@ VOLUME ["/estado", "/pacotes"]
 EXPOSE 4300
 USER node
 HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:4300/v1/saude').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-CMD ["node", "dist-atualizacoes/servico.cjs"]
+  CMD node -e "fetch('http://127.0.0.1:4300/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "dist-updates/service.cjs"]

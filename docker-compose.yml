@@ -47,11 +47,11 @@ services:
   #
   # Ele não fala com o GitHub, não executa nada e não assina documento nenhum:
   # a chave privada de assinatura vive no ambiente de publicação, não aqui.
-  tumacord-atualizacoes:
+  tumacord-updates:
     build:
       context: .
-      dockerfile: Dockerfile.atualizacoes
-    container_name: tumacord-atualizacoes
+      dockerfile: Dockerfile.updates
+    container_name: tumacord-updates
     init: true
     restart: unless-stopped
     environment:

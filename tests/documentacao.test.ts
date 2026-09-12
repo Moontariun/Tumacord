@@ -49,7 +49,7 @@ function lerFontes(): string[] {
     const completo = path.join(raiz, pasta);
     if (existsSync(completo)) visitar(completo);
   }
-  for (const arquivo of ['docker-compose.yml', 'Dockerfile', 'Dockerfile.atualizacoes']) {
+  for (const arquivo of ['docker-compose.yml', 'Dockerfile', 'Dockerfile.updates']) {
     const completo = path.join(raiz, arquivo);
     if (existsSync(completo)) textos.push(readFileSync(completo, 'utf8'));
   }

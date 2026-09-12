@@ -6,8 +6,8 @@
 // escrita quatro vezes (`desktop/update-check.cjs`, `shared/serverUpdate.ts`,
 // `scripts/lib/escolher-versao.js` e `.py`), e quatro cópias de uma regra de
 // ordenação são quatro chances de o aplicativo e o servidor discordarem sobre
-// qual versão é a mais nova. As adaptações para CJS e Python são **geradas**
-// por `scripts/gerar-versao.mjs` a partir deste arquivo; `tests/version.test.ts`
+// qual versão é a mais nova. As adaptações para CJS são **geradas** por
+// `scripts/generate-version.mjs` a partir deste arquivo; `tests/version.test.ts`
 // falha se alguma delas divergir.
 //
 // ## A convenção
@@ -45,8 +45,8 @@
 
 /** O erro de uma versão que não tem a forma que este projeto publica. */
 export class VersionError extends Error {
-  constructor(public readonly input: unknown, motivo: string) {
-    super(`versão inválida (${motivo}): ${JSON.stringify(input)}`);
+  constructor(public readonly input: unknown, reason: string) {
+    super(`versão inválida (${reason}): ${JSON.stringify(input)}`);
     this.name = 'VersionError';
   }
 }
@@ -82,20 +82,20 @@ export interface Version {
 // propósito: duas escritas para a mesma versão fariam `0.9.9-1` e `0.9.9-01`
 // virarem etiquetas diferentes apontando para o mesmo lugar, e é assim que se
 // publica conteúdo diferente sob o mesmo número sem ninguém notar.
-const CAMPO = '(?:0|[1-9]\\d*)';
-const COMPLETA = new RegExp(`^(${CAMPO})\\.(${CAMPO})\\.(${CAMPO})(?:-([1-9]\\d*))?$`);
+const FIELD = '(?:0|[1-9]\\d*)';
+const FULL_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
 // `1.0` é aceito **só como entrada** e normalizado para `1.0.0`. Ele nunca é
 // produzido por `formatVersion`, porque duas escritas para a mesma versão é
 // exatamente o que a forma canônica existe para evitar.
-const CURTA = new RegExp(`^(${CAMPO})\\.(${CAMPO})(?:-([1-9]\\d*))?$`);
+const SHORT_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
 
-function motivoDaRecusa(bruto: string): string {
-  if (!bruto) return 'vazia';
-  if (/[+]/.test(bruto)) return 'metadado de build não faz parte desta convenção';
-  if (/-(?:0\d*|\d*[A-Za-z])/.test(bruto)) {
+function rejectionReason(raw: string): string {
+  if (!raw) return 'vazia';
+  if (/[+]/.test(raw)) return 'metadado de build não faz parte desta convenção';
+  if (/-(?:0\d*|\d*[A-Za-z])/.test(raw)) {
     return 'o sufixo é a revisão de manutenção, um inteiro positivo — alpha, beta e rc não entram: quem é ensaio é decidido pelo canal';
   }
-  if (/\b0\d/.test(bruto)) return 'zero à esquerda';
+  if (/\b0\d/.test(raw)) return 'zero à esquerda';
   return 'formato';
 }
 
@@ -107,18 +107,18 @@ function motivoDaRecusa(bruto: string): string {
  */
 export function parseVersion(input: unknown): Version | null {
   if (typeof input !== 'string') return null;
-  const bruto = input.trim().replace(/^v/i, '');
-  const m = COMPLETA.exec(bruto) ?? CURTA.exec(bruto);
-  if (!m) return null;
-  // `exec` devolve 1 + número de grupos. `COMPLETA` tem quatro grupos e
-  // `CURTA` tem três, então o tamanho já diz qual das duas casou.
-  const curta = m.length === 4;
-  const major = Number(m[1]);
-  const minor = Number(m[2]);
-  const patch = curta ? 0 : Number(m[3]);
-  const revision = Number((curta ? m[3] : m[4]) ?? 0);
-  for (const valor of [major, minor, patch, revision]) {
-    if (!Number.isSafeInteger(valor) || valor < 0 || valor > VERSION_LIMIT) return null;
+  const raw = input.trim().replace(/^v/i, '');
+  const found = FULL_FORM.exec(raw) ?? SHORT_FORM.exec(raw);
+  if (!found) return null;
+  // `exec` devolve 1 + número de grupos. `FULL_FORM` tem quatro grupos e
+  // `SHORT_FORM` tem três, então o tamanho já diz qual das duas casou.
+  const short = found.length === 4;
+  const major = Number(found[1]);
+  const minor = Number(found[2]);
+  const patch = short ? 0 : Number(found[3]);
+  const revision = Number((short ? found[3] : found[4]) ?? 0);
+  for (const value of [major, minor, patch, revision]) {
+    if (!Number.isSafeInteger(value) || value < 0 || value > VERSION_LIMIT) return null;
   }
   const text = revision ? `${major}.${minor}.${patch}-${revision}` : `${major}.${minor}.${patch}`;
   return { major, minor, patch, revision, text, tag: `v${text}`, tuple: [major, minor, patch, revision] };
@@ -126,14 +126,29 @@ export function parseVersion(input: unknown): Version | null {
 
 /** O mesmo que `parseVersion`, mas lança em vez de devolver `null`. */
 export function requireVersion(input: unknown): Version {
-  const versao = parseVersion(input);
-  if (!versao) throw new VersionError(input, typeof input === 'string' ? motivoDaRecusa(input.trim().replace(/^v/i, '')) : 'não é texto');
-  return versao;
+  const version = parseVersion(input);
+  if (!version) throw new VersionError(input, typeof input === 'string' ? rejectionReason(input.trim().replace(/^v/i, '')) : 'não é texto');
+  return version;
 }
 
 /** `true` quando o texto é uma versão deste projeto. */
 export function isVersion(input: unknown): boolean {
   return parseVersion(input) !== null;
+}
+
+// Aceita tanto o texto quanto uma versão já lida, mas não confia na forma de
+// um objeto qualquer: `{}` chegando aqui como se fosse uma versão estouraria
+// com `TypeError` lá dentro, e `TypeError` não diz a quem chamou que o dado
+// estava errado.
+function asVersion(input: unknown): Version {
+  if (typeof input === 'object' && input !== null) {
+    const tuple = (input as Version).tuple;
+    if (Array.isArray(tuple) && tuple.length === 4 && tuple.every((field) => Number.isSafeInteger(field))) {
+      return input as Version;
+    }
+    throw new VersionError(input, 'objeto que não é uma versão lida');
+  }
+  return requireVersion(input);
 }
 
 /**
@@ -143,26 +158,11 @@ export function isVersion(input: unknown): boolean {
  * mesma versão", e foi assim que uma entrada corrompida do catálogo já
  * convenceu um cliente de que ele estava em dia.
  */
-// Aceita tanto o texto quanto uma versão já lida, mas não confia na forma de
-// um objeto qualquer: `{}` chegando aqui como se fosse uma versão estouraria
-// com `TypeError` lá dentro, e `TypeError` não diz a quem chamou que o dado
-// estava errado.
-function comoVersao(entrada: unknown): Version {
-  if (typeof entrada === 'object' && entrada !== null) {
-    const tupla = (entrada as Version).tuple;
-    if (Array.isArray(tupla) && tupla.length === 4 && tupla.every((campo) => Number.isSafeInteger(campo))) {
-      return entrada as Version;
-    }
-    throw new VersionError(entrada, 'objeto que não é uma versão lida');
-  }
-  return requireVersion(entrada);
-}
-
 export function compareVersions(left: unknown, right: unknown): -1 | 0 | 1 {
-  const a = comoVersao(left);
-  const b = comoVersao(right);
-  for (let i = 0; i < 4; i += 1) {
-    if (a.tuple[i] !== b.tuple[i]) return a.tuple[i] > b.tuple[i] ? 1 : -1;
+  const a = asVersion(left);
+  const b = asVersion(right);
+  for (let index = 0; index < 4; index += 1) {
+    if (a.tuple[index] !== b.tuple[index]) return a.tuple[index] > b.tuple[index] ? 1 : -1;
   }
   return 0;
 }
@@ -186,10 +186,10 @@ export function windowsVersion(input: unknown): string {
 
 /** Ordena da mais nova para a mais antiga, descartando o que não for versão. */
 export function sortDescending(versions: readonly unknown[]): Version[] {
-  const lidas: Version[] = [];
+  const parsed: Version[] = [];
   for (const item of versions) {
-    const versao = parseVersion(item);
-    if (versao) lidas.push(versao);
+    const version = parseVersion(item);
+    if (version) parsed.push(version);
   }
-  return lidas.sort((left, right) => compareVersions(right, left));
+  return parsed.sort((left, right) => compareVersions(right, left));
 }

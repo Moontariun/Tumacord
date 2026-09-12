@@ -16,9 +16,9 @@ import {
   publicDevice,
   renew,
   sanitizeLabel,
-} from '../services/atualizacoes/src/dispositivos';
-import { ConcurrencyGate, MAX_RANGE_BYTES, fileSize, parseRange, planDelivery, resolveStoragePath } from '../services/atualizacoes/src/entrega';
-import { StateStore, emptyCatalog, validateCatalog, withdrawEntry } from '../services/atualizacoes/src/estado';
+} from '../services/updates/src/devices';
+import { ConcurrencyGate, MAX_RANGE_BYTES, fileSize, parseRange, planDelivery, resolveStoragePath } from '../services/updates/src/delivery';
+import { StateStore, emptyCatalog, validateCatalog, withdrawEntry } from '../services/updates/src/state';
 import { CONTRACT_VERSION, type ReleaseManifest, type Signed } from '../shared/distribution';
 
 // O serviço que serve as atualizações na VPS. Aqui está a parte que decide

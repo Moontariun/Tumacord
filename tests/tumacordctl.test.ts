@@ -3,11 +3,11 @@ import { existsSync } from 'node:fs';
 import test from 'node:test';
 
 // @ts-expect-error — módulo .mjs sem tipos, e é assim que o operador o usa.
-import { descobrirInstalacoes, escolherInstalacao, mountDeDados } from '../tools/tumacordctl/lib/descoberta.mjs';
+import { chooseInstallation, dataMount, discoverInstallations } from '../tools/tumacordctl/lib/discovery.mjs';
 // @ts-expect-error — idem.
-import { piorNivel, preflight, preflightPortas } from '../tools/tumacordctl/lib/preflight.mjs';
+import { preflight, preflightPorts, worstLevel } from '../tools/tumacordctl/lib/preflight.mjs';
 // @ts-expect-error — idem.
-import { AJUDA, AJUDA_COMANDO, NAO_IMPLEMENTADO, parseArgs, urlDoServico } from '../tools/tumacordctl/tumacordctl.mjs';
+import { COMMAND_HELP, HELP, NOT_IMPLEMENTED, parseArgs, serviceUrl } from '../tools/tumacordctl/tumacordctl.mjs';
 
 // A descoberta da instalação, que é onde o guia antigo errava três vezes no
 // mesmo lugar: escolhia "o primeiro volume que combina com a regex", presumia
@@ -24,277 +24,277 @@ const CONTÊINER_CHAT = {
     Env: ['DATA_DIR=/data', 'SERVER_ACCESS_KEY=segredo-que-nao-pode-vazar', 'PORT=4600'],
   },
   State: { Status: 'running', Health: { Status: 'healthy' }, StartedAt: '2026-09-12T10:00:00Z' },
-  Mounts: [{ Type: 'volume', Name: 'projeto-do-renan_tumacord-data', Source: '/var/lib/docker/volumes/projeto-do-renan_tumacord-data/_data', Destination: '/data', RW: true }],
+  Mounts: [{ Type: 'volume', Name: 'project-do-renan_tumacord-data', Source: '/var/lib/docker/volumes/project-do-renan_tumacord-data/_data', Destination: '/data', RW: true }],
   NetworkSettings: { Ports: { '4600/tcp': [{ HostIp: '0.0.0.0', HostPort: '4600' }] } },
 };
 
 /** Um `docker` fingido, que responde o que a máquina responderia. */
-function dockerFingido(contêineres: Record<string, unknown>[]) {
-  return async (comando: string, argumentos: string[]) => {
-    if (comando !== 'docker') return { ok: false, stdout: '', stderr: 'comando inesperado' };
-    if (argumentos[0] === 'ps') {
-      return { ok: true, stdout: contêineres.map((c) => JSON.stringify({ ID: (c as { Id: string }).Id })).join('\n'), stderr: '' };
+function fakeDocker(containers: Record<string, unknown>[]) {
+  return async (command: string, args: string[]) => {
+    if (command !== 'docker') return { ok: false, stdout: '', stderr: 'command inesperado' };
+    if (args[0] === 'ps') {
+      return { ok: true, stdout: containers.map((c) => JSON.stringify({ ID: (c as { Id: string }).Id })).join('\n'), stderr: '' };
     }
-    if (argumentos[0] === 'inspect') {
-      const achado = contêineres.find((c) => (c as { Id: string }).Id === argumentos[1]);
-      return achado ? { ok: true, stdout: JSON.stringify([achado]), stderr: '' } : { ok: false, stdout: '', stderr: 'no such object' };
+    if (args[0] === 'inspect') {
+      const found = containers.find((c) => (c as { Id: string }).Id === args[1]);
+      return found ? { ok: true, stdout: JSON.stringify([found]), stderr: '' } : { ok: false, stdout: '', stderr: 'no such object' };
     }
-    return { ok: false, stdout: '', stderr: 'comando inesperado' };
+    return { ok: false, stdout: '', stderr: 'command inesperado' };
   };
 }
 
 // ── Descoberta ─────────────────────────────────────────────────────────────
 
-test('a instalação é achada pelo rótulo do Compose, com qualquer nome de projeto', async () => {
+test('a instalação é achada pelo rótulo do Compose, com qualquer name de project', async () => {
   // O ponto: o nome do volume aqui é `projeto-do-renan_tumacord-data`, que
   // nenhuma regex por `tumacord-data` acharia como nome exato.
-  const { ok, instalacoes } = await descobrirInstalacoes(dockerFingido([CONTÊINER_CHAT]));
+  const { ok, installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
   assert.equal(ok, true);
-  assert.equal(instalacoes.length, 1);
-  assert.equal(instalacoes[0].projeto, 'tumacord');
-  assert.equal(instalacoes[0].diretorio, '/home/Tumacord');
-  assert.equal(instalacoes[0].servicos['tumacord-server'].estado, 'running');
+  assert.equal(installations.length, 1);
+  assert.equal(installations[0].project, 'tumacord');
+  assert.equal(installations[0].directory, '/home/Tumacord');
+  assert.equal(installations[0].services['tumacord-server'].status, 'running');
 });
 
-test('o volume de dados é o mount real em /data, e não um nome presumido', async () => {
-  const { instalacoes } = await descobrirInstalacoes(dockerFingido([CONTÊINER_CHAT]));
-  const dados = mountDeDados(instalacoes[0].servicos['tumacord-server'], '/data');
-  assert.equal(dados.nome, 'projeto-do-renan_tumacord-data');
-  assert.equal(dados.origem, '/var/lib/docker/volumes/projeto-do-renan_tumacord-data/_data');
-  assert.equal(dados.escrita, true);
+test('o volume de data é o mount real em /data, e não um name presumido', async () => {
+  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
+  const data = dataMount(installations[0].services['tumacord-server'], '/data');
+  assert.equal(data.name, 'project-do-renan_tumacord-data');
+  assert.equal(data.source, '/var/lib/docker/volumes/project-do-renan_tumacord-data/_data');
+  assert.equal(data.writable, true);
 });
 
 test('os valores das variáveis nunca saem da descoberta', async () => {
-  const { instalacoes } = await descobrirInstalacoes(dockerFingido([CONTÊINER_CHAT]));
-  const texto = JSON.stringify(instalacoes);
+  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
+  const text = JSON.stringify(installations);
   // Um preflight que imprimisse a chave a vazaria no primeiro print.
-  assert.equal(texto.includes('segredo-que-nao-pode-vazar'), false);
-  assert.deepEqual(instalacoes[0].servicos['tumacord-server'].variaveis, ['DATA_DIR', 'PORT', 'SERVER_ACCESS_KEY']);
+  assert.equal(text.includes('segredo-que-nao-pode-vazar'), false);
+  assert.deepEqual(installations[0].services['tumacord-server'].variables, ['DATA_DIR', 'PORT', 'SERVER_ACCESS_KEY']);
 });
 
 test('duas instalações param a operação em vez de virar sorteio', async () => {
   const segunda = { ...CONTÊINER_CHAT, Id: 'def456', Config: { ...CONTÊINER_CHAT.Config, Labels: { ...CONTÊINER_CHAT.Config.Labels, 'com.docker.compose.project': 'homologacao' } } };
-  const { instalacoes } = await descobrirInstalacoes(dockerFingido([CONTÊINER_CHAT, segunda]));
-  assert.equal(instalacoes.length, 2);
+  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT, segunda]));
+  assert.equal(installations.length, 2);
 
-  const escolha = escolherInstalacao(instalacoes);
-  assert.equal(escolha.ok, false);
-  assert.match(escolha.erro, /--projeto/);
-  assert.match(escolha.erro, /perde dados/, 'o motivo da recusa é dito');
+  const choice = chooseInstallation(installations);
+  assert.equal(choice.ok, false);
+  assert.match(choice.error, /--project/);
+  assert.match(choice.error, /perde dados/, 'o motivo da recusa é dito');
 
   // Com o projeto nomeado, segue.
-  assert.equal(escolherInstalacao(instalacoes, 'homologacao').ok, true);
-  assert.equal(escolherInstalacao(instalacoes, 'homologacao').instalacao.projeto, 'homologacao');
+  assert.equal(chooseInstallation(installations, 'homologacao').ok, true);
+  assert.equal(chooseInstallation(installations, 'homologacao').installation.project, 'homologacao');
   // E um nome que não existe não vira "o primeiro que combina".
-  assert.equal(escolherInstalacao(instalacoes, 'inventado').ok, false);
+  assert.equal(chooseInstallation(installations, 'inventado').ok, false);
 });
 
 test('nenhuma instalação não é tratada como instalação vazia', async () => {
-  const escolha = escolherInstalacao([]);
-  assert.equal(escolha.ok, false);
-  assert.match(escolha.erro, /Não encontrei nenhuma instalação/);
+  const choice = chooseInstallation([]);
+  assert.equal(choice.ok, false);
+  assert.match(choice.error, /Não encontrei nenhuma instalação/);
 });
 
 test('contêineres de outros projetos não entram', async () => {
   const alheio = { ...CONTÊINER_CHAT, Id: 'zzz', Config: { ...CONTÊINER_CHAT.Config, Labels: { 'com.docker.compose.project': 'outra-coisa', 'com.docker.compose.service': 'postgres' } } };
-  const { instalacoes } = await descobrirInstalacoes(dockerFingido([alheio]));
-  assert.equal(instalacoes.length, 0, 'só os serviços deste projeto');
+  const { installations } = await discoverInstallations(fakeDocker([alheio]));
+  assert.equal(installations.length, 0, 'só os serviços deste project');
 });
 
 // ── Preflight ──────────────────────────────────────────────────────────────
 
-const instalacaoSaudavel = {
-  projeto: 'tumacord', diretorio: '/home/Tumacord',
-  servicos: {
+const healthyInstallation = {
+  project: 'tumacord', directory: '/home/Tumacord',
+  services: {
     'tumacord-server': {
-      nome: 'tumacord-server', estado: 'running', saude: 'healthy', imagem: 'x',
-      mounts: [{ tipo: 'volume', nome: 'tumacord_tumacord-data', origem: '/var/lib/docker/volumes/x/_data', destino: '/data', escrita: true }],
-      portas: [{ interna: '4600/tcp', host: '0.0.0.0:4600' }],
-      variaveis: ['DATA_DIR', 'SERVER_ACCESS_KEY'],
+      name: 'tumacord-server', status: 'running', health: 'healthy', image: 'x',
+      mounts: [{ kind: 'volume', name: 'tumacord_tumacord-data', source: '/var/lib/docker/volumes/x/_data', destination: '/data', writable: true }],
+      ports: [{ inside: '4600/tcp', host: '0.0.0.0:4600' }],
+      variables: ['DATA_DIR', 'SERVER_ACCESS_KEY'],
     },
-    'tumacord-atualizacoes': {
-      nome: 'tumacord-atualizacoes', estado: 'running', saude: '', imagem: 'y', mounts: [],
-      portas: [{ interna: '4300/tcp', host: '127.0.0.1:4300' }, { interna: '4301/tcp', host: '127.0.0.1:4301' }],
-      variaveis: ['TUMACORD_UPDATES_STATE_DIR'],
+    'tumacord-updates': {
+      name: 'tumacord-updates', status: 'running', health: '', image: 'y', mounts: [],
+      ports: [{ inside: '4300/tcp', host: '127.0.0.1:4300' }, { inside: '4301/tcp', host: '127.0.0.1:4301' }],
+      variables: ['TUMACORD_UPDATES_STATE_DIR'],
     },
   },
 };
 
-const espacoFolgado = async () => ({ ok: true, livre: 50 * 1024 ** 3, total: 100 * 1024 ** 3 });
-const permissoesBoas = async () => ({ existe: true, leitura: true, escrita: true });
-const opcoesBase = { lerEspaco: espacoFolgado, lerPermissoes: permissoesBoas };
+const roomySpace = async () => ({ ok: true, free: 50 * 1024 ** 3, total: 100 * 1024 ** 3 });
+const goodPermissions = async () => ({ exists: true, readable: true, writable: true });
+const baseOptions = { readFreeSpace: roomySpace, readPermissions: goodPermissions };
 
 test('uma instalação saudável não impede nada', async () => {
-  const resultado = await preflight(instalacaoSaudavel, opcoesBase);
-  assert.equal(resultado.nivel, 'ok', JSON.stringify(resultado.checks.filter((c: { nivel: string }) => c.nivel !== 'ok')));
+  const result = await preflight(healthyInstallation, baseOptions);
+  assert.equal(result.level, 'ok', JSON.stringify(result.checks.filter((c: { level: string }) => c.level !== 'ok')));
 });
 
 test('sem mount em /data, o preflight FALHA — não segue sem backup', async () => {
   // É exatamente o caso em que o guia antigo seguia adiante. Um backup que não
   // acontece só avisa na hora de restaurar.
-  const semDados = { ...instalacaoSaudavel, servicos: { ...instalacaoSaudavel.servicos, 'tumacord-server': { ...instalacaoSaudavel.servicos['tumacord-server'], mounts: [] } } };
-  const resultado = await preflight(semDados, opcoesBase);
-  assert.equal(resultado.nivel, 'falha');
-  const check = resultado.checks.find((item: { titulo: string }) => item.titulo === 'Volume de dados');
-  assert.equal(check.nivel, 'falha');
-  assert.match(check.comoResolver, /só avisa na hora de restaurar/);
+  const withoutData = { ...healthyInstallation, services: { ...healthyInstallation.services, 'tumacord-server': { ...healthyInstallation.services['tumacord-server'], mounts: [] } } };
+  const result = await preflight(withoutData, baseOptions);
+  assert.equal(result.level, 'fail');
+  const check = result.checks.find((item: { title: string }) => item.title === 'Volume de dados');
+  assert.equal(check.level, 'fail');
+  assert.match(check.howToFix, /só avisa na hora de restaurar/);
 });
 
 test('dois mounts em /data param a operação', async () => {
-  const ambiguo = {
-    ...instalacaoSaudavel,
-    servicos: {
-      ...instalacaoSaudavel.servicos,
+  const ambiguous = {
+    ...healthyInstallation,
+    services: {
+      ...healthyInstallation.services,
       'tumacord-server': {
-        ...instalacaoSaudavel.servicos['tumacord-server'],
+        ...healthyInstallation.services['tumacord-server'],
         mounts: [
-          { tipo: 'volume', nome: 'a', origem: '/a', destino: '/data', escrita: true },
-          { tipo: 'bind', nome: '', origem: '/b', destino: '/data', escrita: true },
+          { kind: 'volume', name: 'a', source: '/a', destination: '/data', writable: true },
+          { kind: 'bind', name: '', source: '/b', destination: '/data', writable: true },
         ],
       },
     },
   };
-  const resultado = await preflight(ambiguo, opcoesBase);
-  assert.equal(resultado.nivel, 'falha');
-  assert.match(resultado.checks.find((c: { titulo: string }) => c.titulo === 'Volume de dados').comoResolver, /ambígua/);
+  const result = await preflight(ambiguous, baseOptions);
+  assert.equal(result.level, 'fail');
+  assert.match(result.checks.find((c: { title: string }) => c.title === 'Volume de dados').howToFix, /ambígua/);
 });
 
-test('dados montados somente para leitura é falha', async () => {
-  const somenteLeitura = {
-    ...instalacaoSaudavel,
-    servicos: { ...instalacaoSaudavel.servicos, 'tumacord-server': { ...instalacaoSaudavel.servicos['tumacord-server'], mounts: [{ tipo: 'volume', nome: 'x', origem: '/x', destino: '/data', escrita: false }] } },
+test('data montados somente para leitura é falha', async () => {
+  const readOnly = {
+    ...healthyInstallation,
+    services: { ...healthyInstallation.services, 'tumacord-server': { ...healthyInstallation.services['tumacord-server'], mounts: [{ kind: 'volume', name: 'x', source: '/x', destination: '/data', writable: false }] } },
   };
-  assert.equal((await preflight(somenteLeitura, opcoesBase)).nivel, 'falha');
+  assert.equal((await preflight(readOnly, baseOptions)).level, 'fail');
 });
 
 test('disco sem espaço para o backup impede aplicar', async () => {
   // Aplicar sem espaço para o backup é aplicar sem backup.
-  const apertado = { ...opcoesBase, lerEspaco: async () => ({ ok: true, livre: 100 * 1024 * 1024, total: 20 * 1024 ** 3 }) };
-  const resultado = await preflight(instalacaoSaudavel, apertado);
-  assert.equal(resultado.nivel, 'falha');
-  const check = resultado.checks.find((item: { titulo: string }) => item.titulo === 'Espaço em disco');
-  assert.match(check.comoResolver, /backup/);
+  const tight = { ...baseOptions, readFreeSpace: async () => ({ ok: true, free: 100 * 1024 * 1024, total: 20 * 1024 ** 3 }) };
+  const result = await preflight(healthyInstallation, tight);
+  assert.equal(result.level, 'fail');
+  const check = result.checks.find((item: { title: string }) => item.title === 'Espaço em disco');
+  assert.match(check.howToFix, /backup/);
 });
 
 test('não conseguir medir o espaço vira aviso, e não "está tudo bem"', async () => {
-  const cego = { ...opcoesBase, lerEspaco: async () => ({ ok: false, erro: 'permissão negada' }) };
-  const resultado = await preflight(instalacaoSaudavel, cego);
-  const check = resultado.checks.find((item: { titulo: string }) => item.titulo === 'Espaço em disco');
-  assert.equal(check.nivel, 'aviso');
-  assert.match(check.detalhe, /permissão negada/);
+  const blind = { ...baseOptions, readFreeSpace: async () => ({ ok: false, error: 'permissão negada' }) };
+  const result = await preflight(healthyInstallation, blind);
+  const check = result.checks.find((item: { title: string }) => item.title === 'Espaço em disco');
+  assert.equal(check.level, 'warn');
+  assert.match(check.detail, /permissão negada/);
 });
 
 test('a porta de administração publicada para fora é falha', async () => {
-  const exposto = {
-    ...instalacaoSaudavel,
-    servicos: {
-      ...instalacaoSaudavel.servicos,
-      'tumacord-atualizacoes': { ...instalacaoSaudavel.servicos['tumacord-atualizacoes'], portas: [{ interna: '4301/tcp', host: '0.0.0.0:4301' }] },
+  const exposed = {
+    ...healthyInstallation,
+    services: {
+      ...healthyInstallation.services,
+      'tumacord-updates': { ...healthyInstallation.services['tumacord-updates'], ports: [{ inside: '4301/tcp', host: '0.0.0.0:4301' }] },
     },
   };
-  const resultado = await preflight(exposto, opcoesBase);
-  assert.equal(resultado.nivel, 'falha');
-  assert.match(resultado.checks.find((c: { titulo: string }) => c.titulo === 'Porta de administração').comoResolver, /laço local/);
+  const result = await preflight(exposed, baseOptions);
+  assert.equal(result.level, 'fail');
+  assert.match(result.checks.find((c: { title: string }) => c.title === 'Porta de administração').howToFix, /laço local/);
 });
 
 test('variável obrigatória ausente é falha, e o valor continua fora da saída', async () => {
-  const semChave = {
-    ...instalacaoSaudavel,
-    servicos: { ...instalacaoSaudavel.servicos, 'tumacord-server': { ...instalacaoSaudavel.servicos['tumacord-server'], variaveis: ['DATA_DIR'] } },
+  const withoutKey = {
+    ...healthyInstallation,
+    services: { ...healthyInstallation.services, 'tumacord-server': { ...healthyInstallation.services['tumacord-server'], variables: ['DATA_DIR'] } },
   };
-  const resultado = await preflight(semChave, opcoesBase);
-  assert.equal(resultado.nivel, 'falha');
-  const check = resultado.checks.find((item: { titulo: string }) => item.titulo === 'Configuração');
-  assert.match(check.detalhe, /SERVER_ACCESS_KEY/, 'o nome que falta é dito');
+  const result = await preflight(withoutKey, baseOptions);
+  assert.equal(result.level, 'fail');
+  const check = result.checks.find((item: { title: string }) => item.title === 'Configuração');
+  assert.match(check.detail, /SERVER_ACCESS_KEY/, 'o name que falta é dito');
 });
 
 test('o serviço de atualizações ausente é aviso, não falha', async () => {
   // Ele ainda não existe em toda instalação, e o caminho manual continua valendo.
-  const semServico = { ...instalacaoSaudavel, servicos: { 'tumacord-server': instalacaoSaudavel.servicos['tumacord-server'] } };
-  const resultado = await preflight(semServico, opcoesBase);
-  assert.equal(resultado.nivel, 'aviso');
-  assert.match(resultado.checks.find((c: { titulo: string }) => c.titulo === 'Serviço de atualizações').comoResolver, /ponte manual/);
+  const withoutService = { ...healthyInstallation, services: { 'tumacord-server': healthyInstallation.services['tumacord-server'] } };
+  const result = await preflight(withoutService, baseOptions);
+  assert.equal(result.level, 'warn');
+  assert.match(result.checks.find((c: { title: string }) => c.title === 'Serviço de atualizações').howToFix, /ponte manual/);
 });
 
 test('cada falha traz o que resolver', async () => {
-  const ruim = { ...instalacaoSaudavel, servicos: { ...instalacaoSaudavel.servicos, 'tumacord-server': { ...instalacaoSaudavel.servicos['tumacord-server'], mounts: [], variaveis: [] } } };
-  const resultado = await preflight(ruim, opcoesBase);
-  for (const check of resultado.checks.filter((item: { nivel: string }) => item.nivel === 'falha')) {
-    assert.ok(check.comoResolver.length > 10, `"${check.titulo}" falha sem dizer o que fazer`);
+  const broken = { ...healthyInstallation, services: { ...healthyInstallation.services, 'tumacord-server': { ...healthyInstallation.services['tumacord-server'], mounts: [], variables: [] } } };
+  const result = await preflight(broken, baseOptions);
+  for (const check of result.checks.filter((item: { level: string }) => item.level === 'fail')) {
+    assert.ok(check.howToFix.length > 10, `"${check.title}" falha sem dizer o que fazer`);
   }
 });
 
 test('o pior nível é o que decide se a operação segue', () => {
-  assert.equal(piorNivel([{ nivel: 'ok' }, { nivel: 'aviso' }]), 'aviso');
-  assert.equal(piorNivel([{ nivel: 'ok' }, { nivel: 'falha' }, { nivel: 'aviso' }]), 'falha');
-  assert.equal(piorNivel([{ nivel: 'ok' }]), 'ok');
-  assert.equal(piorNivel([]), 'ok');
+  assert.equal(worstLevel([{ level: 'ok' }, { level: 'warn' }]), 'warn');
+  assert.equal(worstLevel([{ level: 'ok' }, { level: 'fail' }, { level: 'warn' }]), 'fail');
+  assert.equal(worstLevel([{ level: 'ok' }]), 'ok');
+  assert.equal(worstLevel([]), 'ok');
 });
 
-test('portas ocupadas são detectadas, e o comando para descobrir quem as usa é dito', async () => {
-  const resultado = await preflightPortas([4600, 4300], async (porta: number) => porta !== 4600);
-  assert.equal(resultado.nivel, 'falha');
-  const ocupada = resultado.checks.find((item: { titulo: string }) => item.titulo === 'Porta 4600');
-  assert.equal(ocupada.nivel, 'falha');
-  assert.match(ocupada.comoResolver, /ss -ltnp/);
+test('ports ocupadas são detectadas, e o command para descobrir quem as usa é dito', async () => {
+  const result = await preflightPorts([4600, 4300], async (porta: number) => porta !== 4600);
+  assert.equal(result.level, 'fail');
+  const busy = result.checks.find((item: { title: string }) => item.title === 'Porta 4600');
+  assert.equal(busy.level, 'fail');
+  assert.match(busy.howToFix, /ss -ltnp/);
 });
 
 // ── A interface do comando ─────────────────────────────────────────────────
 
-test('a ajuda cita os guias que existem, e os comandos que ela promete', () => {
-  for (const comando of ['doctor', 'instalacao', 'releases importar', 'releases publicar', 'devices convidar', 'devices revogar', 'backup', 'restore']) {
-    assert.ok(AJUDA.includes(comando), `\`${comando}\` não aparece na ajuda`);
+test('a ajuda cita os guides que existem, e os comandos que ela promete', () => {
+  for (const command of ['doctor', 'install show', 'releases import', 'releases publish', 'devices enroll', 'devices revoke', 'backup', 'restore']) {
+    assert.ok(HELP.includes(command), `\`${command}\` não aparece na ajuda`);
   }
   // Cada guia citado precisa existir de verdade — um link para nada é pior do
   // que nenhum link. Isto é o que impede a ajuda de prometer documentação que
   // ninguém escreveu, que é a reclamação que originou a revisão.
-  const guias = [...new Set([...AJUDA.matchAll(/docs\/[a-z0-9-]+\.md/g)].map((achado) => achado[0]))];
-  assert.ok(guias.length >= 4, 'a ajuda precisa apontar para onde o procedimento está');
-  for (const guia of guias) {
-    assert.ok(existsSync(new URL(`../${guia}`, import.meta.url)), `${guia} é citado no --help e não existe`);
+  const guides = [...new Set([...HELP.matchAll(/docs\/[a-z0-9-]+\.md/g)].map((found) => found[0]))];
+  assert.ok(guides.length >= 4, 'a ajuda precisa apontar para onde o procedimento está');
+  for (const guide of guides) {
+    assert.ok(existsSync(new URL(`../${guide}`, import.meta.url)), `${guide} é citado no --help e não existe`);
   }
 });
 
-test('cada guia citado nas ajudas por comando também existe', () => {
-  for (const [comando, texto] of Object.entries(AJUDA_COMANDO as Record<string, string>)) {
-    for (const guia of [...texto.matchAll(/docs\/[a-z0-9-]+\.md/g)].map((achado) => achado[0])) {
-      assert.ok(existsSync(new URL(`../${guia}`, import.meta.url)), `${guia}, citado em \`${comando} --help\`, não existe`);
+test('cada guide citado nas ajudas por command também existe', () => {
+  for (const [command, text] of Object.entries(COMMAND_HELP as Record<string, string>)) {
+    for (const guide of [...text.matchAll(/docs\/[a-z0-9-]+\.md/g)].map((found) => found[0])) {
+      assert.ok(existsSync(new URL(`../${guide}`, import.meta.url)), `${guide}, citado em \`${command} --help\`, não existe`);
     }
   }
 });
 
 test('o que ainda não está implementado é dito, e não finge funcionar', () => {
   // Um comando que responde "ok" sem fazer nada é pior do que um que recusa.
-  for (const [comando, descricao] of Object.entries(NAO_IMPLEMENTADO as Record<string, string>)) {
-    assert.ok(descricao.length > 5, comando);
-    assert.ok(AJUDA.includes(comando.split(' ')[0]), `${comando} sumiu da ajuda`);
+  for (const [command, description] of Object.entries(NOT_IMPLEMENTED as Record<string, string>)) {
+    assert.ok(description.length > 5, command);
+    assert.ok(HELP.includes(command.split(' ')[0]), `${command} sumiu da ajuda`);
   }
 });
 
-test('cada comando com ajuda própria explica o que NÃO faz também', () => {
-  assert.match(AJUDA_COMANDO.doctor, /Não muda nada/);
-  assert.match(AJUDA_COMANDO.doctor, /não imprime valor/i);
-  assert.match(AJUDA_COMANDO.backup, /para/i);
-  assert.match(AJUDA_COMANDO.restore, /destino separado/);
-  assert.match(AJUDA_COMANDO.restore, /perda/i);
+test('cada command com ajuda própria explica o que NÃO faz também', () => {
+  assert.match(COMMAND_HELP.doctor, /Não muda nada/);
+  assert.match(COMMAND_HELP.doctor, /não imprime valor/i);
+  assert.match(COMMAND_HELP.backup, /para/i);
+  assert.match(COMMAND_HELP.restore, /destino separado/);
+  assert.match(COMMAND_HELP.restore, /perda/i);
 });
 
 test('as opções são lidas sem shell e sem concatenação', () => {
-  assert.deepEqual(parseArgs(['doctor', '--projeto', 'homologacao', '--json']), {
-    posicionais: ['doctor'], opcoes: { projeto: 'homologacao', json: true },
+  assert.deepEqual(parseArgs(['doctor', '--project', 'homologacao', '--json']), {
+    positionals: ['doctor'], options: { project: 'homologacao', json: true },
   });
-  assert.deepEqual(parseArgs(['devices', 'revogar', 'dev-1', '--motivo', 'máquina perdida']), {
-    posicionais: ['devices', 'revogar', 'dev-1'], opcoes: { motivo: 'máquina perdida' },
+  assert.deepEqual(parseArgs(['devices', 'revoke', 'dev-1', '--reason', 'máquina perdida']), {
+    positionals: ['devices', 'revoke', 'dev-1'], options: { reason: 'máquina perdida' },
   });
   // Uma opção sem valor não engole a próxima opção.
-  assert.deepEqual(parseArgs(['doctor', '--json', '--projeto', 'x']).opcoes, { json: true, projeto: 'x' });
+  assert.deepEqual(parseArgs(['doctor', '--json', '--project', 'x']).options, { json: true, project: 'x' });
 });
 
 test('o endereço do serviço precisa ser uma URL, e o padrão é o laço local', () => {
-  assert.equal(urlDoServico({}), 'http://127.0.0.1:4301');
-  assert.equal(urlDoServico({ servico: 'http://127.0.0.1:9999' }), 'http://127.0.0.1:9999');
+  assert.equal(serviceUrl({}), 'http://127.0.0.1:4301');
+  assert.equal(serviceUrl({ service: 'http://127.0.0.1:9999' }), 'http://127.0.0.1:9999');
   // Nada de caminho, comando ou esquema estranho entrando por aqui.
-  assert.throws(() => urlDoServico({ servico: 'file:///etc/passwd' }), /URL http/);
-  assert.throws(() => urlDoServico({ servico: '; rm -rf /' }), /URL http/);
-  assert.throws(() => urlDoServico({ servico: 'não é url' }), /URL http/);
+  assert.throws(() => serviceUrl({ service: 'file:///etc/passwd' }), /URL http/);
+  assert.throws(() => serviceUrl({ service: '; rm -rf /' }), /URL http/);
+  assert.throws(() => serviceUrl({ service: 'não é url' }), /URL http/);
 });

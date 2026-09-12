@@ -43,7 +43,7 @@ vezes — no aplicativo, no servidor e em dois scripts — e as cópias divergir
   `0.8.10`, e esta numeração já passou por `0.7.10` e `0.7.11`;
 - a implementação é **uma só**: [`shared/version.ts`](../shared/version.ts).
   A adaptação CJS que o Electron precisa é gerada por
-  `scripts/gerar-versao.mjs`, e `tests/version.test.ts` falha se as duas
+  `scripts/generate-version.mjs`, e `tests/version.test.ts` falha se as duas
   divergirem.
 
 > Uma biblioteca de atualização que ordene por SemVer precisa de adaptação
@@ -114,7 +114,7 @@ porque ele lê `parseInt("9-1")` como 9 e preenche o quarto campo com o número
 de build, que é zero por padrão. Duas versões diferentes com o mesmo número
 fazem o Windows tratar a atualização como reinstalação da mesma coisa.
 
-O `scripts/gerar-versao.mjs` deriva `build.buildNumber` e `build.buildVersion`
+O `scripts/generate-version.mjs` deriva `build.buildNumber` e `build.buildVersion`
 do `package.json` a partir da versão do produto. `tests/version.test.ts`
 verifica isso **contra o electron-builder de verdade**, e não contra uma
 suposição sobre o que ele faz.
@@ -178,7 +178,7 @@ consegue forjar.
 | aplicativo (Electron) | `desktop/version.generated.cjs`, gerado da fonte |
 | servidor dedicado | `shared/serverUpdate.ts`, que importa a fonte |
 | serviço de distribuição | `shared/distribution.ts`, que importa a fonte |
-| empacotamento Windows | `scripts/gerar-versao.mjs` → `package.json` |
+| empacotamento Windows | `scripts/generate-version.mjs` → `package.json` |
 | componente nativo | `native/windows/audio-helper/build.ps1` |
 | CI | `desktop/version.generated.cjs`, no passo de publicar |
 

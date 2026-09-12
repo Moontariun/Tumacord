@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { Server } from 'node:http';
-import { freePort } from './freePort';
+import type { AddressInfo } from 'node:net';
 import { CONTRACT_VERSION, type Artifact, type Catalog, type ReleaseManifest, type TrustedKey } from '../shared/distribution';
 import { generateSigningKey, signDocument } from '../shared/distributionCrypto';
 
@@ -24,6 +24,21 @@ interface Servico {
   pacotes: string;
 }
 
+/**
+ * Espera o servidor subir — e **falha** quando ele não sobe.
+ *
+ * Ouvir só `listening` deixa um erro de `listen` sem desfecho: a promessa
+ * nunca resolve, o teste nunca termina, e a suíte inteira fica pendurada sem
+ * dizer por quê. Foi o que aconteceu quando as portas eram escolhidas antes
+ * do `listen`: sob concorrência, outro teste ocupava a porta nesse meio.
+ */
+function escutando(servidor: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    servidor.once('listening', resolve);
+    servidor.once('error', reject);
+  });
+}
+
 async function subir(): Promise<Servico> {
   const raiz = await mkdtemp(path.join(tmpdir(), 'tumacord-updates-'));
   const estado = path.join(raiz, 'estado');
@@ -38,20 +53,18 @@ async function subir(): Promise<Servico> {
 
   // Import dinâmico para o módulo ler o ambiente já preparado. Cache-buster
   // para cada teste ter o próprio estado.
-  const modulo = await import(`../services/atualizacoes/src/index.js?t=${Date.now()}${Math.random()}`) as typeof import('../services/atualizacoes/src/index');
+  const modulo = await import(`../services/updates/src/index.js?t=${Date.now()}${Math.random()}`) as typeof import('../services/updates/src/index');
   await modulo.store.load();
 
-  const porta = await freePort();
-  const portaAdmin = await freePort();
   const servidores: Server[] = [
-    modulo.app.listen(porta, '127.0.0.1'),
-    modulo.admin.listen(portaAdmin, '127.0.0.1'),
+    modulo.app.listen(0, '127.0.0.1'),
+    modulo.admin.listen(0, '127.0.0.1'),
   ];
-  await Promise.all(servidores.map((servidor) => new Promise<void>((resolve) => servidor.once('listening', resolve))));
+  await Promise.all(servidores.map((servidor) => escutando(servidor)));
 
   return {
-    url: `http://127.0.0.1:${porta}`,
-    adminUrl: `http://127.0.0.1:${portaAdmin}`,
+    url: `http://127.0.0.1:${(servidores[0].address() as AddressInfo).port}`,
+    adminUrl: `http://127.0.0.1:${(servidores[1].address() as AddressInfo).port}`,
     pacotes,
     encerrar: async () => {
       await Promise.all(servidores.map((servidor) => new Promise<void>((resolve) => servidor.close(() => resolve()))));
@@ -103,12 +116,12 @@ async function preparar(servico: Servico): Promise<{ token: string }> {
   await writeFile(path.join(servico.pacotes, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), CONTEUDO);
 
   const json = { 'content-type': 'application/json' };
-  await fetch(`${servico.adminUrl}/admin/chaves`, { method: 'POST', headers: json, body: JSON.stringify({ keys: confiaveis }) });
-  await fetch(`${servico.adminUrl}/admin/manifesto`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(manifesto(), [chaveManifesto])) });
-  await fetch(`${servico.adminUrl}/admin/catalogo`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(catalogo(), [chaveCatalogo])) });
+  await fetch(`${servico.adminUrl}/admin/keys`, { method: 'POST', headers: json, body: JSON.stringify({ keys: confiaveis }) });
+  await fetch(`${servico.adminUrl}/admin/manifest`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(manifesto(), [chaveManifesto])) });
+  await fetch(`${servico.adminUrl}/admin/catalog`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(catalogo(), [chaveCatalogo])) });
 
-  const convite = await (await fetch(`${servico.adminUrl}/admin/convites`, { method: 'POST', headers: json, body: JSON.stringify({ rotulo: 'Linux do Renan' }) })).json() as { convite: string };
-  const inscrito = await (await fetch(`${servico.url}/v1/dispositivos/inscrever`, { method: 'POST', headers: json, body: JSON.stringify({ convite: convite.convite, rotulo: 'Linux do Renan' }) })).json() as { token: string };
+  const convite = await (await fetch(`${servico.adminUrl}/admin/invites`, { method: 'POST', headers: json, body: JSON.stringify({ label: 'Linux do Renan' }) })).json() as { invite: string };
+  const inscrito = await (await fetch(`${servico.url}/v1/devices/enroll`, { method: 'POST', headers: json, body: JSON.stringify({ invite: convite.invite, label: 'Linux do Renan' }) })).json() as { token: string };
   return { token: inscrito.token };
 }
 
@@ -124,7 +137,7 @@ test('nenhuma rota de conteúdo responde sem credencial', { timeout: 20_000 }, a
 
   // Uma função de autorização perfeita que ninguém chamou numa rota é uma rota
   // aberta. Cada uma é perguntada aqui.
-  for (const caminho of ['/v1/catalogo', '/v1/releases/rel-0991/manifesto', '/v1/artefatos/rel-0991/linux-x64-tar']) {
+  for (const caminho of ['/v1/catalog', '/v1/releases/rel-0991/manifest', '/v1/artifacts/rel-0991/linux-x64-tar']) {
     const resposta = await fetch(`${servico.url}${caminho}`);
     assert.equal(resposta.status, 401, caminho);
     const corpo = await resposta.json() as { error: string; reason: string };
@@ -137,7 +150,7 @@ test('HEAD e Range passam pela mesma autorização do GET', { timeout: 20_000 },
   const servico = await subir();
   context.after(() => servico.encerrar());
   await preparar(servico);
-  const alvo = `${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`;
+  const alvo = `${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
   // Um HEAD anônimo revelaria tamanho e existência; um Range anônimo seria o
   // download inteiro em pedaços.
@@ -155,8 +168,8 @@ test('não há listagem de diretório nem caminho estático para os pacotes', { 
   for (const caminho of [
     '/pacotes/releases/0.9.9-1/tumacord-0.9.9-1.tar.gz',
     '/releases/0.9.9-1/tumacord-0.9.9-1.tar.gz',
-    '/v1/artefatos/',
-    '/v1/artefatos',
+    '/v1/artifacts/',
+    '/v1/artifacts',
     '/',
   ]) {
     const resposta = await baixar(`${servico.url}${caminho}`, token);
@@ -171,7 +184,7 @@ test('o pacote é entregue inteiro e confere com o resumo do manifesto', { timeo
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
 
-  const resposta = await baixar(`${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`, token);
+  const resposta = await baixar(`${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`, token);
   assert.equal(resposta.status, 200);
   assert.equal(resposta.headers.get('accept-ranges'), 'bytes');
   assert.equal(resposta.headers.get('cache-control'), 'private, no-store');
@@ -185,7 +198,7 @@ test('a retomada continua de onde parou, e os pedaços remontam o arquivo', { ti
   const servico = await subir();
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
-  const alvo = `${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`;
+  const alvo = `${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
   const cabeca = await baixar(alvo, token, { method: 'HEAD' });
   assert.equal(cabeca.status, 200);
@@ -208,7 +221,7 @@ test('uma faixa impossível devolve 416, e não o arquivo inteiro', { timeout: 2
   const servico = await subir();
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
-  const resposta = await baixar(`${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`, token, { headers: { range: 'bytes=99999999-' } });
+  const resposta = await baixar(`${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`, token, { headers: { range: 'bytes=99999999-' } });
   assert.equal(resposta.status, 416);
   assert.equal((await resposta.arrayBuffer()).byteLength, 0);
 });
@@ -219,24 +232,24 @@ test('uma credencial revogada para de baixar na hora', { timeout: 20_000 }, asyn
   const servico = await subir();
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
-  const alvo = `${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`;
+  const alvo = `${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
   assert.equal((await baixar(alvo, token)).status, 200);
 
-  const lista = await (await fetch(`${servico.adminUrl}/admin/dispositivos`)).json() as { devices: { deviceId: string }[] };
+  const lista = await (await fetch(`${servico.adminUrl}/admin/devices`)).json() as { devices: { deviceId: string }[] };
   assert.equal(lista.devices.length, 1);
   // E a lista do dono não carrega hash nenhum.
   assert.equal(JSON.stringify(lista).includes('tokenHash'), false);
 
-  await fetch(`${servico.adminUrl}/admin/dispositivos/${lista.devices[0].deviceId}/revogar`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ motivo: 'máquina perdida' }),
+  await fetch(`${servico.adminUrl}/admin/devices/${lista.devices[0].deviceId}/revoke`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'máquina perdida' }),
   });
 
   const depois = await baixar(alvo, token);
   assert.equal(depois.status, 403);
   assert.equal((await depois.json() as { reason: string }).reason, 'revoked');
   // O catálogo também para: a revogação não é só do download.
-  assert.equal((await baixar(`${servico.url}/v1/catalogo`, token)).status, 403);
+  assert.equal((await baixar(`${servico.url}/v1/catalog`, token)).status, 403);
 });
 
 test('renovar troca o token, e o antigo deixa de valer', { timeout: 20_000 }, async (context) => {
@@ -244,10 +257,10 @@ test('renovar troca o token, e o antigo deixa de valer', { timeout: 20_000 }, as
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
 
-  const renovado = await (await baixar(`${servico.url}/v1/dispositivos/renovar`, token, { method: 'POST' })).json() as { token: string };
+  const renovado = await (await baixar(`${servico.url}/v1/devices/renew`, token, { method: 'POST' })).json() as { token: string };
   assert.notEqual(renovado.token, token);
-  assert.equal((await baixar(`${servico.url}/v1/catalogo`, renovado.token)).status, 200);
-  assert.equal((await baixar(`${servico.url}/v1/catalogo`, token)).status, 401, 'o token trocado não vale mais');
+  assert.equal((await baixar(`${servico.url}/v1/catalog`, renovado.token)).status, 200);
+  assert.equal((await baixar(`${servico.url}/v1/catalog`, token)).status, 401, 'o token trocado não vale mais');
 });
 
 // ── Uma versão retirada não é baixada de novo ──────────────────────────────
@@ -256,7 +269,7 @@ test('retirar uma versão impede o download, inclusive de quem já tinha a URL',
   const servico = await subir();
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
-  const alvo = `${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`;
+  const alvo = `${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`;
   assert.equal((await baixar(alvo, token)).status, 200);
 
   const retirado: Catalog = {
@@ -266,7 +279,7 @@ test('retirar uma versão impede o download, inclusive de quem já tinha a URL',
       test: { entries: [] },
     },
   };
-  const publicado = await fetch(`${servico.adminUrl}/admin/catalogo`, {
+  const publicado = await fetch(`${servico.adminUrl}/admin/catalog`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(retirado, [chaveCatalogo])),
   });
   assert.equal(publicado.status, 201);
@@ -284,7 +297,7 @@ test('um manifesto sem assinatura confiável não entra', { timeout: 20_000 }, a
   await preparar(servico);
   const intrusa = generateSigningKey();
 
-  const resposta = await fetch(`${servico.adminUrl}/admin/manifesto`, {
+  const resposta = await fetch(`${servico.adminUrl}/admin/manifest`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(signDocument({ ...manifesto(), releaseId: 'rel-falso' }, [intrusa])),
   });
@@ -300,7 +313,7 @@ test('um catálogo repetido não volta no tempo', { timeout: 20_000 }, async (co
   context.after(() => servico.encerrar());
   await preparar(servico);
 
-  const antigo = await fetch(`${servico.adminUrl}/admin/catalogo`, {
+  const antigo = await fetch(`${servico.adminUrl}/admin/catalog`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(signDocument(catalogo(1), [chaveCatalogo])),
   });
@@ -314,13 +327,13 @@ test('quem assina catálogo não consegue publicar manifesto, e vice-versa', { t
   await preparar(servico);
   const json = { 'content-type': 'application/json' };
 
-  const trocado = await fetch(`${servico.adminUrl}/admin/manifesto`, {
+  const trocado = await fetch(`${servico.adminUrl}/admin/manifest`, {
     method: 'POST', headers: json, body: JSON.stringify(signDocument(manifesto(), [chaveCatalogo])),
   });
   assert.equal(trocado.status, 400);
   assert.equal((await trocado.json() as { reason: string }).reason, 'key-wrong-scope');
 
-  const inverso = await fetch(`${servico.adminUrl}/admin/catalogo`, {
+  const inverso = await fetch(`${servico.adminUrl}/admin/catalog`, {
     method: 'POST', headers: json, body: JSON.stringify(signDocument(catalogo(2), [chaveManifesto])),
   });
   assert.equal(inverso.status, 400);
@@ -334,13 +347,13 @@ test('nenhuma resposta devolve token, convite ou hash', { timeout: 20_000 }, asy
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
 
-  for (const caminho of ['/v1/catalogo', '/v1/releases/rel-0991/manifesto', '/v1/chaves', '/v1/saude']) {
+  for (const caminho of ['/v1/catalog', '/v1/releases/rel-0991/manifest', '/v1/keys', '/v1/health']) {
     const texto = await (await baixar(`${servico.url}${caminho}`, token)).text();
     assert.equal(texto.includes(token), false, `${caminho} devolveu o token`);
     assert.equal(/tokenHash/i.test(texto), false, `${caminho} devolveu hash`);
   }
   // E o cabeçalho de download não carrega a credencial de volta.
-  const download = await baixar(`${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`, token, { method: 'HEAD' });
+  const download = await baixar(`${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`, token, { method: 'HEAD' });
   for (const [, valor] of download.headers) assert.equal(String(valor).includes(token), false);
   // Nem há redirect: uma redireção levaria o `Authorization` para outro lugar.
   assert.equal(download.redirected, false);
@@ -351,7 +364,7 @@ test('o método errado é recusado sem abrir o arquivo', { timeout: 20_000 }, as
   const servico = await subir();
   context.after(() => servico.encerrar());
   const { token } = await preparar(servico);
-  const resposta = await baixar(`${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`, token, { method: 'DELETE' });
+  const resposta = await baixar(`${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`, token, { method: 'DELETE' });
   assert.equal(resposta.status, 405);
   assert.equal(resposta.headers.get('allow'), 'GET, HEAD');
 });
@@ -364,7 +377,7 @@ test('o pacote em disco que não confere com o manifesto não é servido', { tim
   // Alguém trocou o arquivo no armazenamento. Servir assim entregaria bytes
   // que ninguém assinou.
   await writeFile(path.join(servico.pacotes, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), Buffer.from('outro conteudo'));
-  const resposta = await baixar(`${servico.url}/v1/artefatos/rel-0991/linux-x64-tar`, token);
+  const resposta = await baixar(`${servico.url}/v1/artifacts/rel-0991/linux-x64-tar`, token);
   assert.equal(resposta.status, 409);
   assert.equal((await resposta.json() as { reason: string }).reason, 'size-mismatch');
 });

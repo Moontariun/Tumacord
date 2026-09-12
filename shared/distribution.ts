@@ -210,11 +210,11 @@ export function canonicalize(value: unknown): string {
   if (typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item === undefined ? null : item)).join(',')}]`;
   if (typeof value === 'object') {
-    const entradas = Object.entries(value as Record<string, unknown>)
+    const fields = Object.entries(value as Record<string, unknown>)
       .filter(([, item]) => item !== undefined)
       // Ordem de ponto de código, que é a que `sort()` dá para strings.
-      .sort(([esquerda], [direita]) => (esquerda < direita ? -1 : esquerda > direita ? 1 : 0));
-    return `{${entradas.map(([chave, item]) => `${JSON.stringify(chave)}:${canonicalize(item)}`).join(',')}}`;
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${fields.map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`).join(',')}}`;
   }
   throw new Error(`tipo sem forma canônica: ${typeof value}`);
 }
@@ -264,27 +264,27 @@ export function verifySigned<T extends { contract?: number }>(
   now: number = Date.now(),
 ): VerifyResult {
   if (!document || typeof document !== 'object' || !document.payload) return { ok: false, failure: 'no-signature' };
-  const contrato = document.payload.contract;
-  if (contrato !== CONTRACT_VERSION) return { ok: false, failure: 'contract-unknown', detail: String(contrato) };
-  const assinaturas = Array.isArray(document.signatures) ? document.signatures : [];
-  if (!assinaturas.length) return { ok: false, failure: 'no-signature' };
+  const contract = document.payload.contract;
+  if (contract !== CONTRACT_VERSION) return { ok: false, failure: 'contract-unknown', detail: String(contract) };
+  const signatures = Array.isArray(document.signatures) ? document.signatures : [];
+  if (!signatures.length) return { ok: false, failure: 'no-signature' };
 
-  const dados = canonicalize(document.payload);
-  let ultimaFalha: VerifyFailure = 'unknown-key';
-  let detalhe = '';
-  for (const assinatura of assinaturas) {
-    const chave = keys.find((candidate) => candidate.keyId === assinatura.keyId);
-    if (!chave) { ultimaFalha = 'unknown-key'; detalhe = assinatura.keyId; continue; }
-    const impedimento = keyUsable(chave, scope, now);
-    if (impedimento) { ultimaFalha = impedimento; detalhe = chave.keyId; continue; }
-    if (assinatura.algorithm !== chave.algorithm) { ultimaFalha = 'bad-signature'; detalhe = assinatura.keyId; continue; }
-    if (verifySignature(chave.publicKey, dados, assinatura.signature, assinatura.algorithm)) {
-      return { ok: true, keyId: chave.keyId };
+  const data = canonicalize(document.payload);
+  let lastFailure: VerifyFailure = 'unknown-key';
+  let detail = '';
+  for (const signature of signatures) {
+    const key = keys.find((candidate) => candidate.keyId === signature.keyId);
+    if (!key) { lastFailure = 'unknown-key'; detail = signature.keyId; continue; }
+    const blocker = keyUsable(key, scope, now);
+    if (blocker) { lastFailure = blocker; detail = key.keyId; continue; }
+    if (signature.algorithm !== key.algorithm) { lastFailure = 'bad-signature'; detail = signature.keyId; continue; }
+    if (verifySignature(key.publicKey, data, signature.signature, signature.algorithm)) {
+      return { ok: true, keyId: key.keyId };
     }
-    ultimaFalha = 'bad-signature';
-    detalhe = assinatura.keyId;
+    lastFailure = 'bad-signature';
+    detail = signature.keyId;
   }
-  return { ok: false, failure: ultimaFalha, detail: detalhe || undefined };
+  return { ok: false, failure: lastFailure, detail: detail || undefined };
 }
 
 // ── Frescor do catálogo ─────────────────────────────────────────────────────
@@ -305,9 +305,9 @@ export function catalogFreshness(catalog: Catalog | null | undefined, acceptedSe
   if (catalog.contract !== CONTRACT_VERSION) return 'malformed';
   if (!Number.isSafeInteger(catalog.sequence) || catalog.sequence < 0) return 'malformed';
   if (catalog.sequence < acceptedSequence) return 'replayed';
-  const expira = Date.parse(catalog.expiresAt ?? '');
-  if (!Number.isFinite(expira)) return 'malformed';
-  if (expira <= now) return 'expired';
+  const expiresAt = Date.parse(catalog.expiresAt ?? '');
+  if (!Number.isFinite(expiresAt)) return 'malformed';
+  if (expiresAt <= now) return 'expired';
   return 'ok';
 }
 
@@ -323,17 +323,17 @@ export function catalogFreshness(catalog: Catalog | null | undefined, acceptedSe
  * máquina de alguém.
  */
 export function selectArtifact(manifest: ReleaseManifest, installKind: InstallKind, arch: Arch): Artifact | null {
-  const candidatos = (manifest?.artifacts ?? []).filter((artifact) => artifact
+  const candidates = (manifest?.artifacts ?? []).filter((artifact) => artifact
     && artifact.installKind === installKind
     && artifact.arch === arch
     && artifactIsWellFormed(artifact));
-  if (candidatos.length !== 1) {
+  if (candidates.length !== 1) {
     // Zero: esta versão não tem pacote para este jeito de instalar, e isso é
     // dito. Dois ou mais: o manifesto é ambíguo, e escolher um deles seria
     // adivinhar — a ambiguidade para a operação em vez de virar sorteio.
     return null;
   }
-  return candidatos[0];
+  return candidates[0];
 }
 
 /** Se um pacote tem tudo o que é preciso para ser baixado com segurança. */
@@ -356,7 +356,7 @@ export function isSafeStoragePath(candidate: unknown): boolean {
   if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return false;
   if (candidate.startsWith('/') || candidate.startsWith('\\')) return false;
   if (candidate.includes('\0') || candidate.includes('\\')) return false;
-  return candidate.split('/').every((segmento) => segmento !== '' && segmento !== '.' && segmento !== '..' && /^[A-Za-z0-9._-]+$/.test(segmento));
+  return candidate.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..' && /^[A-Za-z0-9._-]+$/.test(segment));
 }
 
 // ── Concordância entre manifesto e pacote ───────────────────────────────────
@@ -377,9 +377,9 @@ export function artifactMatches(
 ): MatchFailure | null {
   if (observed.releaseId !== undefined && observed.releaseId !== manifest.releaseId) return 'release-mismatch';
   if (observed.version !== undefined) {
-    const esperada = parseVersion(manifest.version);
-    const vista = parseVersion(observed.version);
-    if (!esperada || !vista || compareVersions(esperada, vista) !== 0) return 'version-mismatch';
+    const expected = parseVersion(manifest.version);
+    const seen = parseVersion(observed.version);
+    if (!expected || !seen || compareVersions(expected, seen) !== 0) return 'version-mismatch';
   }
   if (observed.arch !== undefined && observed.arch !== artifact.arch) return 'arch-mismatch';
   if (observed.format !== undefined && observed.format !== artifact.format) return 'format-mismatch';
@@ -423,31 +423,31 @@ export type Ineligible =
  */
 export function ineligibleReason(input: EligibilityInput): Ineligible | null {
   const { entry, manifest, currentVersion, installKind, arch } = input;
-  const versao = parseVersion(entry.version);
-  if (!versao) return { reason: 'not-published', detail: 'versão fora da convenção do produto' };
+  const version = parseVersion(entry.version);
+  if (!version) return { reason: 'not-published', detail: 'versão fora da convenção do produto' };
   if (entry.state === 'withdrawn') {
     return { reason: 'withdrawn', detail: entry.withdrawn?.reason || 'esta versão foi retirada' };
   }
   if (entry.state !== 'published') return { reason: 'not-published', detail: String(entry.state) };
 
-  const quebrada = input.knownBroken?.get(versao.text);
-  if (quebrada) return { reason: 'known-broken', detail: quebrada };
+  const broken = input.knownBroken?.get(version.text);
+  if (broken) return { reason: 'known-broken', detail: broken };
 
-  if (compareVersions(versao, currentVersion) <= 0) {
+  if (compareVersions(version, currentVersion) <= 0) {
     return { reason: 'not-newer', detail: 'esta versão não é mais nova do que a instalada' };
   }
   if (!manifest) return { reason: 'manifest-missing', detail: 'o manifesto desta versão não veio assinado' };
   if (manifest.releaseId !== entry.releaseId) return { reason: 'manifest-mismatch', detail: 'o manifesto é de outra release' };
-  const doManifesto = parseVersion(manifest.version);
-  if (!doManifesto || compareVersions(doManifesto, versao) !== 0) {
+  const fromManifest = parseVersion(manifest.version);
+  if (!fromManifest || compareVersions(fromManifest, version) !== 0) {
     return { reason: 'manifest-mismatch', detail: 'o manifesto declara outra versão' };
   }
 
-  const minimo = manifest.compatibility?.minUpdaterVersion;
-  if (minimo) {
-    const exigida = parseVersion(minimo);
-    if (exigida && compareVersions(currentVersion, exigida) < 0) {
-      return { reason: 'needs-updater', detail: `esta versão precisa da ${exigida.text} instalada antes` };
+  const minimum = manifest.compatibility?.minUpdaterVersion;
+  if (minimum) {
+    const required = parseVersion(minimum);
+    if (required && compareVersions(currentVersion, required) < 0) {
+      return { reason: 'needs-updater', detail: `esta versão precisa da ${required.text} instalada antes` };
     }
   }
   if (!selectArtifact(manifest, installKind, arch)) {

@@ -57,8 +57,8 @@ export function generateSigningKey(): KeyPair {
 export function verifySignature(publicKeyBase64: string, data: string, signatureBase64: string, algorithm: string = SIGNATURE_ALGORITHM): boolean {
   if (algorithm !== SIGNATURE_ALGORITHM) return false;
   try {
-    const chave = createPublicKey({ key: Buffer.from(publicKeyBase64, 'base64'), format: 'der', type: 'spki' });
-    return verify(null, Buffer.from(data, 'utf8'), chave, Buffer.from(signatureBase64, 'base64'));
+    const key = createPublicKey({ key: Buffer.from(publicKeyBase64, 'base64'), format: 'der', type: 'spki' });
+    return verify(null, Buffer.from(data, 'utf8'), key, Buffer.from(signatureBase64, 'base64'));
   } catch {
     return false;
   }
@@ -66,8 +66,8 @@ export function verifySignature(publicKeyBase64: string, data: string, signature
 
 /** Assina a forma canônica de um payload. */
 export function signPayload(privateKeyBase64: string, payload: unknown): string {
-  const chave = createPrivateKey({ key: Buffer.from(privateKeyBase64, 'base64'), format: 'der', type: 'pkcs8' });
-  return sign(null, Buffer.from(canonicalize(payload), 'utf8'), chave).toString('base64');
+  const key = createPrivateKey({ key: Buffer.from(privateKeyBase64, 'base64'), format: 'der', type: 'pkcs8' });
+  return sign(null, Buffer.from(canonicalize(payload), 'utf8'), key).toString('base64');
 }
 
 /**
@@ -82,10 +82,10 @@ export function signDocument<T>(payload: T, keys: readonly Pick<KeyPair, 'keyId'
   if (!keys.length) throw new Error('um documento sem assinatura não é publicável');
   return {
     payload,
-    signatures: keys.map((chave) => ({
-      keyId: chave.keyId,
-      algorithm: chave.algorithm || SIGNATURE_ALGORITHM,
-      signature: signPayload(chave.privateKey, payload),
+    signatures: keys.map((key) => ({
+      keyId: key.keyId,
+      algorithm: key.algorithm || SIGNATURE_ALGORITHM,
+      signature: signPayload(key.privateKey, payload),
     })),
   };
 }

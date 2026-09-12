@@ -119,7 +119,7 @@ test -n "$TUMACORD_TOKEN" || { echo "não consegui entrar como dono" >&2; exit 1
 **b) Pausar a escrita e descarregar o que está em memória.**
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:4600/api/admin/pausar-escrita \
+curl -fsS -X POST http://127.0.0.1:4600/api/admin/pause-writes \
   -H "authorization: Bearer $TUMACORD_TOKEN" -H 'content-type: application/json' -d '{}' \
   || { echo "NÃO consegui pausar a escrita. Backup CANCELADO — um tar do volume vivo não prova consistência." >&2; exit 1; }
 ```
@@ -153,7 +153,7 @@ docker run --rm \
 **d) Liberar a escrita** (ou subir o contêiner, se você usou a alternativa):
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:4600/api/admin/liberar-escrita \
+curl -fsS -X POST http://127.0.0.1:4600/api/admin/resume-writes \
   -H "authorization: Bearer $TUMACORD_TOKEN"
 # ou, se parou o contêiner:
 # docker compose -p "$TUMACORD_PROJETO" start tumacord-server

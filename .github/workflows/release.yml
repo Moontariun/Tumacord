@@ -56,7 +56,7 @@ jobs:
           # são geradas. Se alguém editar a saída em vez da fonte, ou publicar
           # sem regerar, a divergência aparece aqui — e não na máquina de quem
           # instalou.
-          node scripts/gerar-versao.mjs --check
+          node scripts/generate-version.mjs --check
           npm run typecheck
           # O log completo de uma execução exige login no GitHub, e uma versão
           # reprovada sem motivo visível custa uma ida ao navegador toda vez.

@@ -995,7 +995,7 @@ const updateBucket = new TokenBucket(3, 1);
  * A call **não** é interrompida: voz e vídeo não passam pelo armazenamento. O
  * que fica em espera são o envio de mensagem e de anexo, por segundos.
  */
-app.post('/api/admin/pausar-escrita', async (request, response) => {
+app.post('/api/admin/pause-writes', async (request, response) => {
   const context = requireOwner(request, response);
   if (!context) return;
   const parsed = z.object({ timeoutMs: z.number().int().min(1_000).max(30 * 60_000).optional() }).safeParse(request.body ?? {});
@@ -1012,7 +1012,7 @@ app.post('/api/admin/pausar-escrita', async (request, response) => {
 });
 
 /** Liberar as gravações que esperavam. */
-app.post('/api/admin/liberar-escrita', async (request, response) => {
+app.post('/api/admin/resume-writes', async (request, response) => {
   const context = requireOwner(request, response);
   if (!context) return;
   store.resumeWrites();

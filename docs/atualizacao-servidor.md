@@ -120,7 +120,7 @@ referência que pensa. Pare.
 
 ```bash
 cd "$TUMACORD_DIR"
-docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-atualizacoes
+docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-updates
 ```
 
 **Saída esperada:** `Started` para os dois serviços.
@@ -173,7 +173,7 @@ echo "voltando para $TUMACORD_ANTERIOR"
 
 cd "$TUMACORD_DIR"
 git checkout --detach "$TUMACORD_ANTERIOR"
-docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-atualizacoes
+docker compose -p "$TUMACORD_PROJETO" up -d --build tumacord-server tumacord-updates
 ```
 
 **Valide igual ao passo 6**, conferindo que a `version` é a anterior.

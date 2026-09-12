@@ -99,8 +99,8 @@ export function generateToken(): string {
 /** O token de um cabeçalho `Authorization: Bearer …`, ou vazio. */
 export function bearerToken(header: unknown): string {
   if (typeof header !== 'string') return '';
-  const achado = /^Bearer\s+(\S+)$/i.exec(header.trim());
-  return achado?.[1] ?? '';
+  const found = /^Bearer\s+(\S+)$/i.exec(header.trim());
+  return found?.[1] ?? '';
 }
 
 /**
@@ -114,12 +114,12 @@ export function authorize(devices: readonly DeviceRecord[], token: string, scope
   if (!token) return { ok: false, failure: 'missing' };
   if (!TOKEN_PATTERN.test(token)) return { ok: false, failure: 'malformed' };
   const hash = hashToken(token);
-  const encontrado = devices.find((device) => hashesMatch(device.tokenHash, hash));
-  if (!encontrado) return { ok: false, failure: 'unknown' };
-  if (encontrado.revokedAt) return { ok: false, failure: 'revoked' };
-  if (encontrado.expiresAt <= now) return { ok: false, failure: 'expired' };
-  if (!encontrado.scope.includes(scope)) return { ok: false, failure: 'wrong-scope' };
-  return { ok: true, device: encontrado };
+  const found = devices.find((device) => hashesMatch(device.tokenHash, hash));
+  if (!found) return { ok: false, failure: 'unknown' };
+  if (found.revokedAt) return { ok: false, failure: 'revoked' };
+  if (found.expiresAt <= now) return { ok: false, failure: 'expired' };
+  if (!found.scope.includes(scope)) return { ok: false, failure: 'wrong-scope' };
+  return { ok: true, device: found };
 }
 
 export type EnrollFailure = 'invite-missing' | 'invite-malformed' | 'invite-unknown' | 'invite-used' | 'invite-expired';
@@ -154,21 +154,21 @@ export function enroll(
   if (!inviteToken) return { ok: false, failure: 'invite-missing' };
   if (!TOKEN_PATTERN.test(inviteToken)) return { ok: false, failure: 'invite-malformed' };
   const hash = hashToken(inviteToken);
-  const convite = invites.find((candidate) => hashesMatch(candidate.tokenHash, hash));
-  if (!convite) return { ok: false, failure: 'invite-unknown' };
-  if (convite.usedAt) return { ok: false, failure: 'invite-used' };
-  if (convite.expiresAt <= now) return { ok: false, failure: 'invite-expired' };
+  const invite = invites.find((candidate) => hashesMatch(candidate.tokenHash, hash));
+  if (!invite) return { ok: false, failure: 'invite-unknown' };
+  if (invite.usedAt) return { ok: false, failure: 'invite-used' };
+  if (invite.expiresAt <= now) return { ok: false, failure: 'invite-expired' };
 
   const token = makeToken();
   const device: DeviceRecord = {
     deviceId: makeId(),
     tokenHash: hashToken(token),
-    label: sanitizeLabel(label) || convite.label || 'dispositivo',
+    label: sanitizeLabel(label) || invite.label || 'dispositivo',
     scope: ['download'],
     createdAt: new Date(now).toISOString(),
     expiresAt: now + TOKEN_TTL_MS,
   };
-  return { ok: true, device, token, invite: { ...convite, usedAt: new Date(now).toISOString(), usedByDeviceId: device.deviceId } };
+  return { ok: true, device, token, invite: { ...invite, usedAt: new Date(now).toISOString(), usedByDeviceId: device.deviceId } };
 }
 
 /**
@@ -214,6 +214,6 @@ export function createInvite(label: string, now: number, makeToken: () => string
  * Sem hash nenhum: esta lista aparece num painel e pode acabar num print.
  */
 export function publicDevice(device: DeviceRecord): Omit<DeviceRecord, 'tokenHash'> {
-  const { tokenHash: _ignorado, ...resto } = device;
-  return resto;
+  const { tokenHash: _hidden, ...rest } = device;
+  return rest;
 }

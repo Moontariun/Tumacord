@@ -16,8 +16,8 @@ consultam **só a VPS**.
  ──────────────────────          ───                         ───────────
  build + assina  ──────────►  importa e confere
  (chave privada)               guarda em /pacotes
-                               publica o catálogo  ──────►  consulta /v1/catalogo
-                                                            baixa /v1/artefatos/…
+                               publica o catálogo  ──────►  consulta /v1/catalog
+                                                            baixa /v1/artifacts/…
                                                             confere assinatura
 ```
 
@@ -75,7 +75,7 @@ chmod 600 ~/.tumacord-publicacao/*.json
 
 ```bash
 # Monte o documento com as duas públicas e seus escopos, e envie.
-curl -fsS -X POST http://127.0.0.1:4301/admin/chaves \
+curl -fsS -X POST http://127.0.0.1:4301/admin/keys \
   -H 'content-type: application/json' \
   -d '{"keys":[
         {"keyId":"<id-manifesto>","algorithm":"ed25519","publicKey":"<spki-base64>","scope":["manifest"]},
@@ -86,7 +86,7 @@ curl -fsS -X POST http://127.0.0.1:4301/admin/chaves \
 **Verificação:**
 
 ```bash
-curl -fsS http://127.0.0.1:4300/v1/chaves
+curl -fsS http://127.0.0.1:4300/v1/keys
 ```
 
 **Confira que nenhuma chave privada aparece na saída.** Elas não deveriam ter
