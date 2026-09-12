@@ -120,6 +120,59 @@ test('usuário comum não cria canal; a administração cria', { timeout: 30_000
   assert.equal(criado.channel?.type, 'text');
 });
 
+// Os dois caminhos que criam canal precisam criar o **mesmo** canal.
+//
+// Até a 0.9.9 eram duas operações diferentes: a do socket não atribuía
+// posição — o canal nascia no fim por acidente de inserção —, usava outro
+// `slugify`, não aceitava categoria, tópico nem limite, e não deixava registro
+// na auditoria. Por qual porta se entrou mudava o que saía.
+test('socket e API criam o mesmo canal, com posição e auditoria', { timeout: 30_000 }, async (context) => {
+  const { url, sockets } = await servidorDedicado(context);
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  const socketChefe = await connect(url, chefe.body.token);
+  sockets.push(socketChefe);
+  const cabecalho = { 'content-type': 'application/json', authorization: `Bearer ${chefe.body.token}` };
+
+  const porSocket = await ask<{ ok: boolean; channel?: Record<string, unknown> }>(socketChefe, 'channel:create', { name: 'Pelo Socket', type: 'text' });
+  const respostaRest = await fetch(`${url}/api/admin/channels`, {
+    method: 'POST', headers: cabecalho, body: JSON.stringify({ name: 'Pela API', type: 'text' }),
+  });
+  const porRest = await respostaRest.json() as { ok: boolean; channel?: Record<string, unknown> };
+
+  assert.equal(porSocket.ok, true);
+  assert.equal(respostaRest.status, 201);
+  // A posição é o que ordena a lista. Sem ela, o canal do socket dependia da
+  // ordem de inserção no arquivo e não podia ser reordenado.
+  assert.equal(typeof porSocket.channel?.position, 'number', 'o canal do socket precisa nascer posicionado');
+  assert.equal(typeof porRest.channel?.position, 'number');
+  assert.deepEqual(Object.keys(porSocket.channel ?? {}).sort(), Object.keys(porRest.channel ?? {}).sort(), 'os dois caminhos produzem o mesmo formato');
+  // O mesmo `slugify`: acento e maiúscula tratados igual nos dois.
+  assert.match(String(porSocket.channel?.id), /^pelo-socket-[0-9a-f]{4}$/);
+  assert.match(String(porRest.channel?.id), /^pela-api-[0-9a-f]{4}$/);
+
+  const auditoria = await (await fetch(`${url}/api/admin/audit`, { headers: cabecalho })).json() as { entries: { action: string; target: string }[] };
+  const criacoes = auditoria.entries.filter((entrada) => entrada.action === 'channel.create').map((entrada) => entrada.target);
+  assert.ok(criacoes.includes('Pelo Socket'), 'a criação pelo socket também precisa deixar registro');
+  assert.ok(criacoes.includes('Pela API'));
+});
+
+// Esconder o botão é conveniência; quem recusa é o servidor. Um cliente que
+// chame o socket direto passa pela mesma conferência do papel persistido.
+test('o nome do canal é validado nos dois caminhos, e não só na interface', { timeout: 30_000 }, async (context) => {
+  const { url, sockets } = await servidorDedicado(context);
+  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
+  const socketChefe = await connect(url, chefe.body.token);
+  sockets.push(socketChefe);
+
+  const vazio = await ask<{ ok: boolean; error?: string }>(socketChefe, 'channel:create', { name: '   ', type: 'text' });
+  assert.equal(vazio.ok, false);
+  const longo = await ask<{ ok: boolean; error?: string }>(socketChefe, 'channel:create', { name: 'x'.repeat(33), type: 'text' });
+  assert.equal(longo.ok, false);
+  // Um tipo inventado não cria um terceiro tipo de canal.
+  const tipoEstranho = await ask<{ ok: boolean; channel?: { type: string } }>(socketChefe, 'channel:create', { name: 'estranho', type: 'quadro' });
+  assert.equal(tipoEstranho.channel?.type ?? 'text', 'text', 'o que não é voz é texto');
+});
+
 // Segundo caminho para o mesmo estrago: empurrar um pacote de sincronização
 // com canais novos dentro.
 test('sincronização de usuário comum não injeta canais', { timeout: 30_000 }, async (context) => {

@@ -14,6 +14,7 @@ import { qualityOptions, useVoice, type PeerHealth, type RemoteMedia, type Scree
 import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { describeOrigin, originLabel } from './lib/origin';
 import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetThisDestination, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
+import { ATTACHMENT_SYNC_KEY, attachmentSyncEnabled, attachmentSyncVisible } from './lib/attachmentSync';
 import { FEEDBACK_SOUNDS, SOUND_LABEL, playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, imagePreview, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { volumeToGain } from './lib/audioGain';
@@ -325,6 +326,69 @@ function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }: { titl
   </div></div>;
 }
 
+/**
+ * Criar um canal de texto ou de voz.
+ *
+ * O que o `window.prompt` não tinha: validação antes de enviar, progresso
+ * enquanto o servidor responde, o erro que o servidor devolveu, cancelamento,
+ * e foco/rótulos que um leitor de tela entenda.
+ */
+function NovoCanalModal({ type, onCreate, onClose }: { type: Channel['type']; onCreate: (type: Channel['type'], name: string) => Promise<{ ok: boolean; error?: string }>; onClose: () => void }) {
+  const [nome, setNome] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState('');
+  const campo = useRef<HTMLInputElement>(null);
+  useEffect(() => { campo.current?.focus(); }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !enviando) onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [enviando, onClose]);
+
+  const limpo = nome.trim();
+  // As mesmas regras do servidor, aqui só para avisar antes: quem recusa de
+  // verdade é ele.
+  const invalido = limpo.length < 1 ? 'Escreva um nome.' : limpo.length > 32 ? 'O nome cabe em 32 caracteres.' : '';
+
+  const enviar = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (enviando || invalido) return;
+    setEnviando(true);
+    setErro('');
+    const resultado = await onCreate(type, limpo);
+    // Só fecha depois da confirmação. Fechar no clique faria um nome recusado
+    // desaparecer sem explicação — e foi isso que o `prompt` fazia.
+    if (resultado.ok) { onClose(); return; }
+    setEnviando(false);
+    setErro(resultado.error ?? 'Não consegui criar o canal.');
+  };
+
+  const titulo = type === 'voice' ? 'Nova call' : 'Novo canal de texto';
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!enviando && event.target === event.currentTarget) onClose(); }}>
+    <form className="confirm-dialog novo-canal" role="dialog" aria-modal="true" aria-labelledby="novo-canal-titulo" onSubmit={(event) => void enviar(event)}>
+      <h2 id="novo-canal-titulo">{titulo}</h2>
+      <label className="novo-canal-campo">
+        <span>Nome</span>
+        <input
+          ref={campo}
+          value={nome}
+          maxLength={32}
+          disabled={enviando}
+          onChange={(event) => { setNome(event.target.value); setErro(''); }}
+          placeholder={type === 'voice' ? 'Jogatina' : 'assuntos-gerais'}
+          aria-describedby={erro || (nome && invalido) ? 'novo-canal-erro' : undefined}
+          aria-invalid={Boolean(erro || (nome && invalido))}
+        />
+      </label>
+      {(erro || (nome && invalido)) && <p className="novo-canal-erro" id="novo-canal-erro" role="alert">{erro || invalido}</p>}
+      <div className="confirm-actions">
+        <button type="button" onClick={onClose} disabled={enviando}>Cancelar</button>
+        <button type="submit" className="primary" disabled={enviando || Boolean(invalido)}>{enviando ? 'Criando…' : 'Criar'}</button>
+      </div>
+    </form>
+  </div>;
+}
+
 function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { session: SavedSession; onSessionChange: (session: SavedSession) => void; onLogout: () => void; onSwitchAccount: () => void }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [snapshot, setSnapshot] = useState<ServerSnapshot>({ serverName: session.serverName, channels: [], onlineUsers: [], voiceRooms: {} });
@@ -336,7 +400,9 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const [pendingFile, setPendingFile] = useState<{ file: File; preview?: string } | null>(null);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [aApagar, setAApagar] = useState<ChatMessage | null>(null);
-  const [syncFiles, setSyncFiles] = useState(() => localStorage.getItem('tumacord.sync-files') === 'true');
+  // A preferência guardada, como ela está no navegador. O que vale na prática
+  // é `replicaAnexos`, logo abaixo: no dedicado a resposta é sempre não.
+  const [syncFiles, setSyncFiles] = useState(() => localStorage.getItem(ATTACHMENT_SYNC_KEY) === 'true');
   const [connected, setConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -371,6 +437,8 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   });
   const devices = useDevices();
   const [boardPromptOpen, setBoardPromptOpen] = useState(false);
+  /** O tipo de canal que o modal de criação está pedindo, ou `null`. */
+  const [novoCanal, setNovoCanal] = useState<Channel['type'] | null>(null);
   // De onde vem o que este computador guarda.
   //
   // No P2P a resposta é imediata: a chave do convite identifica o grupo, e ela
@@ -409,9 +477,13 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const handoffGeneration = useRef(0);
   const resumedCall = useRef('');
   const selectedChannelRef = useRef(selectedChannelId);
-  const syncFilesRef = useRef(syncFiles);
+  // O valor que os três caminhos de replicação consultam. Ele já tem o modo
+  // embutido: no dedicado a preferência do P2P não atravessa.
+  const replicaAnexos = attachmentSyncEnabled(session.connectionMode, syncFiles);
+  const mostraSincronizacao = attachmentSyncVisible(session.connectionMode);
+  const syncFilesRef = useRef(replicaAnexos);
   useEffect(() => { selectedChannelRef.current = selectedChannelId; }, [selectedChannelId]);
-  useEffect(() => { syncFilesRef.current = syncFiles; }, [syncFiles]);
+  useEffect(() => { syncFilesRef.current = replicaAnexos; }, [replicaAnexos]);
 
   const showToast = useCallback((text: string, sound?: FeedbackSound) => {
     setToast(text);
@@ -838,16 +910,19 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const downloadAttachment = async (attachment: ChatAttachment) => {
     try {
       const contents = await resolveAttachment(socket, attachment, session.serverUrl, session.token);
-      if (syncFiles) await cacheAttachment(socket, attachment, session.serverUrl, session.token);
+      if (replicaAnexos) await cacheAttachment(socket, attachment, session.serverUrl, session.token);
       downloadBlob(contents, attachment.name);
     } catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao baixar o arquivo.'); }
   };
 
   const changeFileSync = (enabled: boolean) => {
+    // O controle não existe no dedicado, e a mesma regra vale aqui: um caminho
+    // que ligasse a replicação por outra porta desfaria o ponto.
+    if (!mostraSincronizacao) return;
     setSyncFiles(enabled);
-    syncFilesRef.current = enabled;
-    localStorage.setItem('tumacord.sync-files', String(enabled));
-    if (enabled) for (const item of messages) if (item.attachment) void cacheAttachment(socket, item.attachment, session.serverUrl, session.token).catch(() => undefined);
+    syncFilesRef.current = attachmentSyncEnabled(session.connectionMode, enabled);
+    localStorage.setItem(ATTACHMENT_SYNC_KEY, String(enabled));
+    if (syncFilesRef.current) for (const item of messages) if (item.attachment) void cacheAttachment(socket, item.attachment, session.serverUrl, session.token).catch(() => undefined);
     showToast(enabled ? 'Arquivos serão mantidos neste computador.' : 'Novos arquivos só serão baixados quando você pedir.');
   };
 
@@ -884,16 +959,51 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
     voice.requestWatchLive(member.socketId);
   }, [showToast, voice]);
 
-  const createChannel = (type: Channel['type']) => {
-    const name = window.prompt(type === 'voice' ? 'Nome da nova call:' : 'Nome do novo canal:');
-    if (name?.trim()) socket?.emit('channel:create', { name, type });
-  };
+  // O `+` abre um modal, e não um `window.prompt`.
+  //
+  // O `prompt` do navegador não tem validação, não mostra progresso, não sabe
+  // dizer um erro do servidor e não é acessível: ele bloqueia a janela inteira
+  // e o que volta é uma string ou `null`. E o emit era disparado sem
+  // acknowledge — um nome recusado pelo servidor sumia sem explicação, e um
+  // clique repetido mandava dois pedidos.
+  const criarCanal = useCallback(async (type: Channel['type'], name: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!socket) return { ok: false, error: 'Sem conexão com o servidor. Tente de novo em instantes.' };
+    return new Promise((resolve) => {
+      let respondido = false;
+      // Sucesso só depois da confirmação. Sem prazo, um servidor que não
+      // responde deixaria o modal girando para sempre.
+      const relogio = window.setTimeout(() => {
+        if (respondido) return;
+        respondido = true;
+        resolve({ ok: false, error: 'O servidor não respondeu. O canal pode ter sido criado — confira a lista antes de tentar de novo.' });
+      }, 10_000);
+      socket.emit('channel:create', { name, type }, (resposta: { ok?: boolean; error?: string } | undefined) => {
+        if (respondido) return;
+        respondido = true;
+        window.clearTimeout(relogio);
+        if (resposta?.ok) {
+          showToast(type === 'voice' ? 'Call criada.' : 'Canal criado.');
+          resolve({ ok: true });
+          return;
+        }
+        resolve({ ok: false, error: resposta?.error || 'Não consegui criar o canal.' });
+      });
+    });
+  }, [showToast, socket]);
 
   const currentVoiceChannel = snapshot.channels.find((channel) => channel.id === voice.channelId);
   const selectedMembers = selectedChannel?.type === 'voice' ? snapshot.voiceRooms[selectedChannel.id] ?? [] : [];
   const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
   const currentUser = snapshot.onlineUsers.find((user) => user.id === session.user.id) ?? session.user;
   const isServerAdmin = session.connectionMode === 'server' && Boolean(currentUser.isAdmin);
+  // Quem vê o `+`. O dono do dedicado é administrador e entra aqui; um membro
+  // comum, não. No P2P a criação de canais não existe — há uma conversa e uma
+  // call, e um botão que promete outra coisa seria uma promessa falsa.
+  //
+  // Esconder o botão é conveniência: quem decide de verdade é o servidor, sobre
+  // o papel persistido, e um cliente que chame o socket direto passa pela mesma
+  // conferência.
+  const podeCriarCanal = isServerAdmin;
   const activeRemoteScreen = voice.remoteMedia.find((media) => media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
   const browsingText = selectedChannel?.type !== 'voice';
   const backgroundVoiceMedia = browsingText ? voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0) : [];
@@ -917,10 +1027,10 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
           <button className="direct-link-button" onClick={() => setJoinInviteOpen(true)}><Icon name="server" /><span><strong>Entrar por convite</strong><small>Cole o código de quem já está na call</small></span></button>
         </section>}
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
-        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={session.connectionMode === 'server' ? () => createChannel('text') : undefined}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={podeCriarCanal ? () => setNovoCanal('text') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
         </ChannelGroup>
-        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={session.connectionMode === 'server' ? () => createChannel('voice') : undefined}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={podeCriarCanal ? () => setNovoCanal('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
             {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
@@ -1013,7 +1123,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
           ? <Boundary title="A mesa precisou ser redesenhada"><Whiteboard session={boards.active} api={boards} currentUserId={session.user.id} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={boards.close} /></Boundary>
           : selectedChannel?.type === 'voice'
           ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
-          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={syncFiles} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
+          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={replicaAnexos} showFileSync={mostraSincronizacao} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
         {memberListOpen && !boards.active && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
@@ -1034,6 +1144,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
       onClose={() => setAApagar(null)}
     />}
     {boardPromptOpen && <NewBoardModal channelName={selectedChannel?.name ?? 'geral'} onCreate={createBoard} onClose={() => setBoardPromptOpen(false)} />}
+    {novoCanal && podeCriarCanal && <NovoCanalModal type={novoCanal} onCreate={criarCanal} onClose={() => setNovoCanal(null)} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} withAudio={shareAudio && voice.screenAudioSupport.supported !== false} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
@@ -1061,6 +1172,8 @@ interface ChatViewProps {
   pendingFile: { file: File; preview?: string } | null;
   uploading: boolean;
   syncFiles: boolean;
+  /** Se o controle de sincronizar aparece. Falso no dedicado. */
+  showFileSync: boolean;
   onFile: (file: File) => void;
   onClearAttachment: () => void;
   onSyncFiles: (enabled: boolean) => void;
@@ -1072,7 +1185,7 @@ interface ChatViewProps {
   onAskDelete: (message: ChatMessage) => void;
 }
 
-function ChatView({ channel, messages, message, setMessage, sendMessage, pendingFile, uploading, syncFiles, onFile, onClearAttachment, onSyncFiles, onDownload, serverUrl, me, onEdit, onAskDelete }: ChatViewProps) {
+function ChatView({ channel, messages, message, setMessage, sendMessage, pendingFile, uploading, syncFiles, showFileSync, onFile, onClearAttachment, onSyncFiles, onDownload, serverUrl, me, onEdit, onAskDelete }: ChatViewProps) {
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [editando, setEditando] = useState<{ id: string; body: string } | null>(null);
@@ -1115,7 +1228,12 @@ function ChatView({ channel, messages, message, setMessage, sendMessage, pending
       })}<div ref={bottom} />
     </div>
     <div className="chat-composer">
-      <label className="file-sync-toggle" title="Quando ativo, o arquivo completo fica guardado neste PC"><input type="checkbox" checked={syncFiles} onChange={(event) => onSyncFiles(event.target.checked)} /><Icon name="syncFile" /><span>Sincronizar arquivos neste PC</span></label>
+      {/* No dedicado quem guarda e autoriza os anexos é o servidor: a
+          permanência já existe, e replicar tudo no disco de cada pessoa
+          espalharia cópias de arquivos que o servidor controla por máquinas
+          que ele não controla. O controle some — e, junto com ele, a
+          replicação: esconder sem desligar era o defeito. */}
+      {showFileSync && <label className="file-sync-toggle" title="Quando ativo, o arquivo completo fica guardado neste PC"><input type="checkbox" checked={syncFiles} onChange={(event) => onSyncFiles(event.target.checked)} /><Icon name="syncFile" /><span>Sincronizar arquivos neste PC</span></label>}
       {/* O que vai ser enviado, antes de ser enviado. O arquivo ainda está
           neste computador: fechar aqui não desfaz upload nenhum. */}
       {pendingFile && <div className="pending-attachment">

@@ -390,6 +390,19 @@ svg { width: 20px; height: 20px; }
 .voice-member-watch svg { width: 13px; height: 13px; }
 .voice-member-watch.is-watching { background: rgba(255,77,79,.14); color: #ff9294; }
 .voice-member-watch.is-watching:hover { background: var(--tomato-deep); color: white; }
+
+/* Criar canal: um modal de verdade no lugar do `window.prompt`, que não tinha
+   validação, progresso, erro do servidor nem foco que um leitor de tela siga. */
+.novo-canal { display: grid; gap: 12px; text-align: left; }
+.novo-canal-campo { display: grid; gap: 6px; }
+.novo-canal-campo span { color: #9698a8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.novo-canal-campo input { padding: 10px 12px; border-radius: 9px; border: 1px solid #33354a; background: #1b1c26; color: white; font-size: 12px; }
+.novo-canal-campo input:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.novo-canal-campo input[aria-invalid="true"] { border-color: rgba(255,77,79,.6); }
+.novo-canal-campo input:disabled { opacity: .6; }
+.novo-canal-erro { margin: 0; color: #ff9294; font-size: 10px; }
+.novo-canal .confirm-actions button.primary { background: var(--violet); color: white; }
+.novo-canal .confirm-actions button.primary:disabled { opacity: .5; }
 .stream-recovery-card { min-width: 0; min-height: 150px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; padding: 20px; border: 1px solid rgba(255,77,79,.2); border-radius: 14px; background: linear-gradient(145deg, rgba(39,31,39,.96), rgba(20,21,29,.96)); text-align: center; }
 .stream-recovery-card strong { font-size: 13px; }
 .stream-recovery-card p { margin: 0; color: #9698a8; font-size: 10px; }

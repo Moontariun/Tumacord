@@ -751,19 +751,37 @@ app.delete('/api/admin/users/:id', async (request, response) => {
   response.json({ ok: true });
 });
 
-app.post('/api/admin/channels', async (request, response) => {
-  const context = requireAdmin(request, response);
-  if (!context) return;
-  if (p2pMode) return refuse(response, 400, 'O modo P2P possui somente uma conversa e uma call.');
-  const corpo = request.body as { name?: unknown; type?: unknown; categoryId?: unknown; topic?: unknown; userLimit?: unknown };
-  const nome = validateChannelName(corpo?.name);
-  if (!nome.ok) return refuse(response, 400, nome.error ?? 'Nome inválido.');
-  const type = corpo?.type === 'voice' ? 'voice' : 'text';
-  const topico = validateTopic(corpo?.topic);
-  if (!topico.ok) return refuse(response, 400, topico.error ?? 'Tópico inválido.');
-  const limite = validateUserLimit(corpo?.userLimit, type);
-  if (!limite.ok) return refuse(response, 400, limite.error ?? 'Limite inválido.');
-  const categoryId = typeof corpo?.categoryId === 'string' && store.categories.some((c) => c.id === corpo.categoryId) ? corpo.categoryId : undefined;
+/**
+ * Criar um canal. **A** operação — não uma delas.
+ *
+ * Até a 0.9.9 havia duas: a rota de administração e o `channel:create` do
+ * socket. Elas divergiam em tudo o que importa — a do socket não validava o
+ * nome pelas mesmas regras, não atribuía posição (o canal nascia no fim por
+ * acidente de inserção), não aceitava categoria, tópico nem limite, e não
+ * deixava registro na auditoria. Duas regras para a mesma pergunta significam
+ * que a resposta depende de por qual porta se entrou.
+ *
+ * A autorização é conferida **aqui**, sobre o papel persistido, e não sobre o
+ * que a interface resolveu mostrar: esconder o botão é conveniência, e um
+ * cliente que chame a API ou o socket direto passa pelo mesmo lugar.
+ */
+async function criarCanal(actor: PublicUser, role: Role, entrada: { name?: unknown; type?: unknown; categoryId?: unknown; topic?: unknown; userLimit?: unknown }): Promise<{ ok: true; channel: Channel } | { ok: false; status: number; error: string }> {
+  if (p2pMode) return { ok: false, status: 400, error: 'O modo P2P possui somente uma conversa e uma call.' };
+  if (!canManageChannels(role)) {
+    await audit(actor, 'channel.create', typeof entrada?.name === 'string' ? entrada.name : '', 'denied');
+    return { ok: false, status: 403, error: 'Apenas a administração do servidor cria canais.' };
+  }
+  const nome = validateChannelName(entrada?.name);
+  if (!nome.ok) return { ok: false, status: 400, error: nome.error ?? 'Nome inválido.' };
+  const type = entrada?.type === 'voice' ? 'voice' : 'text';
+  const topico = validateTopic(entrada?.topic);
+  if (!topico.ok) return { ok: false, status: 400, error: topico.error ?? 'Tópico inválido.' };
+  const limite = validateUserLimit(entrada?.userLimit, type);
+  if (!limite.ok) return { ok: false, status: 400, error: limite.error ?? 'Limite inválido.' };
+  const categoryId = typeof entrada?.categoryId === 'string' && store.categories.some((c) => c.id === entrada.categoryId) ? entrada.categoryId : undefined;
+  // O sufixo aleatório é o que garante id único sem consultar a lista: dois
+  // canais com o mesmo nome não colidem, e recriar um nome antigo não herda as
+  // mensagens do canal que foi apagado.
   const canal = await store.createChannel({
     id: `${slugify(nome.value!) || 'canal'}-${randomUUID().slice(0, 4)}`,
     name: nome.value!, type,
@@ -771,9 +789,17 @@ app.post('/api/admin/channels', async (request, response) => {
     ...(topico.value ? { topic: topico.value } : {}),
     ...(limite.value ? { userLimit: limite.value } : {}),
   });
-  await audit(context.user, 'channel.create', canal.name, 'ok', `${type}`);
+  await audit(actor, 'channel.create', canal.name, 'ok', `${type}`);
   broadcastChannels();
-  response.status(201).json({ ok: true, channel: canal });
+  return { ok: true, channel: canal };
+}
+
+app.post('/api/admin/channels', async (request, response) => {
+  const context = requireAdmin(request, response);
+  if (!context) return;
+  const resultado = await criarCanal(context.user, normalizeRole(context.user.role), request.body as Record<string, unknown>);
+  if (!resultado.ok) return refuse(response, resultado.status, resultado.error);
+  response.status(201).json({ ok: true, channel: resultado.channel });
 });
 
 app.patch('/api/admin/channels/:id', async (request, response) => {
@@ -1303,17 +1329,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('channel:create', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
-    if (p2pMode) return acknowledge?.({ ok: false, error: 'O modo P2P possui somente uma conversa e uma call.' });
-    // Não havia verificação nenhuma: qualquer usuário autenticado criava canal
-    // de texto e de voz no servidor dedicado.
-    if (!canManageChannels(roleOfSocket(socket))) return acknowledge?.({ ok: false, error: 'Apenas a administração do servidor cria canais.' });
-    const parsed = z.object({ name: z.string().trim().min(1).max(32), type: z.enum(['text', 'voice']) }).safeParse(payload);
-    if (!parsed.success) return acknowledge?.({ ok: false });
-    const slug = parsed.data.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || randomUUID().slice(0, 8);
-    const channel: Channel = { id: `${slug}-${randomUUID().slice(0, 4)}`, ...parsed.data };
-    await store.addChannel(channel);
-    broadcastSnapshot();
-    acknowledge?.({ ok: true, channel });
+    // A mesma operação da rota de administração, e o mesmo papel persistido.
+    // Este caminho tinha as próprias regras: outro `slugify`, sem posição, sem
+    // categoria, sem tópico, sem limite e sem auditoria — um canal criado por
+    // aqui saía diferente de um canal criado por lá.
+    const dono = socket.data.user as PublicUser | undefined;
+    if (!dono) return acknowledge?.({ ok: false, error: 'Sessão expirada; entre de novo.' });
+    const resultado = await criarCanal(dono, roleOfSocket(socket), payload as Record<string, unknown>);
+    if (!resultado.ok) return acknowledge?.({ ok: false, error: resultado.error });
+    acknowledge?.({ ok: true, channel: resultado.channel });
   });
 
   socket.on('voice:join', (input: unknown, acknowledge?: (result: unknown) => void) => {
