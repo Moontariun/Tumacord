@@ -205,15 +205,15 @@ class Updater {
     // Sem chave confiável, nada do que chegar pode ser verificado — e aceitar
     // sem verificar seria trocar a verificação por um endereço.
     if (!trustedKeys.length) {
-      const semChave = 'Este aplicativo não tem nenhuma chave pública configurada para verificar as atualizações. Peça ao dono do servidor a configuração de origem.';
-      return this.update({ phase: 'no-origin', origin, originSource, error: manual ? semChave : '', needsEnrollment: false, enrollmentMessage: semChave });
+      const withoutKeys = 'Este aplicativo não tem nenhuma chave pública configurada para verificar as atualizações. Peça ao dono do servidor a configuração de origem.';
+      return this.update({ phase: 'no-origin', origin, originSource, error: manual ? withoutKeys : '', needsEnrollment: false, enrollmentMessage: withoutKeys });
     }
     if (!credential.token) {
-      const recado = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
+      const notice = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
       this.log({ event: 'update-check-blocked', reason: credential.reason });
       return this.update({
         phase: 'needs-enrollment', origin, originSource, deviceId: credential.deviceId ?? '',
-        needsEnrollment: true, enrollmentMessage: recado, error: manual ? recado : '',
+        needsEnrollment: true, enrollmentMessage: notice, error: manual ? notice : '',
       });
     }
 
@@ -338,12 +338,12 @@ class Updater {
       this.sessionCredential = saved.saved
         ? null
         : { token: enrolled.token, deviceId: enrolled.deviceId, expiresAt: enrolled.expiresAt, reason: '' };
-      const aviso = saved.saved ? '' : saved.message;
-      this.update({ deviceId: enrolled.deviceId, needsEnrollment: false, enrollmentMessage: aviso, error: '' });
-      const depois = await this.check({ manual: true });
+      const warning = saved.saved ? '' : saved.message;
+      this.update({ deviceId: enrolled.deviceId, needsEnrollment: false, enrollmentMessage: warning, error: '' });
+      const afterEnroll = await this.check({ manual: true });
       // A procura recarrega a origem e a credencial, e com isso apagaria o
       // aviso de que a credencial não foi gravada. Ele volta aqui.
-      return aviso ? this.update({ enrollmentMessage: aviso }) : depois;
+      return warning ? this.update({ enrollmentMessage: warning }) : afterEnroll;
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
       this.log({ event: 'update-device-enroll-failed', message });
@@ -376,8 +376,8 @@ class Updater {
 
     const { origin, trustedKeys, credential } = this.source();
     if (!origin || !credential.token) {
-      const recado = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
-      return this.update({ phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: recado, error: recado });
+      const notice = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
+      return this.update({ phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: notice, error: notice });
     }
     if (asset.size > MAX_DOWNLOAD_BYTES) {
       return this.update({ phase: 'error', error: 'O pacote anunciado é maior do que qualquer versão do Tumacord; nada foi baixado.' });
@@ -614,29 +614,29 @@ class Updater {
     // aplicar o arquivo pode ter sido trocado, truncado ou removido. Um
     // executável que vai receber administrador é o último lugar onde faz
     // sentido confiar em verificação antiga.
-    const conferido = verifyInstallerFile(file, this.snapshot.sha256 || '');
-    if (!conferido.ok) throw new Error(failureMessage(conferido.cause));
+    const verified = verifyInstallerFile(file, this.snapshot.sha256 || '');
+    if (!verified.ok) throw new Error(failureMessage(verified.cause));
 
-    const resultado = await launchElevatedInstaller(file, { env: this.env });
-    if (!resultado.started) {
-      this.log({ event: 'update-windows-launch-failed', cause: resultado.cause, kind: this.kind });
+    const launchOutcome = await launchElevatedInstaller(file, { env: this.env });
+    if (!launchOutcome.started) {
+      this.log({ event: 'update-windows-launch-failed', cause: launchOutcome.cause, kind: this.kind });
       // O arquivo continua no disco de propósito: a pessoa pode executá-lo à
       // mão, e é isso que a mensagem diz. Apagá-lo aqui tiraria a única saída
       // que resta quando a elevação não passa.
-      const erro = new Error(`${failureMessage(resultado.cause)} O instalador está em ${file}.`);
-      erro.cause = resultado.cause;
-      erro.installerPath = file;
-      throw erro;
+      const launchError = new Error(`${failureMessage(launchOutcome.cause)} O instalador está em ${file}.`);
+      launchError.cause = launchOutcome.cause;
+      launchError.installerPath = file;
+      throw launchError;
     }
 
-    this.log({ event: 'update-windows-launched', pid: resultado.pid, kind: this.kind });
+    this.log({ event: 'update-windows-launched', pid: launchOutcome.pid, kind: this.kind });
     return {
       restart: 'quit',
       // O instalador é conservado até a próxima abertura confirmar a versão.
       // Apagá-lo agora tiraria o arquivo debaixo de um instalador que ainda
       // está lendo dele.
       keepFile: file,
-      installerPid: resultado.pid,
+      installerPid: launchOutcome.pid,
       message: 'O instalador começou. O Tumacord vai fechar para ele poder substituir a instalação.',
     };
   }

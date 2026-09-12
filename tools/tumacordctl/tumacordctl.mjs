@@ -524,14 +524,14 @@ async function restoreCommand(options) {
   if (choice.ok) {
     const live = planBackup({ installation: choice.installation, outputDir: '/tmp' });
     if (live.ok) {
-      const atual = await installationIdOf({ volume: live.volume });
-      if (atual.ok && atual.installationId !== identity.installationId) {
-        console.error(`\nPARE: a instalação em uso é ${atual.installationId} e esta cópia é ${identity.installationId}.`);
+      const liveIdentity = await installationIdOf({ volume: live.volume });
+      if (liveIdentity.ok && liveIdentity.installationId !== identity.installationId) {
+        console.error(`\nPARE: a instalação em uso é ${liveIdentity.installationId} e esta cópia é ${identity.installationId}.`);
         console.error('Restaurar isto por cima trocaria os dados de uma instalação pelos de outra.');
         await dropVolume({ volume: rehearsal });
         return 1;
       }
-      if (atual.ok) console.log(`· confere com a instalação em uso (${atual.installationId})`);
+      if (liveIdentity.ok) console.log(`· confere com a instalação em uso (${liveIdentity.installationId})`);
     }
   }
 

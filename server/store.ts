@@ -155,24 +155,24 @@ export interface DuplicateUsernameGroup {
  * pode acabar colado em algum lugar.
  */
 export function duplicateUsernames(users: readonly StoredUser[]): DuplicateUsernameGroup[] {
-  const porNome = new Map<string, StoredUser[]>();
+  const byName = new Map<string, StoredUser[]>();
   for (const user of users) {
-    const chave = user.normalizedUsername;
-    const grupo = porNome.get(chave);
-    if (grupo) grupo.push(user);
-    else porNome.set(chave, [user]);
+    const nameKey = user.normalizedUsername;
+    const group = byName.get(nameKey);
+    if (group) group.push(user);
+    else byName.set(nameKey, [user]);
   }
-  const duplicadas: DuplicateUsernameGroup[] = [];
-  for (const [normalizedUsername, grupo] of porNome) {
-    if (grupo.length < 2) continue;
-    duplicadas.push({
+  const duplicates: DuplicateUsernameGroup[] = [];
+  for (const [normalizedUsername, group] of byName) {
+    if (group.length < 2) continue;
+    duplicates.push({
       normalizedUsername,
-      accounts: grupo
+      accounts: group
         .map((user) => ({ id: user.id, username: user.username, createdAt: user.createdAt, role: user.role, lastSeenAt: user.lastSeenAt }))
-        .sort((esquerda, direita) => esquerda.createdAt.localeCompare(direita.createdAt)),
+        .sort((leftGroup, rightGroup) => leftGroup.createdAt.localeCompare(rightGroup.createdAt)),
     });
   }
-  return duplicadas.sort((esquerda, direita) => esquerda.normalizedUsername.localeCompare(direita.normalizedUsername));
+  return duplicates.sort((leftGroup, rightGroup) => leftGroup.normalizedUsername.localeCompare(rightGroup.normalizedUsername));
 }
 
 export class JsonStore {
@@ -302,20 +302,20 @@ export class JsonStore {
    * Devolve `true` se algo mudou, para a carga saber que precisa gravar.
    */
   private seedReservations(): boolean {
-    const existentes = new Set(this.usernameReservations.map((reserva) => reserva.normalizedUsername));
-    let mudou = false;
+    const existingNames = new Set(this.usernameReservations.map((reservation) => reservation.normalizedUsername));
+    let reservationsChanged = false;
     for (const user of this.data.users) {
-      if (existentes.has(user.normalizedUsername)) continue;
-      existentes.add(user.normalizedUsername);
+      if (existingNames.has(user.normalizedUsername)) continue;
+      existingNames.add(user.normalizedUsername);
       this.data.usernameReservations!.push({
         normalizedUsername: user.normalizedUsername,
         username: user.username,
         userId: user.id,
         createdAt: user.createdAt || new Date(0).toISOString(),
       });
-      mudou = true;
+      reservationsChanged = true;
     }
-    return mudou;
+    return reservationsChanged;
   }
 
   /** As reservas de nome deste servidor. Ausência é lista vazia. */
@@ -346,8 +346,8 @@ export class JsonStore {
   async createUser(user: StoredUser): Promise<{ created: true; user: StoredUser } | { created: false; conflict: 'user' | 'reservation'; existing?: StoredUser }> {
     const existing = this.data.users.find((candidate) => candidate.normalizedUsername === user.normalizedUsername);
     if (existing) return { created: false, conflict: 'user', existing };
-    const reservada = this.reservationFor(user.normalizedUsername);
-    if (reservada) return { created: false, conflict: 'reservation' };
+    const reserved = this.reservationFor(user.normalizedUsername);
+    if (reserved) return { created: false, conflict: 'reservation' };
 
     const replicated = this.profileForUsername(user.username);
     if (replicated && profileIsNewer(replicated, user.profile)) user.profile = replicated;
@@ -361,14 +361,14 @@ export class JsonStore {
     });
     try {
       await this.save();
-    } catch (erro) {
+    } catch (failure) {
       // A gravação falhou: a memória volta ao que era. Deixar a conta viva só
       // aqui faria o servidor aceitar um login que some no próximo reinício.
-      const indice = this.data.users.indexOf(user);
-      if (indice >= 0) this.data.users.splice(indice, 1);
-      const reserva = this.data.usernameReservations!.findIndex((candidate) => candidate.userId === user.id);
-      if (reserva >= 0) this.data.usernameReservations!.splice(reserva, 1);
-      throw erro;
+      const userIndex = this.data.users.indexOf(user);
+      if (userIndex >= 0) this.data.users.splice(userIndex, 1);
+      const reservation = this.data.usernameReservations!.findIndex((candidate) => candidate.userId === user.id);
+      if (reservation >= 0) this.data.usernameReservations!.splice(reservation, 1);
+      throw failure;
     }
     return { created: true, user };
   }
@@ -486,7 +486,7 @@ export class JsonStore {
   async removeUser(userId: string): Promise<boolean> {
     const index = this.data.users.findIndex((candidate) => candidate.id === userId);
     if (index < 0) return false;
-    const [removido] = this.data.users.splice(index, 1);
+    const [removed] = this.data.users.splice(index, 1);
     // As sessões do removido morrem junto; deixá-las vivas seria manter o
     // acesso de quem acabou de perder a conta.
     this.data.sessions = this.data.sessions.filter((session) => session.userId !== userId);
@@ -495,14 +495,14 @@ export class JsonStore {
     // nome. A reserva guarda o `userId` para uma recuperação autorizada
     // devolver a mesma conta, e não uma conta nova com o mesmo nome.
     this.usernameReservations;
-    const reserva = this.data.usernameReservations!.find((candidate) => candidate.normalizedUsername === removido.normalizedUsername);
-    if (reserva) reserva.releasedAt = new Date().toISOString();
+    const reservation = this.data.usernameReservations!.find((candidate) => candidate.normalizedUsername === removed.normalizedUsername);
+    if (reservation) reservation.releasedAt = new Date().toISOString();
     else {
       this.data.usernameReservations!.push({
-        normalizedUsername: removido.normalizedUsername,
-        username: removido.username,
-        userId: removido.id,
-        createdAt: removido.createdAt,
+        normalizedUsername: removed.normalizedUsername,
+        username: removed.username,
+        userId: removed.id,
+        createdAt: removed.createdAt,
         releasedAt: new Date().toISOString(),
       });
     }
@@ -879,9 +879,9 @@ export class JsonStore {
   /** Libera as gravações que esperavam. */
   resumeWrites(): void {
     if (this.gateTimer) { clearTimeout(this.gateTimer); this.gateTimer = null; }
-    const liberar = this.releaseGate;
+    const releaseWrites = this.releaseGate;
     this.writeGate = null;
     this.releaseGate = null;
-    liberar?.();
+    releaseWrites?.();
   }
 }

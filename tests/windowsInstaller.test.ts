@@ -38,7 +38,7 @@ const {
 };
 
 /** Um filho de processo fingido, com os mesmos eventos que o real emite. */
-function filhoFingido() {
+function fakeChild() {
   const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: () => void; matou: boolean };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -50,101 +50,101 @@ function filhoFingido() {
 // ── O crash do print ───────────────────────────────────────────────────────
 
 test('um EACCES assíncrono vira falha tratada, e não exceção que fecha o app', async () => {
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller('C:\\updates\\Tumacord-0.9.9-1-Setup.exe', {
+  const child = fakeChild();
+  const pending = launchElevatedInstaller('C:\\updates\\Tumacord-0.9.9-1-Setup.exe', {
     spawnFn: () => child,
     env: { SystemRoot: 'C:\\Windows' },
   });
   // Exatamente o evento do print. Sem ouvinte, o Node o lança como exceção não
   // tratada e o processo principal morre.
-  const erro = Object.assign(new Error('spawn C:\\updates\\Tumacord-0.9.9-1-Setup.exe EACCES'), { code: 'EACCES' });
-  child.emit('error', erro);
+  const failure = Object.assign(new Error('spawn C:\\updates\\Tumacord-0.9.9-1-Setup.exe EACCES'), { code: 'EACCES' });
+  child.emit('error', failure);
 
-  const resultado = await promessa;
-  assert.equal(resultado.started, false);
-  assert.equal(resultado.cause, 'access-denied');
-  assert.match(resultado.error ?? '', /EACCES/, 'o erro original é preservado para o suporte');
+  const outcome = await pending;
+  assert.equal(outcome.started, false);
+  assert.equal(outcome.cause, 'access-denied');
+  assert.match(outcome.error ?? '', /EACCES/, 'o erro original é preservado para o suporte');
 });
 
 test('uma falha síncrona de spawn também é tratada', async () => {
-  const resultado = await launchElevatedInstaller('C:\\updates\\Setup.exe', {
+  const outcome = await launchElevatedInstaller('C:\\updates\\Setup.exe', {
     spawnFn: () => { throw Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }); },
     env: { SystemRoot: 'C:\\Windows' },
   });
-  assert.equal(resultado.started, false);
+  assert.equal(outcome.started, false);
   // ENOENT do próprio spawn é o PowerShell que falta, não o instalador.
-  assert.equal(resultado.cause, 'launcher-missing');
+  assert.equal(outcome.cause, 'launcher-missing');
 });
 
 test('a operação não termina duas vezes quando erro e fechamento chegam juntos', async () => {
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
+  const child = fakeChild();
+  const pending = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
   child.emit('error', Object.assign(new Error('falhou'), { code: 'EACCES' }));
   child.emit('close', 1);
-  const resultado = await promessa;
-  assert.equal(resultado.cause, 'access-denied', 'o primeiro desfecho é o que vale');
+  const outcome = await pending;
+  assert.equal(outcome.cause, 'access-denied', 'o primeiro desfecho é o que vale');
 });
 
 // ── Sucesso é o processo confirmado, não "o comando voltou" ────────────────
 
 test('só há sucesso quando o instalador confirma o processo criado', async () => {
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
+  const child = fakeChild();
+  const pending = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
   child.stdout.emit('data', 'TUMACORD_PID=4812\n');
   child.emit('close', 0);
-  assert.deepEqual(await promessa, { started: true, pid: 4812 });
+  assert.deepEqual(await pending, { started: true, pid: 4812 });
 });
 
 test('sair com código zero sem PID não é sucesso', async () => {
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
+  const child = fakeChild();
+  const pending = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
   // Instalação não é "processo criado", e muito menos "comando voltou".
   child.emit('close', 0);
-  const resultado = await promessa;
-  assert.equal(resultado.started, false);
-  assert.equal(resultado.cause, 'unknown');
+  const outcome = await pending;
+  assert.equal(outcome.started, false);
+  assert.equal(outcome.cause, 'unknown');
 });
 
 // ── UAC ────────────────────────────────────────────────────────────────────
 
 test('o UAC cancelado é distinguido de permissão negada', async () => {
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
+  const child = fakeChild();
+  const pending = launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {} });
   child.stderr.emit('data', 'TUMACORD_UAC_CANCELADO');
   child.emit('close', 4);
-  const resultado = await promessa;
-  assert.equal(resultado.cause, 'uac-cancelled');
+  const outcome = await pending;
+  assert.equal(outcome.cause, 'uac-cancelled');
   assert.match(failureMessage('uac-cancelled'), /continua aberto e na versão de antes/);
   assert.notEqual(failureMessage('uac-cancelled'), failureMessage('access-denied'));
 });
 
 test('a espera pela confirmação tem fim, e desistir não é "instalou"', async () => {
-  const child = filhoFingido();
-  const resultado = await launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {}, timeoutMs: 5 });
-  assert.equal(resultado.started, false);
-  assert.equal(resultado.cause, 'timeout');
+  const child = fakeChild();
+  const outcome = await launchElevatedInstaller('C:\\updates\\Setup.exe', { spawnFn: () => child, env: {}, timeoutMs: 5 });
+  assert.equal(outcome.started, false);
+  assert.equal(outcome.cause, 'timeout');
   assert.equal(child.matou, true, 'o lançador pendurado é encerrado');
 });
 
 // ── O caminho do arquivo não vira comando ──────────────────────────────────
 
 test('o caminho do instalador viaja por ambiente, nunca concatenado no comando', async () => {
-  const perigoso = 'C:\\updates\\Setup.exe"; Remove-Item C:\\ -Recurse; "';
-  let visto: { args: string[]; env: Record<string, string> } | null = null;
-  const child = filhoFingido();
-  const promessa = launchElevatedInstaller(perigoso, {
-    spawnFn: (_cmd: string, args: string[], options: { env: Record<string, string> }) => { visto = { args, env: options.env }; return child; },
+  const dangerous = 'C:\\updates\\Setup.exe"; Remove-Item C:\\ -Recurse; "';
+  let seen: { args: string[]; env: Record<string, string> } | null = null;
+  const child = fakeChild();
+  const pending = launchElevatedInstaller(dangerous, {
+    spawnFn: (_cmd: string, args: string[], options: { env: Record<string, string> }) => { seen = { args, env: options.env }; return child; },
     env: { SystemRoot: 'C:\\Windows' },
   });
   child.stdout.emit('data', 'TUMACORD_PID=1\n');
   child.emit('close', 0);
-  await promessa;
+  await pending;
 
-  assert.ok(visto, 'o lançador foi chamado');
-  const { args, env } = visto as unknown as { args: string[]; env: Record<string, string> };
-  assert.equal(env.TUMACORD_INSTALADOR, perigoso, 'o caminho vai pelo ambiente');
-  for (const argumento of args) {
-    assert.equal(argumento.includes('Setup.exe'), false, 'nenhum argumento carrega o caminho');
+  assert.ok(seen, 'o lançador foi chamado');
+  const { args, env } = seen as unknown as { args: string[]; env: Record<string, string> };
+  assert.equal(env.TUMACORD_INSTALADOR, dangerous, 'o caminho vai pelo ambiente');
+  for (const argument of args) {
+    assert.equal(argument.includes('Setup.exe'), false, 'nenhum argumento carrega o caminho');
   }
   assert.equal(args.includes('-NoProfile'), true);
   // `shell: true` transformaria o nome do arquivo em linha de comando.
@@ -160,25 +160,25 @@ test('o verbo pedido é o que mostra o UAC', () => {
 // ── O arquivo é conferido de novo antes de receber administrador ───────────
 
 test('o arquivo é reconferido imediatamente antes de executar', () => {
-  const pasta = mkdtempSync(path.join(tmpdir(), 'tumacord-instalador-'));
+  const folder = mkdtempSync(path.join(tmpdir(), 'tumacord-instalador-'));
   try {
-    const arquivo = path.join(pasta, 'Setup.exe');
-    writeFileSync(arquivo, 'conteudo do instalador');
-    const resumo = '9ff5b9b1e0e9a0f1dd0f0ba4b2e2e4b1a4a0e0b9c9d8e7f6a5b4c3d2e1f0a9b8';
+    const installerFile = path.join(folder, 'Setup.exe');
+    writeFileSync(installerFile, 'conteudo do instalador');
+    const digest = '9ff5b9b1e0e9a0f1dd0f0ba4b2e2e4b1a4a0e0b9c9d8e7f6a5b4c3d2e1f0a9b8';
 
-    assert.equal(verifyInstallerFile(path.join(pasta, 'nao-existe.exe')).ok, false);
-    assert.equal(verifyInstallerFile(path.join(pasta, 'nao-existe.exe')).cause, 'missing-file');
+    assert.equal(verifyInstallerFile(path.join(folder, 'nao-existe.exe')).ok, false);
+    assert.equal(verifyInstallerFile(path.join(folder, 'nao-existe.exe')).cause, 'missing-file');
 
-    writeFileSync(path.join(pasta, 'vazio.exe'), '');
-    assert.equal(verifyInstallerFile(path.join(pasta, 'vazio.exe')).cause, 'empty-file');
+    writeFileSync(path.join(folder, 'vazio.exe'), '');
+    assert.equal(verifyInstallerFile(path.join(folder, 'vazio.exe')).cause, 'empty-file');
 
     // Um arquivo trocado depois da verificação do download não é executado.
-    assert.equal(verifyInstallerFile(arquivo, resumo).cause, 'hash-mismatch');
-    assert.equal(verifyInstallerFile(arquivo).ok, true, 'sem resumo esperado, existir e não estar vazio basta');
-    assert.equal(verifyInstallerFile(arquivo, '', { hashFile: () => resumo }).ok, true);
-    assert.equal(verifyInstallerFile(arquivo, resumo, { hashFile: () => resumo }).ok, true);
+    assert.equal(verifyInstallerFile(installerFile, digest).cause, 'hash-mismatch');
+    assert.equal(verifyInstallerFile(installerFile).ok, true, 'sem resumo esperado, existir e não estar vazio basta');
+    assert.equal(verifyInstallerFile(installerFile, '', { hashFile: () => digest }).ok, true);
+    assert.equal(verifyInstallerFile(installerFile, digest, { hashFile: () => digest }).ok, true);
   } finally {
-    rmSync(pasta, { recursive: true, force: true });
+    rmSync(folder, { recursive: true, force: true });
   }
 });
 
@@ -195,10 +195,10 @@ test('EACCES não é lido como prova de uma causa única', () => {
 });
 
 test('cada falha conhecida tem causa própria e mensagem própria, em português', () => {
-  const causas = ['missing-file', 'empty-file', 'hash-mismatch', 'uac-cancelled', 'access-denied', 'sharing-violation', 'launcher-missing', 'timeout', 'installer-exit', 'unknown'];
-  const mensagens = new Set(causas.map(failureMessage));
-  assert.equal(mensagens.size, causas.length, 'duas causas com a mesma mensagem escondem uma delas');
-  for (const causa of causas) assert.ok(failureMessage(causa).length > 20, causa);
+  const causes = ['missing-file', 'empty-file', 'hash-mismatch', 'uac-cancelled', 'access-denied', 'sharing-violation', 'launcher-missing', 'timeout', 'installer-exit', 'unknown'];
+  const messages = new Set(causes.map(failureMessage));
+  assert.equal(messages.size, causes.length, 'duas causas com a mesma mensagem escondem uma delas');
+  for (const eachCause of causes) assert.ok(failureMessage(eachCause).length > 20, eachCause);
 });
 
 test('arquivo em uso por outro programa é distinguido', () => {

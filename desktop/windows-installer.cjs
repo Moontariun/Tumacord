@@ -74,7 +74,7 @@ const ELEVATION_SCRIPT = [
  */
 const LAUNCH_FAILURES = ['missing-file', 'empty-file', 'hash-mismatch', 'uac-cancelled', 'access-denied', 'sharing-violation', 'launcher-missing', 'timeout', 'installer-exit', 'unknown'];
 
-const MENSAGENS = {
+const MESSAGES = {
   'missing-file': 'O instalador baixado não está mais no disco. Baixe a atualização de novo.',
   'empty-file': 'O instalador baixado está vazio ou incompleto. Baixe a atualização de novo.',
   'hash-mismatch': 'O instalador no disco não confere com o que foi verificado no download. Ele não foi executado. Baixe a atualização de novo.',
@@ -95,22 +95,22 @@ const MENSAGENS = {
  * conhecida vira `unknown`, com o erro original preservado para o suporte.
  */
 function classifyLaunchFailure({ code = '', exitCode = null, stderr = '', message = '' } = {}) {
-  const texto = `${stderr} ${message}`;
-  if (texto.includes('TUMACORD_UAC_CANCELADO') || exitCode === 4) return 'uac-cancelled';
-  if (texto.includes('TUMACORD_ARQUIVO_AUSENTE') || exitCode === 3 || code === 'ENOENT') {
+  const combined = `${stderr} ${message}`;
+  if (combined.includes('TUMACORD_UAC_CANCELADO') || exitCode === 4) return 'uac-cancelled';
+  if (combined.includes('TUMACORD_ARQUIVO_AUSENTE') || exitCode === 3 || code === 'ENOENT') {
     // ENOENT do próprio `spawn` é o PowerShell que não existe, e não o
     // instalador: são dois problemas diferentes com o mesmo código.
     return code === 'ENOENT' ? 'launcher-missing' : 'missing-file';
   }
   if (code === 'EACCES' || code === 'EPERM') return 'access-denied';
-  if (code === 'EBUSY' || texto.includes('being used by another process') || texto.includes('sendo usado por outro')) return 'sharing-violation';
+  if (code === 'EBUSY' || combined.includes('being used by another process') || combined.includes('sendo usado por outro')) return 'sharing-violation';
   if (code === 'ETIMEDOUT') return 'timeout';
   return 'unknown';
 }
 
 /** A mensagem em português de uma causa. */
 function failureMessage(cause) {
-  return MENSAGENS[cause] ?? MENSAGENS.unknown;
+  return MESSAGES[cause] ?? MESSAGES.unknown;
 }
 
 /**
@@ -122,18 +122,18 @@ function failureMessage(cause) {
  * antiga.
  */
 function verifyInstallerFile(file, expectedSha256, { statSync = fs.statSync, hashFile } = {}) {
-  let estado;
+  let fileStat;
   try {
-    estado = statSync(file);
+    fileStat = statSync(file);
   } catch {
     return { ok: false, cause: 'missing-file' };
   }
-  if (!estado.isFile() || estado.size <= 0) return { ok: false, cause: 'empty-file' };
+  if (!fileStat.isFile() || fileStat.size <= 0) return { ok: false, cause: 'empty-file' };
   if (expectedSha256) {
-    const atual = hashFile ? hashFile(file) : sha256OfFile(file);
-    if (String(atual).toLowerCase() !== String(expectedSha256).toLowerCase()) return { ok: false, cause: 'hash-mismatch' };
+    const actualSha256 = hashFile ? hashFile(file) : sha256OfFile(file);
+    if (String(actualSha256).toLowerCase() !== String(expectedSha256).toLowerCase()) return { ok: false, cause: 'hash-mismatch' };
   }
-  return { ok: true, size: estado.size };
+  return { ok: true, size: fileStat.size };
 }
 
 function sha256OfFile(file) {
@@ -157,10 +157,10 @@ function launchElevatedInstaller(file, {
   powershell = '',
 } = {}) {
   return new Promise((resolve) => {
-    const executavel = powershell || defaultPowerShell(env);
+    const executable = powershell || defaultPowerShell(env);
     let child;
     try {
-      child = spawnFn(executavel, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ELEVATION_SCRIPT], {
+      child = spawnFn(executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ELEVATION_SCRIPT], {
         windowsHide: true,
         // O caminho do arquivo viaja aqui, e não na linha de comando.
         env: { ...env, TUMACORD_INSTALADOR: file },
@@ -173,51 +173,51 @@ function launchElevatedInstaller(file, {
       return;
     }
 
-    let saida = '';
-    let erro = '';
-    let terminado = false;
-    const terminar = (resultado) => {
-      if (terminado) return;
-      terminado = true;
-      clearTimeout(relogio);
-      resolve(resultado);
+    let stdoutText = '';
+    let stderrText = '';
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(outcome);
     };
 
-    const relogio = setTimeout(() => {
+    const timer = setTimeout(() => {
       try { child.kill(); } catch { /* já morreu */ }
-      terminar({ started: false, cause: 'timeout', error: 'a confirmação de administrador não foi respondida' });
+      settle({ started: false, cause: 'timeout', error: 'a confirmação de administrador não foi respondida' });
     }, timeoutMs);
 
-    child.stdout?.on('data', (pedaco) => { saida += String(pedaco); });
-    child.stderr?.on('data', (pedaco) => { erro += String(pedaco); });
+    child.stdout?.on('data', (chunk) => { stdoutText += String(chunk); });
+    child.stderr?.on('data', (chunk) => { stderrText += String(chunk); });
 
     // **O ouvinte que faltava.** Sem ele, um `EACCES` assíncrono vira exceção
     // não tratada e fecha o Tumacord inteiro.
     child.on('error', (error) => {
-      terminar({ started: false, cause: classifyLaunchFailure({ code: error && error.code, message: String(error && error.message) }), error: String(error && error.message ? error.message : error) });
+      settle({ started: false, cause: classifyLaunchFailure({ code: error && error.code, message: String(error && error.message) }), error: String(error && error.message ? error.message : error) });
     });
 
     // `close` e não `exit`: `close` espera os fluxos, e é deles que sai o PID.
     // Ouvir os dois faria a operação terminar duas vezes; `terminar` protege,
     // mas ouvir um só é mais honesto sobre a intenção.
     child.on('close', (exitCode) => {
-      const pid = /TUMACORD_PID=(\d+)/.exec(saida)?.[1];
+      const pid = /TUMACORD_PID=(\d+)/.exec(stdoutText)?.[1];
       if (pid) {
-        terminar({ started: true, pid: Number(pid) });
+        settle({ started: true, pid: Number(pid) });
         return;
       }
-      terminar({
+      settle({
         started: false,
-        cause: classifyLaunchFailure({ exitCode, stderr: erro }),
-        error: erro.trim() || `o lançador terminou com código ${exitCode}`,
+        cause: classifyLaunchFailure({ exitCode, stderr: stderrText }),
+        error: stderrText.trim() || `o lançador terminou com código ${exitCode}`,
       });
     });
   });
 }
 
 function defaultPowerShell(env) {
-  const raiz = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
-  return path.join(raiz, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
+  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
 module.exports = {

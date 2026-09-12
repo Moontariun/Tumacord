@@ -19,18 +19,18 @@ import {
 // oferecer um passo atrás como se fosse um passo à frente.
 
 // O vetor canônico do requisito. É a frase inteira da convenção, em ordem.
-const ORDEM = ['0.9.9', '0.9.9-1', '0.9.9-2', '0.9.9-10', '0.9.10', '1.0.0', '1.0.0-1'];
+const ORDER = ['0.9.9', '0.9.9-1', '0.9.9-2', '0.9.9-10', '0.9.10', '1.0.0', '1.0.0-1'];
 
 test('a ordem da convenção vale por inteiro, e em todos os pares', () => {
-  for (let i = 0; i < ORDEM.length - 1; i += 1) {
-    assert.equal(compareVersions(ORDEM[i], ORDEM[i + 1]), -1, `${ORDEM[i]} deveria vir antes de ${ORDEM[i + 1]}`);
-    assert.equal(compareVersions(ORDEM[i + 1], ORDEM[i]), 1, `${ORDEM[i + 1]} deveria vir depois de ${ORDEM[i]}`);
+  for (let i = 0; i < ORDER.length - 1; i += 1) {
+    assert.equal(compareVersions(ORDER[i], ORDER[i + 1]), -1, `${ORDER[i]} deveria vir antes de ${ORDER[i + 1]}`);
+    assert.equal(compareVersions(ORDER[i + 1], ORDER[i]), 1, `${ORDER[i + 1]} deveria vir depois de ${ORDER[i]}`);
   }
   // Não só entre vizinhos: qualquer par mais distante também.
-  for (let i = 0; i < ORDEM.length; i += 1) {
-    for (let j = 0; j < ORDEM.length; j += 1) {
-      const esperado = i === j ? 0 : i < j ? -1 : 1;
-      assert.equal(compareVersions(ORDEM[i], ORDEM[j]), esperado, `${ORDEM[i]} vs ${ORDEM[j]}`);
+  for (let i = 0; i < ORDER.length; i += 1) {
+    for (let j = 0; j < ORDER.length; j += 1) {
+      const expected = i === j ? 0 : i < j ? -1 : 1;
+      assert.equal(compareVersions(ORDER[i], ORDER[j]), expected, `${ORDER[i]} vs ${ORDER[j]}`);
     }
   }
 });
@@ -83,13 +83,13 @@ test('a forma canônica não tem zeros à esquerda, e zero à esquerda é recusa
 // A regra que separa esta convenção do SemVer. Misturar as duas traria de
 // volta a ambiguidade que ela existe para eliminar.
 test('alpha, beta, rc e +build não fazem parte da convenção', () => {
-  for (const recusada of ['0.9.9-rc1', '0.9.9-alpha', '0.9.9-beta.1', '1.0.0+build7', '0.9.9-1+abc']) {
-    assert.equal(parseVersion(recusada), null, `${recusada} deveria ser recusada`);
-    assert.throws(() => requireVersion(recusada), VersionError);
+  for (const rejected of ['0.9.9-rc1', '0.9.9-alpha', '0.9.9-beta.1', '1.0.0+build7', '0.9.9-1+abc']) {
+    assert.equal(parseVersion(rejected), null, `${rejected} deveria ser recusada`);
+    assert.throws(() => requireVersion(rejected), VersionError);
   }
   // E o motivo é dito, porque ele vira mensagem de erro para quem publica.
   assert.match(
-    (() => { try { requireVersion('0.9.9-rc1'); return ''; } catch (erro) { return (erro as Error).message; } })(),
+    (() => { try { requireVersion('0.9.9-rc1'); return ''; } catch (failure) { return (failure as Error).message; } })(),
     /canal/,
     'a mensagem precisa dizer que quem é ensaio é decidido pelo canal',
   );
@@ -105,9 +105,9 @@ test('a revisão é um inteiro positivo; `-0` não é escrita de "sem revisão"'
 // fazia uma entrada corrompida do catálogo convencer o cliente de que ele já
 // estava em dia.
 test('comparar com lixo lança, em vez de dizer que são iguais', () => {
-  for (const lixo of ['', 'nao-e-versao', 'v', '1', '1.2.3.4', null, undefined, 42, {}, []]) {
-    assert.throws(() => compareVersions('0.9.9', lixo as unknown), VersionError, `comparar com ${JSON.stringify(lixo)}`);
-    assert.throws(() => compareVersions(lixo as unknown, '0.9.9'), VersionError);
+  for (const garbage of ['', 'nao-e-versao', 'v', '1', '1.2.3.4', null, undefined, 42, {}, []]) {
+    assert.throws(() => compareVersions('0.9.9', garbage as unknown), VersionError, `comparar com ${JSON.stringify(garbage)}`);
+    assert.throws(() => compareVersions(garbage as unknown, '0.9.9'), VersionError);
   }
   assert.equal(isVersion('0.9.9-1'), true);
   assert.equal(isVersion('0.9.9-rc1'), false);
@@ -134,9 +134,9 @@ test('a versão numérica do Windows distingue a revisão', () => {
 });
 
 test('a etiqueta publicada tem a forma da convenção, e só ela', () => {
-  for (const boa of ['v0.9.9', 'v0.9.9-1', 'v1.0.0', 'v0.9.9-10']) assert.equal(TAG_PATTERN.test(boa), true, boa);
-  for (const ruim of ['0.9.9', 'v0.9.9-rc1', 'v0.9.9-0', 'v01.0.0', 'v1.0', 'v0.9.9+build']) {
-    assert.equal(TAG_PATTERN.test(ruim), false, `${ruim} não é etiqueta publicável`);
+  for (const good of ['v0.9.9', 'v0.9.9-1', 'v1.0.0', 'v0.9.9-10']) assert.equal(TAG_PATTERN.test(good), true, good);
+  for (const bad of ['0.9.9', 'v0.9.9-rc1', 'v0.9.9-0', 'v01.0.0', 'v1.0', 'v0.9.9+build']) {
+    assert.equal(TAG_PATTERN.test(bad), false, `${bad} não é etiqueta publicável`);
   }
 });
 
@@ -154,11 +154,11 @@ test('a ordenação decrescente descarta o que não for versão, sem lançar', (
 // testes são o que impede a segunda cópia de virar uma segunda regra.
 
 test('a adaptação CJS está em dia com shared/version.ts', async () => {
-  const { gerar } = await import('../scripts/generate-version.mjs');
+  const { generate } = await import('../scripts/generate-version.mjs');
   const { readFileSync } = await import('node:fs');
   assert.equal(
     readFileSync(new URL('../desktop/version.generated.cjs', import.meta.url), 'utf8'),
-    gerar(),
+    generate(),
     'rode `node scripts/generate-version.mjs` — a fonte é shared/version.ts, não o arquivo gerado',
   );
 });
@@ -166,12 +166,12 @@ test('a adaptação CJS está em dia com shared/version.ts', async () => {
 test('a adaptação CJS decide igual à fonte, nos mesmos vetores', async () => {
   const { createRequire } = await import('node:module');
   const cjs = createRequire(import.meta.url)('../desktop/version.generated.cjs');
-  for (let i = 0; i < ORDEM.length; i += 1) {
-    for (let j = 0; j < ORDEM.length; j += 1) {
+  for (let i = 0; i < ORDER.length; i += 1) {
+    for (let j = 0; j < ORDER.length; j += 1) {
       assert.equal(
-        cjs.compareVersions(ORDEM[i], ORDEM[j]),
-        compareVersions(ORDEM[i], ORDEM[j]),
-        `${ORDEM[i]} vs ${ORDEM[j]} decidido diferente em CJS`,
+        cjs.compareVersions(ORDER[i], ORDER[j]),
+        compareVersions(ORDER[i], ORDER[j]),
+        `${ORDER[i]} vs ${ORDER[j]} decidido diferente em CJS`,
       );
     }
   }
@@ -195,38 +195,38 @@ test('o electron-builder produz uma versão numérica diferente para a revisão'
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
   const { AppInfo } = require('app-builder-lib/out/appInfo.js');
-  const { camposDoPacote } = await import('../scripts/generate-version.mjs');
+  const { packageFields } = await import('../scripts/generate-version.mjs');
 
-  const numero = (version: string) => {
-    const app = new AppInfo({ metadata: { version, name: 'tumacord' }, config: { ...camposDoPacote(version) }, framework: {} }, null);
+  const numeric = (version: string) => {
+    const app = new AppInfo({ metadata: { version, name: 'tumacord' }, config: { ...packageFields(version) }, framework: {} }, null);
     return { numerica: app.getVersionInWeirdWindowsForm(), arquivo: app.buildVersion, produto: app.version };
   };
 
   // O defeito, em uma linha: sem os campos derivados, os dois dão `0.9.9.0`.
-  const semDerivar = new AppInfo({ metadata: { version: '0.9.9-1', name: 'tumacord' }, config: {}, framework: {} }, null);
-  assert.equal(semDerivar.getVersionInWeirdWindowsForm(), '0.9.9.0', 'é este o comportamento que precisa ser corrigido');
+  const withoutDerived = new AppInfo({ metadata: { version: '0.9.9-1', name: 'tumacord' }, config: {}, framework: {} }, null);
+  assert.equal(withoutDerived.getVersionInWeirdWindowsForm(), '0.9.9.0', 'é este o comportamento que precisa ser corrigido');
 
-  assert.equal(numero('0.9.9').numerica, '0.9.9.0');
-  assert.equal(numero('0.9.9-1').numerica, '0.9.9.1');
-  assert.equal(numero('0.9.9-10').numerica, '0.9.9.10');
-  assert.notEqual(numero('0.9.9').numerica, numero('0.9.9-1').numerica, 'a revisão não pode ter o número da versão que ela corrige');
+  assert.equal(numeric('0.9.9').numerica, '0.9.9.0');
+  assert.equal(numeric('0.9.9-1').numerica, '0.9.9.1');
+  assert.equal(numeric('0.9.9-10').numerica, '0.9.9.10');
+  assert.notEqual(numeric('0.9.9').numerica, numeric('0.9.9-1').numerica, 'a revisão não pode ter o número da versão que ela corrige');
 
   // E a versão numérica é exatamente a que a implementação única calcula.
-  for (const versao of ['0.9.9', '0.9.9-1', '0.9.9-10', '1.0.0', '1.0.0-2']) {
-    assert.equal(numero(versao).numerica, windowsVersion(versao), versao);
+  for (const parsedVersion of ['0.9.9', '0.9.9-1', '0.9.9-10', '1.0.0', '1.0.0-2']) {
+    assert.equal(numeric(parsedVersion).numerica, windowsVersion(parsedVersion), parsedVersion);
   }
 
   // A versão textual do produto não é contaminada pelo número de build:
   // `0.9.9-1.1` apareceria como FileVersion no instalador.
-  assert.equal(numero('0.9.9-1').arquivo, '0.9.9-1');
-  assert.equal(numero('0.9.9-1').produto, '0.9.9-1');
+  assert.equal(numeric('0.9.9-1').arquivo, '0.9.9-1');
+  assert.equal(numeric('0.9.9-1').produto, '0.9.9-1');
 });
 
 test('o package.json declara a versão do produto e os campos derivados dela', async () => {
   const { createRequire } = await import('node:module');
   const pkg = createRequire(import.meta.url)('../package.json');
-  const { camposDoPacote } = await import('../scripts/generate-version.mjs');
+  const { packageFields } = await import('../scripts/generate-version.mjs');
   assert.equal(pkg.version, '0.9.9-1', 'esta é a revisão que a branch entrega');
   assert.equal(isVersion(pkg.version), true, 'a versão publicada precisa caber na convenção');
-  assert.deepEqual({ buildNumber: pkg.build.buildNumber, buildVersion: pkg.build.buildVersion }, camposDoPacote(pkg.version));
+  assert.deepEqual({ buildNumber: pkg.build.buildNumber, buildVersion: pkg.build.buildVersion }, packageFields(pkg.version));
 });

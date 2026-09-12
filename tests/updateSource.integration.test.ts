@@ -18,7 +18,7 @@ import { documentDigest, generateSigningKey, signDocument } from '../shared/dist
 // **Nenhum caminho deste arquivo toca o GitHub.**
 
 const require_ = createRequire(import.meta.url);
-const fonte = require_('../desktop/update-source.cjs') as {
+const sourceModule = require_('../desktop/update-source.cjs') as {
   fetchCatalog: (o: Record<string, unknown>) => Promise<Catalog>;
   fetchManifest: (o: Record<string, unknown>) => Promise<ReleaseManifest>;
   downloadArtifact: (o: Record<string, unknown>) => Promise<{ file: string; sha256: string; size: number }>;
@@ -27,39 +27,39 @@ const fonte = require_('../desktop/update-source.cjs') as {
   selectArtifact: (m: ReleaseManifest, k: string, a: string) => Artifact | null;
 };
 
-const chaveManifesto = generateSigningKey();
-const chaveCatalogo = generateSigningKey();
-const confiaveis: TrustedKey[] = [
-  { ...chaveManifesto, scope: ['manifest'] },
-  { ...chaveCatalogo, scope: ['catalog'] },
+const manifestKey = generateSigningKey();
+const catalogKey = generateSigningKey();
+const trusted: TrustedKey[] = [
+  { ...manifestKey, scope: ['manifest'] },
+  { ...catalogKey, scope: ['catalog'] },
 ];
 
 // Grande o bastante para a retomada em duas partes ser real.
-const CONTEUDO = Buffer.alloc(3 * 1024 * 1024, 7);
-const RESUMO = createHash('sha256').update(CONTEUDO).digest('hex');
+const CONTENT = Buffer.alloc(3 * 1024 * 1024, 7);
+const DIGEST = createHash('sha256').update(CONTENT).digest('hex');
 
-const artefato = (): Artifact => ({
+const artifact = (): Artifact => ({
   artifactId: 'linux-x64-tar', os: 'linux', arch: 'x64', format: 'tar.gz', installKind: 'linux-managed',
-  fileName: 'tumacord-0.9.9-1.tar.gz', size: CONTEUDO.length, sha256: RESUMO,
-  signatureKeyId: chaveManifesto.keyId, storagePath: 'releases/0.9.9-1/tumacord-0.9.9-1.tar.gz',
+  fileName: 'tumacord-0.9.9-1.tar.gz', size: CONTENT.length, sha256: DIGEST,
+  signatureKeyId: manifestKey.keyId, storagePath: 'releases/0.9.9-1/tumacord-0.9.9-1.tar.gz',
 });
 
-const manifesto = (): ReleaseManifest => ({
+const manifest = (): ReleaseManifest => ({
   contract: CONTRACT_VERSION, releaseId: 'rel-0991', version: '0.9.9-1', channel: 'stable',
-  commit: '0'.repeat(40), createdAt: '2026-09-12T10:00:00.000Z', artifacts: [artefato()],
+  commit: '0'.repeat(40), createdAt: '2026-09-12T10:00:00.000Z', artifacts: [artifact()],
 });
 
-const catalogo = (sequence = 3): Catalog => ({
+const catalog = (sequence = 3): Catalog => ({
   contract: CONTRACT_VERSION, sequence,
   createdAt: new Date().toISOString(),
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   channels: {
-    stable: { entries: [{ releaseId: 'rel-0991', version: '0.9.9-1', state: 'published', publishedAt: '2026-09-12T10:00:00.000Z', manifestSha256: documentDigest(manifesto()) }] },
+    stable: { entries: [{ releaseId: 'rel-0991', version: '0.9.9-1', state: 'published', publishedAt: '2026-09-12T10:00:00.000Z', manifestSha256: documentDigest(manifest()) }] },
     test: { entries: [] },
   },
 });
 
-interface Ambiente {
+interface Environment {
   origin: string;
   adminUrl: string;
   token: string;
@@ -75,46 +75,46 @@ interface Ambiente {
  * dizer por quê. Foi o que aconteceu quando as portas eram escolhidas antes
  * do `listen`: sob concorrência, outro teste ocupava a porta nesse meio.
  */
-function escutando(servidor: Server): Promise<void> {
+function listening(serviceServer: Server): Promise<void> {
   return new Promise((resolve, reject) => {
-    servidor.once('listening', resolve);
-    servidor.once('error', reject);
+    serviceServer.once('listening', resolve);
+    serviceServer.once('error', reject);
   });
 }
 
-async function subir(): Promise<Ambiente> {
-  const raiz = await mkdtemp(path.join(tmpdir(), 'tumacord-cliente-'));
-  const estado = path.join(raiz, 'estado');
-  const pacotes = path.join(raiz, 'pacotes');
-  const downloads = path.join(raiz, 'downloads');
-  await mkdir(path.join(pacotes, 'releases', '0.9.9-1'), { recursive: true });
-  await mkdir(estado, { recursive: true });
+async function start(): Promise<Environment> {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'tumacord-cliente-'));
+  const stateDir = path.join(rootDir, 'estado');
+  const packagesDir = path.join(rootDir, 'pacotes');
+  const downloads = path.join(rootDir, 'downloads');
+  await mkdir(path.join(packagesDir, 'releases', '0.9.9-1'), { recursive: true });
+  await mkdir(stateDir, { recursive: true });
   await mkdir(downloads, { recursive: true });
-  await writeFile(path.join(pacotes, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), CONTEUDO);
+  await writeFile(path.join(packagesDir, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), CONTENT);
 
   process.env.TUMACORD_UPDATES_NO_LISTEN = '1';
-  process.env.TUMACORD_UPDATES_STATE_DIR = estado;
-  process.env.TUMACORD_UPDATES_STORAGE_DIR = pacotes;
+  process.env.TUMACORD_UPDATES_STATE_DIR = stateDir;
+  process.env.TUMACORD_UPDATES_STORAGE_DIR = packagesDir;
 
-  const modulo = await import(`../services/updates/src/index.js?c=${Date.now()}${Math.random()}`) as typeof import('../services/updates/src/index');
-  await modulo.store.load();
-  const servidores: Server[] = [modulo.app.listen(0, '127.0.0.1'), modulo.admin.listen(0, '127.0.0.1')];
-  await Promise.all(servidores.map((servidor) => escutando(servidor)));
+  const serviceModule = await import(`../services/updates/src/index.js?c=${Date.now()}${Math.random()}`) as typeof import('../services/updates/src/index');
+  await serviceModule.store.load();
+  const servers: Server[] = [serviceModule.app.listen(0, '127.0.0.1'), serviceModule.admin.listen(0, '127.0.0.1')];
+  await Promise.all(servers.map((serviceServer) => listening(serviceServer)));
 
-  const origin = `http://127.0.0.1:${(servidores[0].address() as AddressInfo).port}`;
-  const adminUrl = `http://127.0.0.1:${(servidores[1].address() as AddressInfo).port}`;
+  const origin = `http://127.0.0.1:${(servers[0].address() as AddressInfo).port}`;
+  const adminUrl = `http://127.0.0.1:${(servers[1].address() as AddressInfo).port}`;
   const json = { 'content-type': 'application/json' };
-  await fetch(`${adminUrl}/admin/keys`, { method: 'POST', headers: json, body: JSON.stringify({ keys: confiaveis }) });
-  await fetch(`${adminUrl}/admin/manifest`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(manifesto(), [chaveManifesto])) });
-  await fetch(`${adminUrl}/admin/catalog`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(catalogo(), [chaveCatalogo])) });
-  const convite = await (await fetch(`${adminUrl}/admin/invites`, { method: 'POST', headers: json, body: JSON.stringify({ label: 'máquina de teste' }) })).json() as { invite: string };
-  const inscrito = await fonte.enrollDevice({ origin, invite: convite.invite, label: 'máquina de teste' });
+  await fetch(`${adminUrl}/admin/keys`, { method: 'POST', headers: json, body: JSON.stringify({ keys: trusted }) });
+  await fetch(`${adminUrl}/admin/manifest`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(manifest(), [manifestKey])) });
+  await fetch(`${adminUrl}/admin/catalog`, { method: 'POST', headers: json, body: JSON.stringify(signDocument(catalog(), [catalogKey])) });
+  const invite = await (await fetch(`${adminUrl}/admin/invites`, { method: 'POST', headers: json, body: JSON.stringify({ label: 'máquina de teste' }) })).json() as { invite: string };
+  const enrolled = await sourceModule.enrollDevice({ origin, invite: invite.invite, label: 'máquina de teste' });
 
   return {
-    origin, adminUrl, downloads, token: inscrito.token,
+    origin, adminUrl, downloads, token: enrolled.token,
     encerrar: async () => {
-      await Promise.all(servidores.map((s) => new Promise<void>((r) => s.close(() => r()))));
-      await rm(raiz, { recursive: true, force: true });
+      await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
+      await rm(rootDir, { recursive: true, force: true });
     },
   };
 }
@@ -122,128 +122,128 @@ async function subir(): Promise<Ambiente> {
 // ── O caminho feliz, inteiro ───────────────────────────────────────────────
 
 test('o cliente busca catálogo, manifesto e pacote sem tocar no GitHub', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const { origin, token } = ambiente;
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const { origin, token } = environment;
 
-  const cat = await fonte.fetchCatalog({ origin, token, trustedKeys: confiaveis, acceptedSequence: 0 });
-  assert.equal(cat.sequence, 3);
-  assert.equal(cat.channels.stable.entries[0].version, '0.9.9-1');
+  const catalogDoc = await sourceModule.fetchCatalog({ origin, token, trustedKeys: trusted, acceptedSequence: 0 });
+  assert.equal(catalogDoc.sequence, 3);
+  assert.equal(catalogDoc.channels.stable.entries[0].version, '0.9.9-1');
 
-  const entrada = cat.channels.stable.entries[0];
-  const man = await fonte.fetchManifest({ origin, token, trustedKeys: confiaveis, releaseId: entrada.releaseId, expectedDigest: entrada.manifestSha256 });
-  assert.equal(man.version, '0.9.9-1');
-  assert.equal(man.commit, '0'.repeat(40));
+  const entry = catalogDoc.channels.stable.entries[0];
+  const manifestDoc = await sourceModule.fetchManifest({ origin, token, trustedKeys: trusted, releaseId: entry.releaseId, expectedDigest: entry.manifestSha256 });
+  assert.equal(manifestDoc.version, '0.9.9-1');
+  assert.equal(manifestDoc.commit, '0'.repeat(40));
 
-  const pacote = fonte.selectArtifact(man, 'linux-managed', 'x64');
-  assert.ok(pacote);
+  const chosenArtifact = sourceModule.selectArtifact(manifestDoc, 'linux-managed', 'x64');
+  assert.ok(chosenArtifact);
 
-  const destino = path.join(ambiente.downloads, pacote.fileName);
-  const baixado = await fonte.downloadArtifact({ origin, token, manifest: man, artifact: pacote, destination: destino });
-  assert.equal(baixado.sha256, RESUMO);
-  assert.equal(baixado.size, CONTEUDO.length);
-  assert.deepEqual(await readFile(destino), CONTEUDO);
+  const destination = path.join(environment.downloads, chosenArtifact.fileName);
+  const downloaded = await sourceModule.downloadArtifact({ origin, token, manifest: manifestDoc, artifact: chosenArtifact, destination: destination });
+  assert.equal(downloaded.sha256, DIGEST);
+  assert.equal(downloaded.size, CONTENT.length);
+  assert.deepEqual(await readFile(destination), CONTENT);
 });
 
 test('o progresso é reportado e chega ao total', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const man = manifesto();
-  const avisos: { received: number; total: number }[] = [];
-  await fonte.downloadArtifact({
-    origin: ambiente.origin, token: ambiente.token, manifest: man, artifact: man.artifacts[0],
-    destination: path.join(ambiente.downloads, 'com-progresso.tar.gz'),
-    onProgress: (p: { received: number; total: number }) => avisos.push(p),
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const manifestDoc = manifest();
+  const progressReports: { received: number; total: number }[] = [];
+  await sourceModule.downloadArtifact({
+    origin: environment.origin, token: environment.token, manifest: manifestDoc, artifact: manifestDoc.artifacts[0],
+    destination: path.join(environment.downloads, 'com-progresso.tar.gz'),
+    onProgress: (p: { received: number; total: number }) => progressReports.push(p),
   });
-  assert.ok(avisos.length >= 1);
-  assert.equal(avisos.at(-1)?.received, CONTEUDO.length);
-  assert.equal(avisos.at(-1)?.total, CONTEUDO.length);
+  assert.ok(progressReports.length >= 1);
+  assert.equal(progressReports.at(-1)?.received, CONTENT.length);
+  assert.equal(progressReports.at(-1)?.total, CONTENT.length);
 });
 
 // ── Retomada ───────────────────────────────────────────────────────────────
 
 test('um download interrompido continua de onde parou', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const man = manifesto();
-  const destino = path.join(ambiente.downloads, 'retomado.tar.gz');
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const manifestDoc = manifest();
+  const destination = path.join(environment.downloads, 'retomado.tar.gz');
 
   // Primeira tentativa: cancelada no meio. O parcial fica no disco.
   await assert.rejects(
-    () => fonte.downloadArtifact({
-      origin: ambiente.origin, token: ambiente.token, manifest: man, artifact: man.artifacts[0], destination: destino,
-      shouldCancel: (() => { let vistos = 0; return () => (vistos += 1) > 2; })(),
+    () => sourceModule.downloadArtifact({
+      origin: environment.origin, token: environment.token, manifest: manifestDoc, artifact: manifestDoc.artifacts[0], destination: destination,
+      shouldCancel: (() => { let seen = 0; return () => (seen += 1) > 2; })(),
     }),
     /cancelad/i,
   );
-  const parcial = await stat(`${destino}.partial`);
-  assert.ok(parcial.size > 0, 'o parcial precisa sobrar para a retomada ter o que continuar');
-  assert.ok(parcial.size < CONTEUDO.length, 'e precisa estar incompleto');
+  const partial = await stat(`${destination}.partial`);
+  assert.ok(partial.size > 0, 'o parcial precisa sobrar para a retomada ter o que continuar');
+  assert.ok(partial.size < CONTENT.length, 'e precisa estar incompleto');
 
   // Segunda tentativa: retoma e fecha.
-  const baixado = await fonte.downloadArtifact({
-    origin: ambiente.origin, token: ambiente.token, manifest: man, artifact: man.artifacts[0], destination: destino,
+  const downloaded = await sourceModule.downloadArtifact({
+    origin: environment.origin, token: environment.token, manifest: manifestDoc, artifact: manifestDoc.artifacts[0], destination: destination,
   });
-  assert.equal(baixado.sha256, RESUMO, 'o arquivo remontado é idêntico ao original');
-  assert.deepEqual(await readFile(destino), CONTEUDO);
+  assert.equal(downloaded.sha256, DIGEST, 'o arquivo remontado é idêntico ao original');
+  assert.deepEqual(await readFile(destination), CONTENT);
 });
 
 // ── O que o cliente recusa ─────────────────────────────────────────────────
 
 test('um catálogo assinado por chave desconhecida não decide nada', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const intrusa = generateSigningKey();
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const intruder = generateSigningKey();
   await assert.rejects(
-    () => fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: [{ ...intrusa, scope: ['catalog'] }], acceptedSequence: 0 }),
+    () => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: [{ ...intruder, scope: ['catalog'] }], acceptedSequence: 0 }),
     /chave que este aplicativo não conhece|não pôde ser verificado/,
   );
 });
 
 test('um catálogo mais antigo do que o já aceito é recusado', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   // O serviço publicou a sequência 3. Um cliente que já aceitou a 9 recusa.
   await assert.rejects(
-    () => fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis, acceptedSequence: 9 }),
+    () => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 9 }),
     /mais antiga do que a última aceita/,
   );
 });
 
 test('o serviço recusa publicar um catálogo já vencido', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const vencido: Catalog = { ...catalogo(4), expiresAt: new Date(Date.now() - 1000).toISOString() };
-  const resposta = await fetch(`${ambiente.adminUrl}/admin/catalog`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(vencido, [chaveCatalogo])),
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const expired: Catalog = { ...catalog(4), expiresAt: new Date(Date.now() - 1000).toISOString() };
+  const reply = await fetch(`${environment.adminUrl}/admin/catalog`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(expired, [catalogKey])),
   });
-  assert.equal(resposta.status, 409);
-  assert.equal((await resposta.json() as { reason: string }).reason, 'expired');
+  assert.equal(reply.status, 409);
+  assert.equal((await reply.json() as { reason: string }).reason, 'expired');
   // E o catálogo bom continua no ar: uma publicação recusada não derruba o
   // que estava valendo.
-  assert.equal((await fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis, acceptedSequence: 0 })).sequence, 3);
+  assert.equal((await sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 0 })).sequence, 3);
 });
 
 test('um catálogo que venceu no relógio do cliente não instala nada', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   // O catálogo é válido quando publicado e vence depois. Quem percebe é o
   // cliente, no relógio dele — e a recusa é falha segura: sem saber qual é a
   // política vigente, não se instala nada.
-  const daquiADoisDias = Date.now() + 2 * 24 * 60 * 60 * 1000;
+  const twoDaysLater = Date.now() + 2 * 24 * 60 * 60 * 1000;
   await assert.rejects(
-    () => fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis, acceptedSequence: 0, now: daquiADoisDias }),
+    () => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 0, now: twoDaysLater }),
     /vencida|política atual/,
   );
 });
 
 test('o manifesto que não é o que o catálogo prometeu é recusado', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   // Os dois documentos podem ser autênticos e ainda assim ser o par errado.
   await assert.rejects(
-    () => fonte.fetchManifest({
-      origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis,
+    () => sourceModule.fetchManifest({
+      origin: environment.origin, token: environment.token, trustedKeys: trusted,
       releaseId: 'rel-0991', expectedDigest: 'f'.repeat(64),
     }),
     /não é o que o catálogo prometeu/,
@@ -251,81 +251,81 @@ test('o manifesto que não é o que o catálogo prometeu é recusado', { timeout
 });
 
 test('um pacote trocado no armazenamento é descartado, e o resumo é o que pega', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const man = manifesto();
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const manifestDoc = manifest();
   // O manifesto assinado promete um resumo; o pacote entregue é outro. O
   // tamanho bate, então só o resumo pega — que é o caso que importa.
-  const enganoso = { ...man, artifacts: [{ ...man.artifacts[0], sha256: 'e'.repeat(64) }] };
-  const destino = path.join(ambiente.downloads, 'trocado.tar.gz');
+  const misleading = { ...manifestDoc, artifacts: [{ ...manifestDoc.artifacts[0], sha256: 'e'.repeat(64) }] };
+  const destination = path.join(environment.downloads, 'trocado.tar.gz');
   await assert.rejects(
-    () => fonte.downloadArtifact({ origin: ambiente.origin, token: ambiente.token, manifest: enganoso, artifact: enganoso.artifacts[0], destination: destino }),
+    () => sourceModule.downloadArtifact({ origin: environment.origin, token: environment.token, manifest: misleading, artifact: misleading.artifacts[0], destination: destination }),
     /não confere com o resumo publicado/,
   );
   // E o arquivo ruim não fica no disco.
-  await assert.rejects(() => stat(destino));
-  await assert.rejects(() => stat(`${destino}.partial`));
+  await assert.rejects(() => stat(destination));
+  await assert.rejects(() => stat(`${destination}.partial`));
 });
 
 test('sem credencial não se busca nada', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   await assert.rejects(
-    () => fonte.fetchCatalog({ origin: ambiente.origin, token: '', trustedKeys: confiaveis, acceptedSequence: 0 }),
+    () => sourceModule.fetchCatalog({ origin: environment.origin, token: '', trustedKeys: trusted, acceptedSequence: 0 }),
     /convite|autorizado/i,
   );
 });
 
 test('uma credencial revogada para de buscar, com a razão dita', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const lista = await (await fetch(`${ambiente.adminUrl}/admin/devices`)).json() as { devices: { deviceId: string }[] };
-  await fetch(`${ambiente.adminUrl}/admin/devices/${lista.devices[0].deviceId}/revoke`, {
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const list = await (await fetch(`${environment.adminUrl}/admin/devices`)).json() as { devices: { deviceId: string }[] };
+  await fetch(`${environment.adminUrl}/admin/devices/${list.devices[0].deviceId}/revoke`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'teste' }),
   });
-  const erro = await fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis, acceptedSequence: 0 })
+  const failure = await sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 0 })
     .then(() => null, (e: Error & { reason?: string }) => e);
-  assert.ok(erro);
-  assert.equal(erro?.reason, 'revoked');
-  assert.match(erro?.message ?? '', /revogado/);
+  assert.ok(failure);
+  assert.equal(failure?.reason, 'revoked');
+  assert.match(failure?.message ?? '', /revogado/);
 });
 
 test('renovar troca o token, e o antigo para de valer', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const renovado = await fonte.renewDevice({ origin: ambiente.origin, token: ambiente.token });
-  assert.notEqual(renovado.token, ambiente.token);
-  assert.equal((await fonte.fetchCatalog({ origin: ambiente.origin, token: renovado.token, trustedKeys: confiaveis, acceptedSequence: 0 })).sequence, 3);
-  await assert.rejects(() => fonte.fetchCatalog({ origin: ambiente.origin, token: ambiente.token, trustedKeys: confiaveis, acceptedSequence: 0 }));
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const renewed = await sourceModule.renewDevice({ origin: environment.origin, token: environment.token });
+  assert.notEqual(renewed.token, environment.token);
+  assert.equal((await sourceModule.fetchCatalog({ origin: environment.origin, token: renewed.token, trustedKeys: trusted, acceptedSequence: 0 })).sequence, 3);
+  await assert.rejects(() => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 0 }));
 });
 
 test('um convite inventado não inscreve ninguém', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   await assert.rejects(
-    () => fonte.enrollDevice({ origin: ambiente.origin, invite: 'z'.repeat(64), label: 'intruso' }),
+    () => sourceModule.enrollDevice({ origin: environment.origin, invite: 'z'.repeat(64), label: 'intruso' }),
     /não é reconhecido/,
   );
 });
 
 test('uma versão retirada não é baixada, nem por quem já tinha o endereço', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
-  const man = manifesto();
-  const retirado: Catalog = {
-    ...catalogo(4),
+  const environment = await start();
+  context.after(() => environment.encerrar());
+  const manifestDoc = manifest();
+  const withdrawn: Catalog = {
+    ...catalog(4),
     channels: {
-      stable: { entries: [{ ...catalogo().channels.stable.entries[0], state: 'withdrawn', withdrawn: { reason: 'o áudio sai errado', at: new Date().toISOString() } }] },
+      stable: { entries: [{ ...catalog().channels.stable.entries[0], state: 'withdrawn', withdrawn: { reason: 'o áudio sai errado', at: new Date().toISOString() } }] },
       test: { entries: [] },
     },
   };
-  await fetch(`${ambiente.adminUrl}/admin/catalog`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(retirado, [chaveCatalogo])),
+  await fetch(`${environment.adminUrl}/admin/catalog`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(withdrawn, [catalogKey])),
   });
   await assert.rejects(
-    () => fonte.downloadArtifact({
-      origin: ambiente.origin, token: ambiente.token, manifest: man, artifact: man.artifacts[0],
-      destination: path.join(ambiente.downloads, 'retirado.tar.gz'),
+    () => sourceModule.downloadArtifact({
+      origin: environment.origin, token: environment.token, manifest: manifestDoc, artifact: manifestDoc.artifacts[0],
+      destination: path.join(environment.downloads, 'retirado.tar.gz'),
     }),
     /retirada/,
   );
@@ -334,13 +334,13 @@ test('uma versão retirada não é baixada, nem por quem já tinha o endereço',
 // ── A origem não vem da rede ───────────────────────────────────────────────
 
 test('a origem precisa ser https fora de localhost', { timeout: 30_000 }, async (context) => {
-  const ambiente = await subir();
-  context.after(() => ambiente.encerrar());
+  const environment = await start();
+  context.after(() => environment.encerrar());
   // Um `http` para fora entregaria o catálogo e a credencial a quem estiver no
   // caminho — e a assinatura provaria que o documento é autêntico sem impedir
   // que ele seja o documento *antigo*.
   await assert.rejects(
-    () => fonte.fetchCatalog({ origin: 'http://exemplo.invalido', token: ambiente.token, trustedKeys: confiaveis }),
+    () => sourceModule.fetchCatalog({ origin: 'http://exemplo.invalido', token: environment.token, trustedKeys: trusted }),
     /https/,
   );
 });

@@ -27,8 +27,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const projeto = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const pacote = resolve(projeto, 'package.json');
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageFile = resolve(projectRoot, 'package.json');
 
 /**
  * O que é gerado, e de onde.
@@ -38,16 +38,16 @@ const pacote = resolve(projeto, 'package.json');
  * dos dois lados e **não pode divergir** — a política de versão e os contratos
  * da distribuição. `tests/version.test.ts` regera e compara.
  */
-const MODULOS = [
+const MODULES = [
   { fonte: 'shared/version.ts', destino: 'desktop/version.generated.cjs' },
   { fonte: 'shared/distribution.ts', destino: 'desktop/distribution.generated.cjs' },
   { fonte: 'shared/distributionCrypto.ts', destino: 'desktop/distribution-crypto.generated.cjs' },
 ];
 
-const fonte = resolve(projeto, MODULOS[0].fonte);
-const destino = resolve(projeto, MODULOS[0].destino);
+const source = resolve(projectRoot, MODULES[0].fonte);
+const destination = resolve(projectRoot, MODULES[0].destino);
 
-const AVISO = `// ATENÇÃO: arquivo gerado por scripts/generate-version.mjs a partir de
+const GENERATED_NOTICE = `// ATENÇÃO: arquivo gerado por scripts/generate-version.mjs a partir de
 // shared/version.ts. Não edite aqui — a edição seria perdida na próxima
 // geração, e \`tests/version.test.ts\` falha quando os dois divergem.
 //
@@ -57,9 +57,9 @@ const AVISO = `// ATENÇÃO: arquivo gerado por scripts/generate-version.mjs a p
 `;
 
 /** Gera a adaptação CJS de um módulo TypeScript. */
-export function gerarModulo(caminhoRelativo) {
+export function generateModule(relativePath) {
   const { outputFiles } = buildSync({
-    entryPoints: [resolve(projeto, caminhoRelativo)],
+    entryPoints: [resolve(projectRoot, relativePath)],
     bundle: true,
     format: 'cjs',
     platform: 'node',
@@ -67,12 +67,12 @@ export function gerarModulo(caminhoRelativo) {
     write: false,
     legalComments: 'none',
   });
-  return `${AVISO}\n${outputFiles[0].text}`;
+  return `${GENERATED_NOTICE}\n${outputFiles[0].text}`;
 }
 
-export function gerar() {
+export function generate() {
   const { outputFiles } = buildSync({
-    entryPoints: [fonte],
+    entryPoints: [source],
     bundle: true,
     format: 'cjs',
     platform: 'node',
@@ -80,7 +80,7 @@ export function gerar() {
     write: false,
     legalComments: 'none',
   });
-  return `${AVISO}\n${outputFiles[0].text}`;
+  return `${GENERATED_NOTICE}\n${outputFiles[0].text}`;
 }
 
 /**
@@ -91,86 +91,86 @@ export function gerar() {
  * `buildVersion` é fixado para o electron-builder não montar `0.9.9-1.1`
  * concatenando os dois.
  */
-export { MODULOS };
+export { MODULES as MODULOS };
 
-export function camposDoPacote(version) {
-  const { revision, text } = lerVersao(version);
+export function packageFields(version) {
+  const { revision, text } = readVersion(version);
   return { buildNumber: String(revision), buildVersion: text };
 }
 
 // A leitura da versão pela implementação única, sem depender de bundler: o
 // mesmo texto gerado para o CJS é avaliado aqui.
-let lido = null;
-function lerVersao(version) {
-  if (!lido) {
-    const modulo = { exports: {} };
-    new Function('module', 'exports', 'require', gerar())(modulo, modulo.exports, () => {});
-    lido = modulo.exports;
+let parsed = null;
+function readVersion(version) {
+  if (!parsed) {
+    const loadedModule = { exports: {} };
+    new Function('module', 'exports', 'require', generate())(loadedModule, loadedModule.exports, () => {});
+    parsed = loadedModule.exports;
   }
-  return lido.requireVersion(version);
+  return parsed.requireVersion(version);
 }
 
-function sincronizarPacote(escrever) {
-  const bruto = readFileSync(pacote, 'utf8');
-  const json = JSON.parse(bruto);
-  const desejado = camposDoPacote(json.version);
-  const atualBuild = { buildNumber: json.build?.buildNumber, buildVersion: json.build?.buildVersion };
-  if (atualBuild.buildNumber === desejado.buildNumber && atualBuild.buildVersion === desejado.buildVersion) return { mudou: false };
-  if (!escrever) return { mudou: true, desejado };
-  json.build = { ...json.build, ...desejado };
+function syncPackageJson(shouldWrite) {
+  const raw = readFileSync(packageFile, 'utf8');
+  const json = JSON.parse(raw);
+  const desired = packageFields(json.version);
+  const currentBuild = { buildNumber: json.build?.buildNumber, buildVersion: json.build?.buildVersion };
+  if (currentBuild.buildNumber === desired.buildNumber && currentBuild.buildVersion === desired.buildVersion) return { mudou: false };
+  if (!shouldWrite) return { mudou: true, desejado: desired };
+  json.build = { ...json.build, ...desired };
   // Reescreve preservando a indentação de dois espaços do arquivo.
-  writeFileSync(pacote, `${JSON.stringify(json, null, 2)}\n`);
-  return { mudou: true, desejado };
+  writeFileSync(packageFile, `${JSON.stringify(json, null, 2)}\n`);
+  return { mudou: true, desejado: desired };
 }
 
 // Só a invocação direta escreve ou encerra o processo. Os testes importam
 // `gerar()` para comparar com o arquivo em disco, e um `process.exit` no topo
 // deste módulo encerraria a suíte inteira no meio.
-function principal() {
-  const conferir = process.argv.includes('--check');
-  const gerado = gerar();
-  const atual = (() => {
-    try { return readFileSync(destino, 'utf8'); } catch { return null; }
+function runCli() {
+  const checkOnly = process.argv.includes('--check');
+  const generated = generate();
+  const current = (() => {
+    try { return readFileSync(destination, 'utf8'); } catch { return null; }
   })();
 
-  let falhou = false;
-  void gerado;
-  void atual;
-  for (const modulo of MODULOS) {
-    const saida = gerarModulo(modulo.fonte);
-    const caminho = resolve(projeto, modulo.destino);
-    const emDisco = (() => {
-      try { return readFileSync(caminho, 'utf8'); } catch { return null; }
+  let failed = false;
+  void generated;
+  void current;
+  for (const loadedModule of MODULES) {
+    const output = generateModule(loadedModule.fonte);
+    const filePath = resolve(projectRoot, loadedModule.destino);
+    const onDisk = (() => {
+      try { return readFileSync(filePath, 'utf8'); } catch { return null; }
     })();
-    if (saida === emDisco) {
-      if (!conferir) console.log(`${modulo.destino} já está em dia.`);
+    if (output === onDisk) {
+      if (!checkOnly) console.log(`${loadedModule.destino} já está em dia.`);
       continue;
     }
-    if (conferir) {
-      console.error(`${modulo.destino} está fora de sincronia com ${modulo.fonte}.`);
-      falhou = true;
+    if (checkOnly) {
+      console.error(`${loadedModule.destino} está fora de sincronia com ${loadedModule.fonte}.`);
+      failed = true;
       continue;
     }
-    writeFileSync(caminho, saida);
-    console.log(`${modulo.destino} gerado a partir de ${modulo.fonte}.`);
+    writeFileSync(filePath, output);
+    console.log(`${loadedModule.destino} gerado a partir de ${loadedModule.fonte}.`);
   }
 
-  const pacoteResultado = sincronizarPacote(!conferir);
-  if (pacoteResultado.mudou) {
-    if (conferir) {
-      console.error(`package.json: build.buildNumber/buildVersion deveriam ser ${JSON.stringify(pacoteResultado.desejado)}.`);
-      falhou = true;
+  const packageOutcome = syncPackageJson(!checkOnly);
+  if (packageOutcome.mudou) {
+    if (checkOnly) {
+      console.error(`package.json: build.buildNumber/buildVersion deveriam ser ${JSON.stringify(packageOutcome.desejado)}.`);
+      failed = true;
     } else {
-      console.log(`package.json: build.buildNumber=${pacoteResultado.desejado.buildNumber}, build.buildVersion=${pacoteResultado.desejado.buildVersion}.`);
+      console.log(`package.json: build.buildNumber=${packageOutcome.desejado.buildNumber}, build.buildVersion=${packageOutcome.desejado.buildVersion}.`);
     }
-  } else if (!conferir) {
+  } else if (!checkOnly) {
     console.log('package.json já está em dia.');
   }
 
-  if (falhou) console.error('Rode: node scripts/generate-version.mjs');
-  return falhou ? 1 : 0;
+  if (failed) console.error('Rode: node scripts/generate-version.mjs');
+  return failed ? 1 : 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exit(principal());
+  process.exit(runCli());
 }

@@ -13,24 +13,24 @@ import { CONTRACT_VERSION } from '../shared/distribution';
 // publicação — aparece na máquina de quem instalou, como um instalador do
 // Windows entregue a uma cópia de Linux.
 
-async function comPasta(corpo: (dir: string) => Promise<void>): Promise<void> {
+async function withFolder(body: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), 'tumacord-pacotes-'));
   try {
-    await corpo(dir);
+    await body(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
-const NOMES = [
+const NAMES = [
   'tumacord-0.9.10.tar.gz',
   'Tumacord-0.9.10.AppImage',
   'Tumacord-0.9.10-Setup.exe',
   'Tumacord-0.9.10-portable.exe',
 ];
 
-async function escrever(dir: string, nomes: string[], tamanho = 1024): Promise<void> {
-  for (const nome of nomes) await writeFile(path.join(dir, nome), Buffer.alloc(tamanho, 7));
+async function writePackages(dir: string, names: string[], size = 1024): Promise<void> {
+  for (const name of names) await writeFile(path.join(dir, name), Buffer.alloc(size, 7));
 }
 
 // ── Reconhecimento ─────────────────────────────────────────────────────────
@@ -47,8 +47,8 @@ test('cada jeito de instalar tem um padrão exato', () => {
 });
 
 test('uma pasta completa produz os quatro pacotes, com resumo e tamanho', async () => {
-  await comPasta(async (dir) => {
-    await escrever(dir, NOMES, 2048);
+  await withFolder(async (dir) => {
+    await writePackages(dir, NAMES, 2048);
     const { artifacts, missing, ambiguous } = await scanPackages(dir, '0.9.10');
     assert.deepEqual(ambiguous, []);
     assert.deepEqual(missing, []);
@@ -69,29 +69,29 @@ test('uma pasta completa produz os quatro pacotes, com resumo e tamanho', async 
 // de virar sorteio. Ela é exercida aqui pela lista de nomes, que é o que
 // `scanPackages` passa adiante.
 test('dois nomes para o mesmo alvo param a publicação, em vez de virar sorteio', () => {
-  const comDuplicata = ['tumacord-0.9.10.tar.gz', 'tumacord-0.9.10.tar.gz'];
-  const resultado = matchArtifacts(comDuplicata, '0.9.10');
-  assert.equal(resultado.ambiguous.length, 1);
-  assert.equal(resultado.ambiguous[0].installKind, 'linux-managed');
-  assert.deepEqual(resultado.ambiguous[0].files, comDuplicata);
+  const withDuplicate = ['tumacord-0.9.10.tar.gz', 'tumacord-0.9.10.tar.gz'];
+  const outcome = matchArtifacts(withDuplicate, '0.9.10');
+  assert.equal(outcome.ambiguous.length, 1);
+  assert.equal(outcome.ambiguous[0].installKind, 'linux-managed');
+  assert.deepEqual(outcome.ambiguous[0].files, withDuplicate);
   // E o alvo ambíguo **não** entra nos escolhidos: nada é publicado dele.
-  assert.equal(resultado.chosen.some((item: { spec: { installKind: string } }) => item.spec.installKind === 'linux-managed'), false);
+  assert.equal(outcome.chosen.some((item: { spec: { installKind: string } }) => item.spec.installKind === 'linux-managed'), false);
 });
 
 test('a lista de nomes decide igual ao disco', () => {
-  const resultado = matchArtifacts(NOMES, '0.9.10');
-  assert.deepEqual(resultado.ambiguous, []);
-  assert.deepEqual(resultado.missing, []);
-  assert.equal(resultado.chosen.length, 4);
+  const outcome = matchArtifacts(NAMES, '0.9.10');
+  assert.deepEqual(outcome.ambiguous, []);
+  assert.deepEqual(outcome.missing, []);
+  assert.equal(outcome.chosen.length, 4);
   // Nomes de outra versão e lixo da pasta não entram.
-  const sujo = matchArtifacts([...NOMES, 'tumacord-0.9.9.tar.gz', 'latest.yml', 'builder-debug.yml'], '0.9.10');
-  assert.equal(sujo.chosen.length, 4);
-  assert.deepEqual(sujo.ambiguous, []);
+  const stale = matchArtifacts([...NAMES, 'tumacord-0.9.9.tar.gz', 'latest.yml', 'builder-debug.yml'], '0.9.10');
+  assert.equal(stale.chosen.length, 4);
+  assert.deepEqual(stale.ambiguous, []);
 });
 
 test('um pacote vazio não vira artefato: ele vira ambiguidade dita', async () => {
-  await comPasta(async (dir) => {
-    await escrever(dir, NOMES);
+  await withFolder(async (dir) => {
+    await writePackages(dir, NAMES);
     await writeFile(path.join(dir, 'tumacord-0.9.10.tar.gz'), Buffer.alloc(0));
     const { artifacts, ambiguous } = await scanPackages(dir, '0.9.10');
     assert.equal(artifacts.length, 3);
@@ -102,9 +102,9 @@ test('um pacote vazio não vira artefato: ele vira ambiguidade dita', async () =
 });
 
 test('faltar um formato é dito, e não vira surpresa', async () => {
-  await comPasta(async (dir) => {
+  await withFolder(async (dir) => {
     // Uma build só de Linux é legítima — mas precisa ser uma decisão.
-    await escrever(dir, NOMES.filter((nome) => !nome.endsWith('.exe')));
+    await writePackages(dir, NAMES.filter((name) => !name.endsWith('.exe')));
     const { artifacts, missing } = await scanPackages(dir, '0.9.10');
     assert.equal(artifacts.length, 2);
     assert.deepEqual(missing.sort(), ['windows-installed', 'windows-portable']);
@@ -112,8 +112,8 @@ test('faltar um formato é dito, e não vira surpresa', async () => {
 });
 
 test('o pacote da versão anterior na mesma pasta não entra nesta release', async () => {
-  await comPasta(async (dir) => {
-    await escrever(dir, ['tumacord-0.9.9.tar.gz', 'Tumacord-0.9.9-Setup.exe']);
+  await withFolder(async (dir) => {
+    await writePackages(dir, ['tumacord-0.9.9.tar.gz', 'Tumacord-0.9.9-Setup.exe']);
     const { artifacts, missing } = await scanPackages(dir, '0.9.10');
     assert.equal(artifacts.length, 0);
     assert.equal(missing.length, 4);
@@ -125,40 +125,40 @@ test('uma pasta que não existe falha dizendo qual', async () => {
 });
 
 test('o resumo é o do conteúdo, e dois conteúdos diferentes não colidem', async () => {
-  await comPasta(async (dir) => {
+  await withFolder(async (dir) => {
     const a = path.join(dir, 'a.bin');
     const b = path.join(dir, 'b.bin');
     await writeFile(a, Buffer.alloc(4096, 1));
     await writeFile(b, Buffer.alloc(4096, 2));
-    const [resumoA, resumoB] = [await sha256OfFile(a), await sha256OfFile(b)];
-    assert.match(resumoA, /^[0-9a-f]{64}$/);
-    assert.notEqual(resumoA, resumoB);
-    assert.equal(await sha256OfFile(a), resumoA, 'o mesmo conteúdo dá o mesmo resumo');
+    const [digestA, digestB] = [await sha256OfFile(a), await sha256OfFile(b)];
+    assert.match(digestA, /^[0-9a-f]{64}$/);
+    assert.notEqual(digestA, digestB);
+    assert.equal(await sha256OfFile(a), digestA, 'o mesmo conteúdo dá o mesmo resumo');
   });
 });
 
 // ── Manifesto ──────────────────────────────────────────────────────────────
 
 test('o manifesto não carrega o caminho local dos arquivos', async () => {
-  await comPasta(async (dir) => {
-    await escrever(dir, NOMES);
+  await withFolder(async (dir) => {
+    await writePackages(dir, NAMES);
     const { artifacts } = await scanPackages(dir, '0.9.10');
     const manifest = buildManifest({
       version: '0.9.10', commit: 'a'.repeat(40), channel: 'stable',
       artifacts, keyId: 'chave-1', contract: CONTRACT_VERSION,
     });
-    const texto = JSON.stringify(manifest);
+    const text = JSON.stringify(manifest);
     // O caminho da máquina de quem publicou não interessa a ninguém, e ele
     // revelaria a estrutura de pastas dessa máquina a quem baixar.
-    assert.equal(texto.includes(dir), false);
-    assert.equal(texto.includes('sourcePath'), false);
+    assert.equal(text.includes(dir), false);
+    assert.equal(text.includes('sourcePath'), false);
     assert.equal(manifest.releaseId, 'rel_stable_0-9-10');
     for (const artifact of manifest.artifacts) assert.equal(artifact.signatureKeyId, 'chave-1');
   });
 });
 
 test('as notas saem do CHANGELOG, e só a seção da versão', async () => {
-  await comPasta(async (dir) => {
+  await withFolder(async (dir) => {
     const changelog = path.join(dir, 'CHANGELOG.md');
     await writeFile(changelog, [
       '# Histórico de versões', '',
@@ -176,7 +176,7 @@ test('as notas saem do CHANGELOG, e só a seção da versão', async () => {
 });
 
 test('sem seção no CHANGELOG, não há notas inventadas', async () => {
-  await comPasta(async (dir) => {
+  await withFolder(async (dir) => {
     const changelog = path.join(dir, 'CHANGELOG.md');
     await writeFile(changelog, '# Histórico de versões\n\n## 0.9.9 — a de antes\n\nCoisa.\n');
     assert.deepEqual(await notesFromChangelog(changelog, '0.9.10'), { title: '', notes: '' });
@@ -187,82 +187,82 @@ test('sem seção no CHANGELOG, não há notas inventadas', async () => {
 // ── Catálogo ───────────────────────────────────────────────────────────────
 
 const TTL = 7 * 24 * 60 * 60 * 1000;
-const agora = Date.parse('2026-09-20T12:00:00.000Z');
+const now = Date.parse('2026-09-20T12:00:00.000Z');
 
-const manifesto = (version: string, releaseId = `rel_stable_${version.replace(/[^0-9a-z]/gi, '-')}`) => ({
+const manifestDoc = (version: string, releaseId = `rel_stable_${version.replace(/[^0-9a-z]/gi, '-')}`) => ({
   contract: CONTRACT_VERSION, releaseId, version, channel: 'stable' as const,
-  commit: '0'.repeat(40), createdAt: new Date(agora).toISOString(), artifacts: [],
+  commit: '0'.repeat(40), createdAt: new Date(now).toISOString(), artifacts: [],
 });
 
 test('a primeira publicação parte da sequência zero e vai para um', () => {
-  const vazio = emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL });
-  assert.equal(vazio.sequence, 0);
-  const proximo = withRelease(vazio, { manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL });
-  assert.equal(proximo.sequence, 1);
-  assert.equal(proximo.channels.stable.entries.length, 1);
-  assert.equal(proximo.channels.stable.entries[0].state, 'published');
-  assert.equal(proximo.channels.stable.entries[0].manifestSha256, 'a'.repeat(64));
+  const empty = emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL });
+  assert.equal(empty.sequence, 0);
+  const next = withRelease(empty, { manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL });
+  assert.equal(next.sequence, 1);
+  assert.equal(next.channels.stable.entries.length, 1);
+  assert.equal(next.channels.stable.entries[0].state, 'published');
+  assert.equal(next.channels.stable.entries[0].manifestSha256, 'a'.repeat(64));
 });
 
 test('republicar a mesma release sob o mesmo número é permitido', () => {
   // É o que acontece ao renovar a validade do catálogo.
-  const primeiro = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL,
+  const first = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL,
   });
-  const segundo = withRelease(primeiro, {
-    manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora + 1000, ttlMs: TTL,
+  const second = withRelease(first, {
+    manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now + 1000, ttlMs: TTL,
   });
-  assert.equal(segundo.sequence, 2);
-  assert.equal(segundo.channels.stable.entries.length, 1);
+  assert.equal(second.sequence, 2);
+  assert.equal(second.channels.stable.entries.length, 1);
   // A data da primeira publicação é preservada: ela é quando a versão saiu.
-  assert.equal(segundo.channels.stable.entries[0].publishedAt, primeiro.channels.stable.entries[0].publishedAt);
+  assert.equal(second.channels.stable.entries[0].publishedAt, first.channels.stable.entries[0].publishedAt);
 });
 
 test('o mesmo número apontando para outra release é recusado', () => {
-  const primeiro = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL,
+  const first = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL,
   });
   assert.throws(
-    () => withRelease(primeiro, { manifest: manifesto('0.9.10', 'rel_stable_outra'), manifestSha256: 'b'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL }),
+    () => withRelease(first, { manifest: manifestDoc('0.9.10', 'rel_stable_outra'), manifestSha256: 'b'.repeat(64), channel: 'stable', now: now, ttlMs: TTL }),
     /não volta a ser usado para conteúdo diferente/,
   );
 });
 
 test('retirar aumenta a sequência sem oferecer nada novo', () => {
-  const publicado = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL,
+  const published = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL,
   });
-  const retirado = withWithdrawal(publicado, { releaseId: 'rel_stable_0-9-10', reason: 'o áudio sai errado', channel: 'stable', now: agora, ttlMs: TTL });
-  assert.equal(retirado.sequence, publicado.sequence + 1);
-  assert.equal(retirado.channels.stable.entries[0].state, 'withdrawn');
-  assert.equal(retirado.channels.stable.entries[0].withdrawn?.reason, 'o áudio sai errado');
+  const withdrawn = withWithdrawal(published, { releaseId: 'rel_stable_0-9-10', reason: 'o áudio sai errado', channel: 'stable', now: now, ttlMs: TTL });
+  assert.equal(withdrawn.sequence, published.sequence + 1);
+  assert.equal(withdrawn.channels.stable.entries[0].state, 'withdrawn');
+  assert.equal(withdrawn.channels.stable.entries[0].withdrawn?.reason, 'o áudio sai errado');
   // A entrada continua na lista, dita. Sumir faria quem conferisse concluir
   // que o aplicativo está atrasado.
-  assert.equal(retirado.channels.stable.entries.length, 1);
+  assert.equal(withdrawn.channels.stable.entries.length, 1);
 });
 
 test('uma retirada sem motivo é recusada', () => {
-  const publicado = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: manifesto('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL,
+  const published = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: manifestDoc('0.9.10'), manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL,
   });
   // O motivo aparece na tela de quem tentar instalar. Sem ele, a pessoa vê uma
   // versão sumir e não sabe se o problema é dela.
-  assert.throws(() => withWithdrawal(publicado, { releaseId: 'rel_stable_0-9-10', reason: '  ', channel: 'stable', now: agora, ttlMs: TTL }), /motivo/);
+  assert.throws(() => withWithdrawal(published, { releaseId: 'rel_stable_0-9-10', reason: '  ', channel: 'stable', now: now, ttlMs: TTL }), /motivo/);
 });
 
 test('retirar o que não está publicado é recusado', () => {
-  const vazio = emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL });
-  assert.throws(() => withWithdrawal(vazio, { releaseId: 'rel_stable_0-9-10', reason: 'x', channel: 'stable', now: agora, ttlMs: TTL }), /não está publicada/);
+  const empty = emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL });
+  assert.throws(() => withWithdrawal(empty, { releaseId: 'rel_stable_0-9-10', reason: 'x', channel: 'stable', now: now, ttlMs: TTL }), /não está publicada/);
 });
 
 test('a validação recusa sequência que não cresce e versão duplicada', () => {
-  const atual = { ...emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), sequence: 5 };
-  assert.match(validateNext({ ...atual, sequence: 5 }, atual), /precisa crescer/);
-  assert.match(validateNext({ ...atual, sequence: 4 }, atual), /precisa crescer/);
-  assert.equal(validateNext({ ...atual, sequence: 6 }, atual), '');
+  const current = { ...emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), sequence: 5 };
+  assert.match(validateNext({ ...current, sequence: 5 }, current), /precisa crescer/);
+  assert.match(validateNext({ ...current, sequence: 4 }, current), /precisa crescer/);
+  assert.equal(validateNext({ ...current, sequence: 6 }, current), '');
 
-  const duplicado = {
-    ...atual, sequence: 6,
+  const duplicated = {
+    ...current, sequence: 6,
     channels: {
       stable: { entries: [
         { releaseId: 'a', version: '0.9.10', state: 'published', publishedAt: '', manifestSha256: '' },
@@ -271,21 +271,21 @@ test('a validação recusa sequência que não cresce e versão duplicada', () =
       test: { entries: [] },
     },
   };
-  assert.match(validateNext(duplicado, atual), /duas vezes/);
+  assert.match(validateNext(duplicated, current), /duas vezes/);
 });
 
 test('uma parada obrigatória do manifesto entra na entrada do catálogo', () => {
-  const comParada = { ...manifesto('0.9.10'), requiredStop: { reason: 'ela converte os dados do formato anterior' } };
-  const proximo = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: comParada, manifestSha256: 'a'.repeat(64), channel: 'stable', now: agora, ttlMs: TTL,
+  const withStop = { ...manifestDoc('0.9.10'), requiredStop: { reason: 'ela converte os dados do formato anterior' } };
+  const next = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: withStop, manifestSha256: 'a'.repeat(64), channel: 'stable', now: now, ttlMs: TTL,
   });
-  assert.deepEqual(proximo.channels.stable.entries[0].requiredStop, { reason: 'ela converte os dados do formato anterior' });
+  assert.deepEqual(next.channels.stable.entries[0].requiredStop, { reason: 'ela converte os dados do formato anterior' });
 });
 
 test('os canais são independentes', () => {
-  const noTeste = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: agora, ttlMs: TTL }), {
-    manifest: { ...manifesto('0.9.11'), channel: 'test' as never }, manifestSha256: 'c'.repeat(64), channel: 'test', now: agora, ttlMs: TTL,
+  const inTestChannel = withRelease(emptyCatalog({ contract: CONTRACT_VERSION, now: now, ttlMs: TTL }), {
+    manifest: { ...manifestDoc('0.9.11'), channel: 'test' as never }, manifestSha256: 'c'.repeat(64), channel: 'test', now: now, ttlMs: TTL,
   });
-  assert.equal(noTeste.channels.test.entries.length, 1);
-  assert.equal(noTeste.channels.stable.entries.length, 0, 'publicar no ensaio não mexe no estável');
+  assert.equal(inTestChannel.channels.test.entries.length, 1);
+  assert.equal(inTestChannel.channels.stable.entries.length, 0, 'publicar no ensaio não mexe no estável');
 });

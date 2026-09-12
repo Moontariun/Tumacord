@@ -333,57 +333,57 @@ function ConfirmDialog({ title, body, confirmLabel, onConfirm, onClose }: { titl
  * enquanto o servidor responde, o erro que o servidor devolveu, cancelamento,
  * e foco/rótulos que um leitor de tela entenda.
  */
-function NovoCanalModal({ type, onCreate, onClose }: { type: Channel['type']; onCreate: (type: Channel['type'], name: string) => Promise<{ ok: boolean; error?: string }>; onClose: () => void }) {
-  const [nome, setNome] = useState('');
-  const [enviando, setEnviando] = useState(false);
-  const [erro, setErro] = useState('');
-  const campo = useRef<HTMLInputElement>(null);
-  useEffect(() => { campo.current?.focus(); }, []);
+function NewChannelModal({ type, onCreate, onClose }: { type: Channel['type']; onCreate: (type: Channel['type'], name: string) => Promise<{ ok: boolean; error?: string }>; onClose: () => void }) {
+  const [draftName, setChannelName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [failure, setFailure] = useState('');
+  const nameInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { nameInput.current?.focus(); }, []);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !enviando) onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !submitting) onClose(); };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [enviando, onClose]);
+  }, [submitting, onClose]);
 
-  const limpo = nome.trim();
+  const trimmed = draftName.trim();
   // As mesmas regras do servidor, aqui só para avisar antes: quem recusa de
   // verdade é ele.
-  const invalido = limpo.length < 1 ? 'Escreva um nome.' : limpo.length > 32 ? 'O nome cabe em 32 caracteres.' : '';
+  const validationMessage = trimmed.length < 1 ? 'Escreva um nome.' : trimmed.length > 32 ? 'O nome cabe em 32 caracteres.' : '';
 
-  const enviar = async (event: React.FormEvent) => {
+  const submitForm = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (enviando || invalido) return;
-    setEnviando(true);
-    setErro('');
-    const resultado = await onCreate(type, limpo);
+    if (submitting || validationMessage) return;
+    setSubmitting(true);
+    setFailure('');
+    const outcome = await onCreate(type, trimmed);
     // Só fecha depois da confirmação. Fechar no clique faria um nome recusado
     // desaparecer sem explicação — e foi isso que o `prompt` fazia.
-    if (resultado.ok) { onClose(); return; }
-    setEnviando(false);
-    setErro(resultado.error ?? 'Não consegui criar o canal.');
+    if (outcome.ok) { onClose(); return; }
+    setSubmitting(false);
+    setFailure(outcome.error ?? 'Não consegui criar o canal.');
   };
 
-  const titulo = type === 'voice' ? 'Nova call' : 'Novo canal de texto';
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (!enviando && event.target === event.currentTarget) onClose(); }}>
-    <form className="confirm-dialog novo-canal" role="dialog" aria-modal="true" aria-labelledby="novo-canal-titulo" onSubmit={(event) => void enviar(event)}>
-      <h2 id="novo-canal-titulo">{titulo}</h2>
+  const heading = type === 'voice' ? 'Nova call' : 'Novo canal de texto';
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (!submitting && event.target === event.currentTarget) onClose(); }}>
+    <form className="confirm-dialog novo-canal" role="dialog" aria-modal="true" aria-labelledby="novo-canal-titulo" onSubmit={(event) => void submitForm(event)}>
+      <h2 id="novo-canal-titulo">{heading}</h2>
       <label className="novo-canal-campo">
         <span>Nome</span>
         <input
-          ref={campo}
-          value={nome}
+          ref={nameInput}
+          value={draftName}
           maxLength={32}
-          disabled={enviando}
-          onChange={(event) => { setNome(event.target.value); setErro(''); }}
+          disabled={submitting}
+          onChange={(event) => { setChannelName(event.target.value); setFailure(''); }}
           placeholder={type === 'voice' ? 'Jogatina' : 'assuntos-gerais'}
-          aria-describedby={erro || (nome && invalido) ? 'novo-canal-erro' : undefined}
-          aria-invalid={Boolean(erro || (nome && invalido))}
+          aria-describedby={failure || (draftName && validationMessage) ? 'novo-canal-erro' : undefined}
+          aria-invalid={Boolean(failure || (draftName && validationMessage))}
         />
       </label>
-      {(erro || (nome && invalido)) && <p className="novo-canal-erro" id="novo-canal-erro" role="alert">{erro || invalido}</p>}
+      {(failure || (draftName && validationMessage)) && <p className="novo-canal-erro" id="novo-canal-erro" role="alert">{failure || validationMessage}</p>}
       <div className="confirm-actions">
-        <button type="button" onClick={onClose} disabled={enviando}>Cancelar</button>
-        <button type="submit" className="primary" disabled={enviando || Boolean(invalido)}>{enviando ? 'Criando…' : 'Criar'}</button>
+        <button type="button" onClick={onClose} disabled={submitting}>Cancelar</button>
+        <button type="submit" className="primary" disabled={submitting || Boolean(validationMessage)}>{submitting ? 'Criando…' : 'Criar'}</button>
       </div>
     </form>
   </div>;
@@ -438,7 +438,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const devices = useDevices();
   const [boardPromptOpen, setBoardPromptOpen] = useState(false);
   /** O tipo de canal que o modal de criação está pedindo, ou `null`. */
-  const [novoCanal, setNovoCanal] = useState<Channel['type'] | null>(null);
+  const [creatingChannelType, setCreatingChannelType] = useState<Channel['type'] | null>(null);
   // De onde vem o que este computador guarda.
   //
   // No P2P a resposta é imediata: a chave do convite identifica o grupo, e ela
@@ -479,11 +479,11 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const selectedChannelRef = useRef(selectedChannelId);
   // O valor que os três caminhos de replicação consultam. Ele já tem o modo
   // embutido: no dedicado a preferência do P2P não atravessa.
-  const replicaAnexos = attachmentSyncEnabled(session.connectionMode, syncFiles);
-  const mostraSincronizacao = attachmentSyncVisible(session.connectionMode);
-  const syncFilesRef = useRef(replicaAnexos);
+  const replicatesAttachments = attachmentSyncEnabled(session.connectionMode, syncFiles);
+  const showsAttachmentSync = attachmentSyncVisible(session.connectionMode);
+  const syncFilesRef = useRef(replicatesAttachments);
   useEffect(() => { selectedChannelRef.current = selectedChannelId; }, [selectedChannelId]);
-  useEffect(() => { syncFilesRef.current = replicaAnexos; }, [replicaAnexos]);
+  useEffect(() => { syncFilesRef.current = replicatesAttachments; }, [replicatesAttachments]);
 
   const showToast = useCallback((text: string, sound?: FeedbackSound) => {
     setToast(text);
@@ -910,7 +910,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const downloadAttachment = async (attachment: ChatAttachment) => {
     try {
       const contents = await resolveAttachment(socket, attachment, session.serverUrl, session.token);
-      if (replicaAnexos) await cacheAttachment(socket, attachment, session.serverUrl, session.token);
+      if (replicatesAttachments) await cacheAttachment(socket, attachment, session.serverUrl, session.token);
       downloadBlob(contents, attachment.name);
     } catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao baixar o arquivo.'); }
   };
@@ -918,7 +918,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const changeFileSync = (enabled: boolean) => {
     // O controle não existe no dedicado, e a mesma regra vale aqui: um caminho
     // que ligasse a replicação por outra porta desfaria o ponto.
-    if (!mostraSincronizacao) return;
+    if (!showsAttachmentSync) return;
     setSyncFiles(enabled);
     syncFilesRef.current = attachmentSyncEnabled(session.connectionMode, enabled);
     localStorage.setItem(ATTACHMENT_SYNC_KEY, String(enabled));
@@ -966,27 +966,27 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   // e o que volta é uma string ou `null`. E o emit era disparado sem
   // acknowledge — um nome recusado pelo servidor sumia sem explicação, e um
   // clique repetido mandava dois pedidos.
-  const criarCanal = useCallback(async (type: Channel['type'], name: string): Promise<{ ok: boolean; error?: string }> => {
+  const requestChannelCreation = useCallback(async (type: Channel['type'], name: string): Promise<{ ok: boolean; error?: string }> => {
     if (!socket) return { ok: false, error: 'Sem conexão com o servidor. Tente de novo em instantes.' };
     return new Promise((resolve) => {
-      let respondido = false;
+      let answered = false;
       // Sucesso só depois da confirmação. Sem prazo, um servidor que não
       // responde deixaria o modal girando para sempre.
-      const relogio = window.setTimeout(() => {
-        if (respondido) return;
-        respondido = true;
+      const deadline = window.setTimeout(() => {
+        if (answered) return;
+        answered = true;
         resolve({ ok: false, error: 'O servidor não respondeu. O canal pode ter sido criado — confira a lista antes de tentar de novo.' });
       }, 10_000);
-      socket.emit('channel:create', { name, type }, (resposta: { ok?: boolean; error?: string } | undefined) => {
-        if (respondido) return;
-        respondido = true;
-        window.clearTimeout(relogio);
-        if (resposta?.ok) {
+      socket.emit('channel:create', { name, type }, (reply: { ok?: boolean; error?: string } | undefined) => {
+        if (answered) return;
+        answered = true;
+        window.clearTimeout(deadline);
+        if (reply?.ok) {
           showToast(type === 'voice' ? 'Call criada.' : 'Canal criado.');
           resolve({ ok: true });
           return;
         }
-        resolve({ ok: false, error: resposta?.error || 'Não consegui criar o canal.' });
+        resolve({ ok: false, error: reply?.error || 'Não consegui criar o canal.' });
       });
     });
   }, [showToast, socket]);
@@ -1003,7 +1003,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   // Esconder o botão é conveniência: quem decide de verdade é o servidor, sobre
   // o papel persistido, e um cliente que chame o socket direto passa pela mesma
   // conferência.
-  const podeCriarCanal = isServerAdmin;
+  const canCreateChannel = isServerAdmin;
   const activeRemoteScreen = voice.remoteMedia.find((media) => media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));
   const browsingText = selectedChannel?.type !== 'voice';
   const backgroundVoiceMedia = browsingText ? voice.remoteMedia.filter((media) => media.stream.getVideoTracks().length === 0) : [];
@@ -1027,10 +1027,10 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
           <button className="direct-link-button" onClick={() => setJoinInviteOpen(true)}><Icon name="server" /><span><strong>Entrar por convite</strong><small>Cole o código de quem já está na call</small></span></button>
         </section>}
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
-        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={podeCriarCanal ? () => setNovoCanal('text') : undefined}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={canCreateChannel ? () => setCreatingChannelType('text') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
         </ChannelGroup>
-        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={podeCriarCanal ? () => setNovoCanal('voice') : undefined}>
+        <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={canCreateChannel ? () => setCreatingChannelType('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
             {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
@@ -1123,7 +1123,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
           ? <Boundary title="A mesa precisou ser redesenhada"><Whiteboard session={boards.active} api={boards} currentUserId={session.user.id} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={boards.close} /></Boundary>
           : selectedChannel?.type === 'voice'
           ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
-          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={replicaAnexos} showFileSync={mostraSincronizacao} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
+          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={replicatesAttachments} showFileSync={showsAttachmentSync} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
         {memberListOpen && !boards.active && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
@@ -1144,7 +1144,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
       onClose={() => setAApagar(null)}
     />}
     {boardPromptOpen && <NewBoardModal channelName={selectedChannel?.name ?? 'geral'} onCreate={createBoard} onClose={() => setBoardPromptOpen(false)} />}
-    {novoCanal && podeCriarCanal && <NovoCanalModal type={novoCanal} onCreate={criarCanal} onClose={() => setNovoCanal(null)} />}
+    {creatingChannelType && canCreateChannel && <NewChannelModal type={creatingChannelType} onCreate={requestChannelCreation} onClose={() => setCreatingChannelType(null)} />}
     {adminOpen && <AdminPanel serverUrl={session.serverUrl} token={session.token} currentUserId={session.user.id} onClose={() => setAdminOpen(false)} onNotice={showToast} />}
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} withAudio={shareAudio && voice.screenAudioSupport.supported !== false} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
@@ -1364,11 +1364,11 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
     else if (document.fullscreenElement === stageRef.current) void document.exitFullscreen().catch(() => undefined);
   }, []);
   // Com um quadro só, a tela cheia do próprio quadro já faz isto e melhor.
-  const podeGradeCheia = videoCount > 1 && !theaterMediaKey;
+  const canFillStage = videoCount > 1 && !theaterMediaKey;
 
   return <main className="call-view">
     <div ref={stageRef} className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''} ${stageFullscreen ? 'is-stage-fullscreen' : ''}`}>
-      {(podeGradeCheia || stageFullscreen) && <button
+      {(canFillStage || stageFullscreen) && <button
         className="stage-fullscreen"
         onClick={() => void toggleStageFullscreen()}
         title={stageFullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia com todas as lives abertas'}
@@ -1659,12 +1659,12 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
  * conseguir chegar nela.
  */
 function TileVolumeButton({ control }: { control: TileVolume }) {
-  const porcentagem = Math.round(control.volume * 100);
+  const percent = Math.round(control.volume * 100);
   return <div className="tile-volume">
     <button
       className={control.muted ? 'is-muted' : ''}
       onClick={() => control.onMuted(!control.muted)}
-      title={control.muted ? 'Ouvir esta live de novo' : `Silenciar esta live (${porcentagem}%)`}
+      title={control.muted ? 'Ouvir esta live de novo' : `Silenciar esta live (${percent}%)`}
       aria-label={control.muted ? 'Ouvir esta live de novo' : 'Silenciar esta live'}
     ><Icon name={control.muted ? 'volumeOff' : 'volume'} /></button>
     <div className="tile-volume-slider">
@@ -1673,17 +1673,17 @@ function TileVolumeButton({ control }: { control: TileVolume }) {
         min={0}
         max={200}
         step={5}
-        value={control.muted ? 0 : porcentagem}
-        aria-label={`Volume desta live: ${porcentagem}%`}
+        value={control.muted ? 0 : percent}
+        aria-label={`Volume desta live: ${percent}%`}
         onChange={(event) => {
-          const proximo = Number(event.target.value) / 100;
+          const nextVolume = Number(event.target.value) / 100;
           // Mexer na barra com a live muda é o jeito mais natural de pedir
           // para voltar a ouvir: silenciar de novo é um clique no ícone.
-          if (control.muted && proximo > 0) control.onMuted(false);
-          control.onVolume(proximo);
+          if (control.muted && nextVolume > 0) control.onMuted(false);
+          control.onVolume(nextVolume);
         }}
       />
-      <small>{control.muted ? 'mudo' : `${porcentagem}%`}</small>
+      <small>{control.muted ? 'mudo' : `${percent}%`}</small>
     </div>
   </div>;
 }
@@ -1748,11 +1748,11 @@ function MediaElement({ stream, muted, volume = 1, speakerId, audioOnly, remote,
       //
       // É o suspeito do relato de que mutar alguém não vale quando a pessoa
       // entra na call depois, e que só desmutar e mutar de novo resolve.
-      const vigia = window.setInterval(applyDirect, 4_000);
+      const reapplyTimer = window.setInterval(applyDirect, 4_000);
       for (const track of audioTracks) track.addEventListener('unmute', applyDirect);
       applyDirect();
       return () => {
-        window.clearInterval(vigia);
+        window.clearInterval(reapplyTimer);
         for (const track of audioTracks) track.removeEventListener('unmute', applyDirect);
         syncPlayback.current = () => undefined;
         applyTrackGate(false);

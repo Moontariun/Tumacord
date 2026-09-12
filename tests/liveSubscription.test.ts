@@ -15,7 +15,7 @@ import { type LocalTrack, type PeerSender, planPeerMediaSync } from '../src/lib/
 //
 // Todos os casos deste arquivo reprovam no código da 0.9.9.
 
-const conectados = (...ids: string[]) => new Set(ids);
+const connected = (...ids: string[]) => new Set(ids);
 
 // ── O defeito relatado: a live cai e só volta reabrindo o aplicativo ────────
 //
@@ -27,17 +27,17 @@ const conectados = (...ids: string[]) => new Set(ids);
 
 test('um enlace refeito faz o pedido de assistir sair de novo', () => {
   const intent: WatchIntent = { 'socket-ana': 'tela-1' };
-  const enviados = new Map([['socket-ana', 'tela-1']]);
+  const sent = new Map([['socket-ana', 'tela-1']]);
 
   // Em regime, nada é reemitido: o outro lado já sabe.
-  assert.deepEqual(pendingWatchRequests(intent, enviados, conectados('socket-ana')), []);
+  assert.deepEqual(pendingWatchRequests(intent, sent, connected('socket-ana')), []);
 
   // O enlace é reconstruído — recuperação forçada, troca de host no P2P,
   // reconexão. `createPeer` zera o que foi enviado naquela geração, porque o
   // `watchingStream` do outro lado nasceu vazio.
-  enviados.delete('socket-ana');
+  sent.delete('socket-ana');
   assert.deepEqual(
-    pendingWatchRequests(intent, enviados, conectados('socket-ana')),
+    pendingWatchRequests(intent, sent, connected('socket-ana')),
     [{ peerId: 'socket-ana', streamId: 'tela-1' }],
     'sem isto a live não volta, e reabrir o aplicativo é a única saída',
   );
@@ -47,20 +47,20 @@ test('a intenção sobrevive à queda do enlace e é reafirmada quando ele volta
   const intent: WatchIntent = { 'socket-ana': 'tela-1' };
   // Enquanto o peer não está conectado, não há a quem pedir — e a intenção
   // não é descartada por isso.
-  assert.deepEqual(pendingWatchRequests(intent, new Map(), conectados()), []);
-  assert.deepEqual(pendingWatchRequests(intent, new Map(), conectados('socket-ana')), [
+  assert.deepEqual(pendingWatchRequests(intent, new Map(), connected()), []);
+  assert.deepEqual(pendingWatchRequests(intent, new Map(), connected('socket-ana')), [
     { peerId: 'socket-ana', streamId: 'tela-1' },
   ]);
 });
 
 test('quem não pediu para assistir não recebe pedido nenhum', () => {
-  assert.deepEqual(pendingWatchRequests({}, new Map(), conectados('socket-ana', 'socket-bia')), []);
+  assert.deepEqual(pendingWatchRequests({}, new Map(), connected('socket-ana', 'socket-bia')), []);
 });
 
 test('duas lives ao mesmo tempo não se confundem', () => {
   const intent: WatchIntent = { 'socket-ana': 'tela-ana', 'socket-bia': 'tela-bia' };
-  const enviados = new Map([['socket-ana', 'tela-ana']]);
-  assert.deepEqual(pendingWatchRequests(intent, enviados, conectados('socket-ana', 'socket-bia')), [
+  const sent = new Map([['socket-ana', 'tela-ana']]);
+  assert.deepEqual(pendingWatchRequests(intent, sent, connected('socket-ana', 'socket-bia')), [
     { peerId: 'socket-bia', streamId: 'tela-bia' },
   ]);
 });
@@ -73,8 +73,8 @@ test('reconectar à mesma live restaura a intenção; uma live nova exige nova e
   assert.deepEqual(intentAfterAnnouncement(intent, 'socket-ana', 'tela-2'), {}, 'outra transmissão exige outro sim');
   // Um anúncio de quem nunca foi assistido não inventa intenção, e devolve o
   // mesmo objeto — é assim que o hook sabe que não há nada a atualizar.
-  const vazia: WatchIntent = {};
-  assert.equal(intentAfterAnnouncement(vazia, 'socket-bia', 'tela-9'), vazia);
+  const empty: WatchIntent = {};
+  assert.equal(intentAfterAnnouncement(empty, 'socket-bia', 'tela-9'), empty);
 });
 
 test('a live nova de uma pessoa não derruba a intenção sobre a de outra', () => {
@@ -103,11 +103,11 @@ test('a tela só pertence ao enlace de quem assinou aquela transmissão', () => 
 // A reconciliação periódica é o caminho por onde a tela vazava. Estes dois
 // casos montam o plano exatamente como o hook o monta, com e sem a condição.
 
-const faixaTela: LocalTrack = { media: 'screen', trackId: 'tela-video', kind: 'video', streamId: 'tela-1', readyState: 'live' };
-const faixaMicrofone: LocalTrack = { media: 'microphone', trackId: 'voz', kind: 'audio', streamId: 'voz-1', readyState: 'live' };
+const screenTrack: LocalTrack = { media: 'screen', trackId: 'tela-video', kind: 'video', streamId: 'tela-1', readyState: 'live' };
+const microphoneTrack: LocalTrack = { media: 'microphone', trackId: 'voz', kind: 'audio', streamId: 'voz-1', readyState: 'live' };
 
-function mediaLocalDoEnlace(watchingStream: string): LocalTrack[] {
-  return [faixaMicrofone, faixaTela].filter((faixa) => mediaBelongsToPeer(faixa.media, faixa.streamId, watchingStream));
+function localLinkMedia(watchingStream: string): LocalTrack[] {
+  return [microphoneTrack, screenTrack].filter((track) => mediaBelongsToPeer(track.media, track.streamId, watchingStream));
 }
 
 test('a reconciliação não encaixa a live num sender livre de quem não assinou', () => {
@@ -120,20 +120,20 @@ test('a reconciliação não encaixa a live num sender livre de quem não assino
   // O que a 0.9.9 fazia: nenhuma condição de inscrição, então a tela era
   // tratada como qualquer faixa local e caía no primeiro sender de vídeo
   // livre — o da câmera de quem nunca pediu para assistir.
-  const comoEra = planPeerMediaSync([faixaMicrofone, faixaTela], senders);
+  const previousPlan = planPeerMediaSync([microphoneTrack, screenTrack], senders);
   assert.deepEqual(
-    comoEra.actions,
+    previousPlan.actions,
     [{ type: 'replace', senderId: 's1', trackId: 'tela-video', media: 'screen', streamId: 'tela-1' }],
     'é este o comportamento que precisa deixar de acontecer',
   );
 
-  const plano = planPeerMediaSync(mediaLocalDoEnlace(''), senders);
-  assert.deepEqual(plano.actions, [], 'sem inscrição, nada da tela entra neste enlace');
+  const plan = planPeerMediaSync(localLinkMedia(''), senders);
+  assert.deepEqual(plan.actions, [], 'sem inscrição, nada da tela entra neste enlace');
 
   // O mesmo peer, agora inscrito: aí sim a tela tem onde entrar.
-  const inscrito = planPeerMediaSync(mediaLocalDoEnlace('tela-1'), senders);
-  assert.equal(inscrito.actions.length, 1);
-  assert.equal(inscrito.actions[0].type, 'replace');
+  const subscribed = planPeerMediaSync(localLinkMedia('tela-1'), senders);
+  assert.equal(subscribed.actions.length, 1);
+  assert.equal(subscribed.actions[0].type, 'replace');
 });
 
 test('fechar a live não é desfeito pela reconciliação dez segundos depois', () => {
@@ -144,7 +144,7 @@ test('fechar a live não é desfeito pela reconciliação dez segundos depois', 
     { senderId: 's0', kind: 'audio', trackId: 'voz', media: 'microphone' },
     { senderId: 's1', kind: 'video', trackId: null, media: 'screen' },
   ];
-  assert.deepEqual(planPeerMediaSync(mediaLocalDoEnlace(''), senders).actions, [], 'a live fechada continua fechada');
+  assert.deepEqual(planPeerMediaSync(localLinkMedia(''), senders).actions, [], 'a live fechada continua fechada');
 });
 
 test('um sender que ficou com a faixa da tela de quem não assinou é limpo', () => {
@@ -152,13 +152,13 @@ test('um sender que ficou com a faixa da tela de quem não assinou é limpo', ()
     { senderId: 's0', kind: 'audio', trackId: 'voz', media: 'microphone' },
     { senderId: 's1', kind: 'video', trackId: 'tela-video', media: 'screen' },
   ];
-  assert.deepEqual(planPeerMediaSync(mediaLocalDoEnlace(''), senders).actions, [{ type: 'clear', senderId: 's1' }]);
+  assert.deepEqual(planPeerMediaSync(localLinkMedia(''), senders).actions, [{ type: 'clear', senderId: 's1' }]);
 });
 
 // ── A voz e a câmera não são afetadas por nada disso ───────────────────────
 
 test('sair da live não tira a voz nem a câmera da call', () => {
   const camera: LocalTrack = { media: 'camera', trackId: 'cam', kind: 'video', streamId: 'cam-1', readyState: 'live' };
-  const local = [faixaMicrofone, camera, faixaTela].filter((faixa) => mediaBelongsToPeer(faixa.media, faixa.streamId, ''));
-  assert.deepEqual(local.map((faixa) => faixa.media), ['microphone', 'camera'], 'só a tela depende da inscrição');
+  const local = [microphoneTrack, camera, screenTrack].filter((track) => mediaBelongsToPeer(track.media, track.streamId, ''));
+  assert.deepEqual(local.map((track) => track.media), ['microphone', 'camera'], 'só a tela depende da inscrição');
 });

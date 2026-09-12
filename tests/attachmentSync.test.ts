@@ -17,8 +17,8 @@ test('a preferência guardada no P2P não atravessa para o dedicado', () => {
 });
 
 test('no dedicado a resposta é não, qualquer que seja a preferência', () => {
-  for (const preferencia of [true, false]) {
-    assert.equal(attachmentSyncEnabled('server', preferencia), false, `preferência ${preferencia}`);
+  for (const preference of [true, false]) {
+    assert.equal(attachmentSyncEnabled('server', preference), false, `preferência ${preference}`);
   }
 });
 
@@ -38,13 +38,13 @@ test('o controle aparece onde a escolha existe, e só lá', () => {
 // Esconder o controle e continuar replicando era o defeito, e não a correção:
 // quem tivesse a preferência ligada não teria nem como desligá-la.
 test('esconder o controle e desligar a replicação são a mesma regra', () => {
-  for (const modo of ['p2p', 'server', undefined] as const) {
-    const visivel = attachmentSyncVisible(modo);
-    const replicando = attachmentSyncEnabled(modo, true);
+  for (const mode of ['p2p', 'server', undefined] as const) {
+    const visible = attachmentSyncVisible(mode);
+    const replicating = attachmentSyncEnabled(mode, true);
     assert.equal(
-      replicando && !visivel,
+      replicating && !visible,
       false,
-      `em ${modo ?? 'modo desconhecido'} a replicação estaria ligada com o controle escondido`,
+      `em ${mode ?? 'modo desconhecido'} a replicação estaria ligada com o controle escondido`,
     );
   }
 });

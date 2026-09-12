@@ -846,7 +846,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     watchSent.current.delete(peerId);
     updatePeerHealth(peerId, 'connecting');
     syncLocalMediaToPeer(peerId, state);
-    reafirmarInscricoesRef.current();
+    reassertSubscriptionsRef.current();
     pc.onicecandidate = ({ candidate }) => candidate && socket?.emit('rtc:ice', { target: peerId, candidate });
     // Terminada a negociação, o descarte de ICE daquela colisão deixa de valer.
     // Sem isto o sinalizador ficava travado e o enlace podia chegar a
@@ -1619,18 +1619,18 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         // escolha nova. O "sim" dado à anterior não a alcança, e a intenção
         // antiga é descartada para a reafirmação não inscrever ninguém numa
         // tela que ele nunca escolheu ver.
-        const seguinte = intentAfterAnnouncement(watchIntent.current, from, meta.streamId);
-        if (seguinte !== watchIntent.current) {
-          watchIntent.current = seguinte;
+        const nextIntent = intentAfterAnnouncement(watchIntent.current, from, meta.streamId);
+        if (nextIntent !== watchIntent.current) {
+          watchIntent.current = nextIntent;
           watchSent.current.delete(from);
-          setWatching((atual) => {
-            if (!(from in atual)) return atual;
-            const restante = { ...atual };
-            delete restante[from];
-            return restante;
+          setWatching((watchingNow) => {
+            if (!(from in watchingNow)) return watchingNow;
+            const remainingWatching = { ...watchingNow };
+            delete remainingWatching[from];
+            return remainingWatching;
           });
         }
-        setLiveOffers((atual) => (atual[from] === meta.streamId ? atual : { ...atual, [from]: meta.streamId }));
+        setLiveOffers((watchingNow) => (watchingNow[from] === meta.streamId ? watchingNow : { ...watchingNow, [from]: meta.streamId }));
         liveOffersRef.current = { ...liveOffersRef.current, [from]: meta.streamId };
         // O "Assistir" clicado antes do anúncio vira inscrição agora, que é
         // quando esta cópia finalmente sabe a qual transmissão ele se refere.
@@ -1678,14 +1678,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       if (!peerId || !state) return;
       const tela = localStreams.current.get('screen');
       const querAssistir = payload.watching === true && Boolean(tela) && payload.stream === tela?.id;
-      const desejado = querAssistir ? (tela?.id ?? '') : '';
-      const anterior = state.watchingStream;
-      state.watchingStream = desejado;
+      const wantedStream = querAssistir ? (tela?.id ?? '') : '';
+      const previousStream = state.watchingStream;
+      state.watchingStream = wantedStream;
       // A comparação é entre *qual* transmissão está inscrita, e não entre
       // "inscrito ou não". Comparar só o booleano fazia a troca de uma live
       // pela outra na mesma pessoa cair no atalho de saída: o pedido novo
       // parecia igual ao antigo e as faixas da live nova nunca eram anexadas.
-      if (desejado === anterior) return;
+      if (wantedStream === previousStream) return;
       if (!tela) return;
       if (querAssistir) {
         for (const track of tela.getTracks()) {
@@ -1783,9 +1783,9 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   const stopWatchingLive = useCallback((peerId: string) => {
     const streamId = watchIntent.current[peerId] ?? watchingRef.current[peerId];
-    const proximaIntencao = { ...watchIntent.current };
-    delete proximaIntencao[peerId];
-    watchIntent.current = proximaIntencao;
+    const intentWithoutPeer = { ...watchIntent.current };
+    delete intentWithoutPeer[peerId];
+    watchIntent.current = intentWithoutPeer;
     setWatching((atual) => {
       if (!(peerId in atual)) return atual;
       const proximo = { ...atual };
@@ -1810,10 +1810,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
    */
   const requestWatchLive = useCallback((peerId: string, streamId?: string) => {
     if (!peerId) return;
-    const oferta = streamId || liveOffersRef.current[peerId];
-    if (oferta) {
+    const offeredStream = streamId || liveOffersRef.current[peerId];
+    if (offeredStream) {
       watchPending.current.delete(peerId);
-      watchLive(peerId, oferta);
+      watchLive(peerId, offeredStream);
       return;
     }
     watchPending.current.add(peerId);
@@ -1831,15 +1831,15 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
    * transmissão anunciado pela mesma pessoa — exige uma escolha nova, e não
    * herda o "sim" dado à anterior.
    */
-  const reafirmarInscricoes = useCallback(() => {
+  const reassertSubscriptions = useCallback(() => {
     if (!socket) return;
     for (const { peerId, streamId } of pendingWatchRequests(watchIntent.current, watchSent.current, new Set(peers.current.keys()))) {
       socket.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
       watchSent.current.set(peerId, streamId);
     }
   }, [socket]);
-  const reafirmarInscricoesRef = useRef(reafirmarInscricoes);
-  reafirmarInscricoesRef.current = reafirmarInscricoes;
+  const reassertSubscriptionsRef = useRef(reassertSubscriptions);
+  reassertSubscriptionsRef.current = reassertSubscriptions;
 
   // Quem parou de transmitir deixa de ter inscrição. Sem isto, o "sim" ficaria
   // pendurado e a próxima live começaria já assistida.
@@ -1848,12 +1848,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // para trás faria a reafirmação ressuscitar uma live encerrada.
   useEffect(() => {
     const transmitindo = new Set(members.filter((member) => member.screen).map((member) => member.socketId));
-    const seguinte = intentAfterBroadcasters(watchIntent.current, transmitindo);
-    if (seguinte !== watchIntent.current) {
+    const nextIntent = intentAfterBroadcasters(watchIntent.current, transmitindo);
+    if (nextIntent !== watchIntent.current) {
       for (const peerId of Object.keys(watchIntent.current)) {
-        if (!(peerId in seguinte)) watchSent.current.delete(peerId);
+        if (!(peerId in nextIntent)) watchSent.current.delete(peerId);
       }
-      watchIntent.current = seguinte;
+      watchIntent.current = nextIntent;
     }
     setWatching((atual) => {
       const chaves = Object.keys(atual).filter((peerId) => !transmitindo.has(peerId));
@@ -1891,7 +1891,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
       // Rede de segurança da inscrição: se algum enlace foi refeito por um
       // caminho que não passou por `createPeer`, o pedido sai aqui. Custa um
       // laço sobre um punhado de entradas e evita a live que não volta.
-      reafirmarInscricoesRef.current();
+      reassertSubscriptionsRef.current();
       if (running) return;
       running = true;
       const samples: number[] = [];

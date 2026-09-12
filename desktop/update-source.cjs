@@ -263,10 +263,10 @@ async function downloadArtifact({
   return { file: destination, sha256: digest, size: received };
 }
 
-function sha256OfFile(arquivo) {
+function sha256OfFile(targetFile) {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
-    const input = fs.createReadStream(arquivo);
+    const input = fs.createReadStream(targetFile);
     input.on('data', (chunk) => hash.update(chunk));
     input.on('error', reject);
     input.on('end', () => resolve(hash.digest('hex')));

@@ -15,7 +15,7 @@ import { COMMAND_HELP, HELP, parseArgs, serviceUrl } from '../tools/tumacordctl/
 //
 // Aqui a descoberta é estruturada e a ambiguidade **para** a operação.
 
-const CONTÊINER_CHAT = {
+const CHAT_CONTAINER = {
   Id: 'abc123',
   Name: '/tumacord-server',
   Config: {
@@ -48,7 +48,7 @@ function fakeDocker(containers: Record<string, unknown>[]) {
 test('a instalação é achada pelo rótulo do Compose, com qualquer nome de projeto', async () => {
   // O ponto: o nome do volume aqui é `projeto-do-renan_tumacord-data`, que
   // nenhuma regex por `tumacord-data` acharia como nome exato.
-  const { ok, installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
+  const { ok, installations } = await discoverInstallations(fakeDocker([CHAT_CONTAINER]));
   assert.equal(ok, true);
   assert.equal(installations.length, 1);
   assert.equal(installations[0].project, 'tumacord');
@@ -57,7 +57,7 @@ test('a instalação é achada pelo rótulo do Compose, com qualquer nome de pro
 });
 
 test('o volume de dados é o mount real em /data, e não um nome presumido', async () => {
-  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
+  const { installations } = await discoverInstallations(fakeDocker([CHAT_CONTAINER]));
   const data = dataMount(installations[0].services['tumacord-server'], '/data');
   assert.equal(data.name, 'project-do-renan_tumacord-data');
   assert.equal(data.source, '/var/lib/docker/volumes/project-do-renan_tumacord-data/_data');
@@ -65,7 +65,7 @@ test('o volume de dados é o mount real em /data, e não um nome presumido', asy
 });
 
 test('os valores das variáveis nunca saem da descoberta', async () => {
-  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT]));
+  const { installations } = await discoverInstallations(fakeDocker([CHAT_CONTAINER]));
   const text = JSON.stringify(installations);
   // Um preflight que imprimisse a chave a vazaria no primeiro print.
   assert.equal(text.includes('segredo-que-nao-pode-vazar'), false);
@@ -73,8 +73,8 @@ test('os valores das variáveis nunca saem da descoberta', async () => {
 });
 
 test('duas instalações param a operação em vez de virar sorteio', async () => {
-  const segunda = { ...CONTÊINER_CHAT, Id: 'def456', Config: { ...CONTÊINER_CHAT.Config, Labels: { ...CONTÊINER_CHAT.Config.Labels, 'com.docker.compose.project': 'homologacao' } } };
-  const { installations } = await discoverInstallations(fakeDocker([CONTÊINER_CHAT, segunda]));
+  const secondInstallation = { ...CHAT_CONTAINER, Id: 'def456', Config: { ...CHAT_CONTAINER.Config, Labels: { ...CHAT_CONTAINER.Config.Labels, 'com.docker.compose.project': 'homologacao' } } };
+  const { installations } = await discoverInstallations(fakeDocker([CHAT_CONTAINER, secondInstallation]));
   assert.equal(installations.length, 2);
 
   const choice = chooseInstallation(installations);
@@ -96,8 +96,8 @@ test('nenhuma instalação não é tratada como instalação vazia', async () =>
 });
 
 test('contêineres de outros projetos não entram', async () => {
-  const alheio = { ...CONTÊINER_CHAT, Id: 'zzz', Config: { ...CONTÊINER_CHAT.Config, Labels: { 'com.docker.compose.project': 'outra-coisa', 'com.docker.compose.service': 'postgres' } } };
-  const { installations } = await discoverInstallations(fakeDocker([alheio]));
+  const foreign = { ...CHAT_CONTAINER, Id: 'zzz', Config: { ...CHAT_CONTAINER.Config, Labels: { 'com.docker.compose.project': 'outra-coisa', 'com.docker.compose.service': 'postgres' } } };
+  const { installations } = await discoverInstallations(fakeDocker([foreign]));
   assert.equal(installations.length, 0, 'só os serviços deste projeto');
 });
 
@@ -232,7 +232,7 @@ test('o pior nível é o que decide se a operação segue', () => {
 });
 
 test('portas ocupadas são detectadas, e o comando para descobrir quem as usa é dito', async () => {
-  const result = await preflightPorts([4600, 4300], async (porta: number) => porta !== 4600);
+  const result = await preflightPorts([4600, 4300], async (port: number) => port !== 4600);
   assert.equal(result.level, 'fail');
   const busy = result.checks.find((item: { title: string }) => item.title === 'Porta 4600');
   assert.equal(busy.level, 'fail');

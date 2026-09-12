@@ -335,8 +335,8 @@ admin.post('/admin/invites', async (request, response) => {
   const { invite, token } = createInvite(sanitizeLabel(body?.label), Date.now());
   await store.mutate((state) => {
     state.invites.push(invite);
-    const agora = Date.now();
-    state.invites = state.invites.filter((candidate) => candidate.expiresAt > agora || candidate.usedAt);
+    const now = Date.now();
+    state.invites = state.invites.filter((candidate) => candidate.expiresAt > now || candidate.usedAt);
   });
   log('invite-created', { label: invite.label, expiresAt: invite.expiresAt });
   // O convite aparece uma vez, aqui, para o dono passar por canal privado.

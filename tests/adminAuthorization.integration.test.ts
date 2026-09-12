@@ -65,7 +65,7 @@ async function entrar(url: string, username: string, password: string) {
 // servidor real nasce: o operador sobe o contêiner e faz a própria conta. Sem
 // isso, a primeira pessoa a entrar viraria dona — a proteção que impede um
 // servidor de existir sem ninguém capaz de administrá-lo.
-async function servidorDedicado(context: { after: (fn: () => Promise<void>) => void }, criarDono = true, extraEnv: Record<string, string> = {}) {
+async function startDedicatedServer(context: { after: (fn: () => Promise<void>) => void }, createOwner = true, extraEnv: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'tumacord-admin-'));
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
@@ -89,14 +89,14 @@ async function servidorDedicado(context: { after: (fn: () => Promise<void>) => v
     await rm(root, { recursive: true, force: true });
   });
   await waitForServer(url, child, erro);
-  if (criarDono) await entrar(url, 'Chefe', 'senha-do-chefe');
+  if (createOwner) await entrar(url, 'Chefe', 'senha-do-chefe');
   return { url, sockets };
 }
 
 // Antes desta versão `channel:create` não verificava nada: qualquer usuário
 // autenticado criava canal de texto e de voz no servidor dedicado.
 test('usuário comum não cria canal; a administração cria', { timeout: 30_000 }, async (context) => {
-  const { url, sockets } = await servidorDedicado(context);
+  const { url, sockets } = await startDedicatedServer(context);
 
   const comum = await entrar(url, 'Fulano', 'senha-do-fulano');
   assert.equal(comum.body.user.isAdmin ?? false, false);
@@ -128,56 +128,56 @@ test('usuário comum não cria canal; a administração cria', { timeout: 30_000
 // `slugify`, não aceitava categoria, tópico nem limite, e não deixava registro
 // na auditoria. Por qual porta se entrou mudava o que saía.
 test('socket e API criam o mesmo canal, com posição e auditoria', { timeout: 30_000 }, async (context) => {
-  const { url, sockets } = await servidorDedicado(context);
-  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
-  const socketChefe = await connect(url, chefe.body.token);
-  sockets.push(socketChefe);
-  const cabecalho = { 'content-type': 'application/json', authorization: `Bearer ${chefe.body.token}` };
+  const { url, sockets } = await startDedicatedServer(context);
+  const boss = await entrar(url, 'Chefe', 'senha-do-chefe');
+  const bossSocket = await connect(url, boss.body.token);
+  sockets.push(bossSocket);
+  const authHeader = { 'content-type': 'application/json', authorization: `Bearer ${boss.body.token}` };
 
-  const porSocket = await ask<{ ok: boolean; channel?: Record<string, unknown> }>(socketChefe, 'channel:create', { name: 'Pelo Socket', type: 'text' });
-  const respostaRest = await fetch(`${url}/api/admin/channels`, {
-    method: 'POST', headers: cabecalho, body: JSON.stringify({ name: 'Pela API', type: 'text' }),
+  const viaSocket = await ask<{ ok: boolean; channel?: Record<string, unknown> }>(bossSocket, 'channel:create', { name: 'Pelo Socket', type: 'text' });
+  const restReply = await fetch(`${url}/api/admin/channels`, {
+    method: 'POST', headers: authHeader, body: JSON.stringify({ name: 'Pela API', type: 'text' }),
   });
-  const porRest = await respostaRest.json() as { ok: boolean; channel?: Record<string, unknown> };
+  const viaRest = await restReply.json() as { ok: boolean; channel?: Record<string, unknown> };
 
-  assert.equal(porSocket.ok, true);
-  assert.equal(respostaRest.status, 201);
+  assert.equal(viaSocket.ok, true);
+  assert.equal(restReply.status, 201);
   // A posição é o que ordena a lista. Sem ela, o canal do socket dependia da
   // ordem de inserção no arquivo e não podia ser reordenado.
-  assert.equal(typeof porSocket.channel?.position, 'number', 'o canal do socket precisa nascer posicionado');
-  assert.equal(typeof porRest.channel?.position, 'number');
-  assert.deepEqual(Object.keys(porSocket.channel ?? {}).sort(), Object.keys(porRest.channel ?? {}).sort(), 'os dois caminhos produzem o mesmo formato');
+  assert.equal(typeof viaSocket.channel?.position, 'number', 'o canal do socket precisa nascer posicionado');
+  assert.equal(typeof viaRest.channel?.position, 'number');
+  assert.deepEqual(Object.keys(viaSocket.channel ?? {}).sort(), Object.keys(viaRest.channel ?? {}).sort(), 'os dois caminhos produzem o mesmo formato');
   // O mesmo `slugify`: acento e maiúscula tratados igual nos dois.
-  assert.match(String(porSocket.channel?.id), /^pelo-socket-[0-9a-f]{4}$/);
-  assert.match(String(porRest.channel?.id), /^pela-api-[0-9a-f]{4}$/);
+  assert.match(String(viaSocket.channel?.id), /^pelo-socket-[0-9a-f]{4}$/);
+  assert.match(String(viaRest.channel?.id), /^pela-api-[0-9a-f]{4}$/);
 
-  const auditoria = await (await fetch(`${url}/api/admin/audit`, { headers: cabecalho })).json() as { entries: { action: string; target: string }[] };
-  const criacoes = auditoria.entries.filter((entrada) => entrada.action === 'channel.create').map((entrada) => entrada.target);
-  assert.ok(criacoes.includes('Pelo Socket'), 'a criação pelo socket também precisa deixar registro');
-  assert.ok(criacoes.includes('Pela API'));
+  const auditLog = await (await fetch(`${url}/api/admin/audit`, { headers: authHeader })).json() as { entries: { action: string; target: string }[] };
+  const creations = auditLog.entries.filter((entry) => entry.action === 'channel.create').map((entry) => entry.target);
+  assert.ok(creations.includes('Pelo Socket'), 'a criação pelo socket também precisa deixar registro');
+  assert.ok(creations.includes('Pela API'));
 });
 
 // Esconder o botão é conveniência; quem recusa é o servidor. Um cliente que
 // chame o socket direto passa pela mesma conferência do papel persistido.
 test('o nome do canal é validado nos dois caminhos, e não só na interface', { timeout: 30_000 }, async (context) => {
-  const { url, sockets } = await servidorDedicado(context);
-  const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
-  const socketChefe = await connect(url, chefe.body.token);
-  sockets.push(socketChefe);
+  const { url, sockets } = await startDedicatedServer(context);
+  const boss = await entrar(url, 'Chefe', 'senha-do-chefe');
+  const bossSocket = await connect(url, boss.body.token);
+  sockets.push(bossSocket);
 
-  const vazio = await ask<{ ok: boolean; error?: string }>(socketChefe, 'channel:create', { name: '   ', type: 'text' });
-  assert.equal(vazio.ok, false);
-  const longo = await ask<{ ok: boolean; error?: string }>(socketChefe, 'channel:create', { name: 'x'.repeat(33), type: 'text' });
-  assert.equal(longo.ok, false);
+  const empty = await ask<{ ok: boolean; error?: string }>(bossSocket, 'channel:create', { name: '   ', type: 'text' });
+  assert.equal(empty.ok, false);
+  const tooLong = await ask<{ ok: boolean; error?: string }>(bossSocket, 'channel:create', { name: 'x'.repeat(33), type: 'text' });
+  assert.equal(tooLong.ok, false);
   // Um tipo inventado não cria um terceiro tipo de canal.
-  const tipoEstranho = await ask<{ ok: boolean; channel?: { type: string } }>(socketChefe, 'channel:create', { name: 'estranho', type: 'quadro' });
-  assert.equal(tipoEstranho.channel?.type ?? 'text', 'text', 'o que não é voz é texto');
+  const oddType = await ask<{ ok: boolean; channel?: { type: string } }>(bossSocket, 'channel:create', { name: 'estranho', type: 'quadro' });
+  assert.equal(oddType.channel?.type ?? 'text', 'text', 'o que não é voz é texto');
 });
 
 // Segundo caminho para o mesmo estrago: empurrar um pacote de sincronização
 // com canais novos dentro.
 test('sincronização de usuário comum não injeta canais', { timeout: 30_000 }, async (context) => {
-  const { url, sockets } = await servidorDedicado(context);
+  const { url, sockets } = await startDedicatedServer(context);
   const comum = await entrar(url, 'Fulano', 'senha-do-fulano');
   const socketComum = await connect(url, comum.body.token);
   sockets.push(socketComum);
@@ -194,7 +194,7 @@ test('sincronização de usuário comum não injeta canais', { timeout: 30_000 }
 
 // Medido antes da correção: doze senhas erradas em 595 ms, todas 401.
 test('senhas erradas em sequência passam a esbarrar em limite', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   await entrar(url, 'Alvo', 'senha-verdadeira');
 
   const status: number[] = [];
@@ -215,7 +215,7 @@ test('senhas erradas em sequência passam a esbarrar em limite', { timeout: 30_0
 });
 
 test('quem acerta a senha não fica preso no limite do vizinho', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   await entrar(url, 'Alvo', 'senha-verdadeira');
   for (let tentativa = 0; tentativa < 8; tentativa += 1) {
     await fetch(`${url}/api/auth/login`, {
@@ -228,7 +228,7 @@ test('quem acerta a senha não fica preso no limite do vizinho', { timeout: 30_0
 });
 
 test('o anexo entre pares continua servindo a rede local, sem regressão', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   const sessao = await entrar(url, 'Fulano', 'senha-do-fulano');
   const envio = await fetch(`${url}/api/attachments`, {
     method: 'POST',
@@ -247,7 +247,7 @@ test('o anexo entre pares continua servindo a rede local, sem regressão', { tim
 // Migração vinda da 0.8.0: o `ADMIN_USERNAME` vira o dono inicial e, a partir
 // daí, o papel persistido é que manda.
 test('a primeira conta de um servidor novo vira dona, e o papel persiste', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context, false);
+  const { url } = await startDedicatedServer(context, false);
   const primeiro = await entrar(url, 'Pioneiro', 'senha-do-pioneiro');
   assert.equal(primeiro.body.user.role, 'owner', 'quem cria o servidor fica com ele');
   assert.equal(primeiro.body.user.isAdmin, true, 'clientes antigos continuam enxergando administração');
@@ -316,7 +316,7 @@ async function pedirAtualizacao(url: string, token: string, metodo: 'GET' | 'POS
 }
 
 test('trocar a versão do servidor é do dono, e só dele', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
 
   const comum = await entrar(url, 'Fulano', 'senha-do-fulano');
   assert.equal((await pedirAtualizacao(url, comum.body.token, 'GET')).status, 403);
@@ -338,7 +338,7 @@ test('trocar a versão do servidor é do dono, e só dele', { timeout: 30_000 },
 });
 
 test('o padrão é não aceitar atualização pelo painel, e o dono vê o motivo', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
 
   const leitura = await pedirAtualizacao(url, chefe.body.token, 'GET');
@@ -355,7 +355,7 @@ test('o padrão é não aceitar atualização pelo painel, e o dono vê o motivo
 });
 
 test('a tentativa de atualizar fica registrada antes de acontecer', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
   await pedirAtualizacao(url, chefe.body.token, 'POST', { tag: 'v0.9.8' });
 
@@ -368,7 +368,7 @@ test('a tentativa de atualizar fica registrada antes de acontecer', { timeout: 3
 });
 
 test('um corpo sem etiqueta de texto é recusado na porta', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   const chefe = await entrar(url, 'Chefe', 'senha-do-chefe');
   for (const corpo of [{}, { tag: 42 }, { tag: null }, { tag: 'v'.repeat(80) }, { tag: ['v0.9.8'] }]) {
     const resposta = await pedirAtualizacao(url, chefe.body.token, 'POST', corpo);
@@ -380,34 +380,34 @@ test('um corpo sem etiqueta de texto é recusado na porta', { timeout: 30_000 },
 // tem sessão de dono. O segredo dele precisa abrir exatamente essas duas
 // portas — e nenhuma outra.
 test('o segredo do executor pausa e libera a escrita, e não abre mais nada', { timeout: 30_000 }, async (context) => {
-  const segredo = 'segredo-do-executor-para-o-teste-0123456789';
-  const { url } = await servidorDedicado(context, true, { TUMACORD_EXECUTOR_TOKEN: segredo });
-  const comSegredo = { authorization: `Bearer ${segredo}`, 'content-type': 'application/json' };
+  const secret = 'segredo-do-executor-para-o-teste-0123456789';
+  const { url } = await startDedicatedServer(context, true, { TUMACORD_EXECUTOR_TOKEN: secret });
+  const withSecret = { authorization: `Bearer ${secret}`, 'content-type': 'application/json' };
 
-  const pausa = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: comSegredo, body: JSON.stringify({ timeoutMs: 5_000 }) });
-  assert.equal(pausa.status, 200);
-  const libera = await fetch(`${url}/api/admin/resume-writes`, { method: 'POST', headers: comSegredo });
-  assert.equal(libera.status, 200);
+  const pause = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: withSecret, body: JSON.stringify({ timeoutMs: 5_000 }) });
+  assert.equal(pause.status, 200);
+  const resume = await fetch(`${url}/api/admin/resume-writes`, { method: 'POST', headers: withSecret });
+  assert.equal(resume.status, 200);
 
   // O mesmo segredo não serve de sessão em nenhuma outra rota do painel.
-  assert.notEqual((await fetch(`${url}/api/admin/update`, { headers: comSegredo })).status, 200);
-  assert.notEqual((await fetch(`${url}/api/admin/update`, { method: 'POST', headers: comSegredo, body: JSON.stringify({ tag: 'v0.9.9-1' }) })).status, 200);
+  assert.notEqual((await fetch(`${url}/api/admin/update`, { headers: withSecret })).status, 200);
+  assert.notEqual((await fetch(`${url}/api/admin/update`, { method: 'POST', headers: withSecret, body: JSON.stringify({ tag: 'v0.9.9-1' }) })).status, 200);
 
   // Um segredo quase certo cai no caminho do dono, que recusa.
-  const quase = await fetch(`${url}/api/admin/pause-writes`, {
-    method: 'POST', headers: { ...comSegredo, authorization: `Bearer ${segredo.slice(0, -1)}x` }, body: '{}',
+  const almost = await fetch(`${url}/api/admin/pause-writes`, {
+    method: 'POST', headers: { ...withSecret, authorization: `Bearer ${secret.slice(0, -1)}x` }, body: '{}',
   });
-  assert.ok(quase.status === 401 || quase.status === 403, `status ${quase.status}`);
+  assert.ok(almost.status === 401 || almost.status === 403, `status ${almost.status}`);
 
   // A escrita voltou de verdade: entrar cria sessão, e isso grava.
   assert.equal((await entrar(url, 'Chefe', 'senha-do-chefe')).status, 200);
 });
 
 test('sem segredo configurado no servidor, nenhum portador vira executor', { timeout: 30_000 }, async (context) => {
-  const { url } = await servidorDedicado(context);
+  const { url } = await startDedicatedServer(context);
   // Um cabeçalho vazio comparado com um segredo vazio não pode passar.
   for (const authorization of ['Bearer ', 'Bearer undefined', '']) {
-    const resposta = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: '{}' });
-    assert.ok(resposta.status === 401 || resposta.status === 403, `${JSON.stringify(authorization)} respondeu ${resposta.status}`);
+    const reply = await fetch(`${url}/api/admin/pause-writes`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: '{}' });
+    assert.ok(reply.status === 401 || reply.status === 403, `${JSON.stringify(authorization)} respondeu ${reply.status}`);
   }
 });

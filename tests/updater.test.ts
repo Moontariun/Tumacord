@@ -55,9 +55,9 @@ test('o nome do arquivo baixado não sai da pasta de downloads', () => {
 });
 
 test('preferência corrompida no disco não impede o aplicativo de abrir', () => {
-  const vazio = { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '', catalogSequence: 0 };
-  assert.deepEqual(sanitizeState(null), vazio);
-  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [], catalogSequence: -3 }), vazio);
+  const empty = { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '', catalogSequence: 0 };
+  assert.deepEqual(sanitizeState(null), empty);
+  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [], catalogSequence: -3 }), empty);
   assert.deepEqual(
     sanitizeState({ enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 }),
     { enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 },

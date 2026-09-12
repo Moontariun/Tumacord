@@ -106,8 +106,8 @@ export function useUpdates(): UpdateBridge {
     // o pedido corre, e precisa saber quando ele termina.
     enroll: async (invite: string, label?: string) => {
       if (!bridge) return;
-      const novo = await bridge.enroll(invite, label ?? '').catch(() => null);
-      if (novo) { avisado.current = true; setState(novo); }
+      const nextState = await bridge.enroll(invite, label ?? '').catch(() => null);
+      if (nextState) { avisado.current = true; setState(nextState); }
     },
     openPage: () => void bridge?.openPage().catch(() => undefined),
     markNotesSeen: (version: string) => acao(bridge ? () => bridge.markNotesSeen(version) : undefined),
@@ -147,40 +147,40 @@ export function UpdateButton({ state, onOpen }: { state: TumacordUpdateState | n
  * todos.
  */
 function EnrollDevice({ message, onEnroll }: { message: string; onEnroll: (invite: string, label?: string) => Promise<unknown> }) {
-  const [convite, setConvite] = useState('');
-  const [enviando, setEnviando] = useState(false);
+  const [inviteCode, setInviteCode] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const enviar = async (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    const limpo = convite.trim();
-    if (!limpo || enviando) return;
-    setEnviando(true);
+    const trimmed = inviteCode.trim();
+    if (!trimmed || submitting) return;
+    setSubmitting(true);
     try {
-      await onEnroll(limpo, '');
+      await onEnroll(trimmed, '');
       // O resultado — deu certo ou não — chega pelo estado do atualizador, que
       // é a mesma fonte que o resto deste painel lê.
-      setConvite('');
+      setInviteCode('');
     } finally {
-      setEnviando(false);
+      setSubmitting(false);
     }
   };
 
-  return <form className="quality-note update-enroll" onSubmit={(event) => void enviar(event)}>
+  return <form className="quality-note update-enroll" onSubmit={(event) => void submit(event)}>
     <strong>Este dispositivo ainda não pode baixar atualizações</strong>
     <span>{message || 'Peça um convite ao dono do servidor e cole aqui. Ele vale uma vez.'}</span>
     <label className="update-enroll-field">
       <span>Convite</span>
       <input
-        value={convite}
-        onChange={(event) => setConvite(event.target.value)}
+        value={inviteCode}
+        onChange={(event) => setInviteCode(event.target.value)}
         placeholder="cole aqui o convite recebido"
         autoComplete="off"
         spellCheck={false}
-        disabled={enviando}
+        disabled={submitting}
       />
     </label>
-    <button className="primary-button" type="submit" disabled={enviando || !convite.trim()}>
-      {enviando ? 'Autorizando…' : 'Autorizar este dispositivo'}
+    <button className="primary-button" type="submit" disabled={submitting || !inviteCode.trim()}>
+      {submitting ? 'Autorizando…' : 'Autorizar este dispositivo'}
     </button>
   </form>;
 }

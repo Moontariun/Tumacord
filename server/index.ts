@@ -527,10 +527,10 @@ app.post('/api/auth/register', async (request, response) => {
     createdAt: new Date().toISOString(),
     role: p2pMode ? 'member' : roleForNewUser(store.users, normalizedUsername, adminUsername),
   } satisfies StoredUser;
-  const resultado = await store.createUser(user);
-  if (!resultado.created) {
+  const outcome = await store.createUser(user);
+  if (!outcome.created) {
     response.status(409).json({
-      error: resultado.conflict === 'reservation'
+      error: outcome.conflict === 'reservation'
         ? 'Esse nome já pertenceu a alguém neste servidor. Escolha outro, ou peça ao dono para recuperar a conta.'
         : 'Esse usuário já existe. Escolha outro nome ou entre na conta.',
     });
@@ -574,7 +574,7 @@ app.post('/api/auth/login', async (request, response) => {
       response.status(409).json({ error: 'Esse nome já pertenceu a alguém neste servidor. Peça ao dono para recuperar a conta.' });
       return;
     }
-    const candidato = {
+    const candidateName = {
       id: randomUUID(),
       username: parsed.data.username.trim(),
       normalizedUsername,
@@ -585,15 +585,15 @@ app.post('/api/auth/login', async (request, response) => {
     // O mesmo caminho protegido do cadastro. Este era o segundo lugar que
     // inseria conta sem garantia de unicidade, e conferir só na rota não
     // bastava: `hashPassword` devolve o laço de eventos antes da inserção.
-    const resultado = await store.createUser(candidato);
-    if (resultado.created) {
+    const outcome = await store.createUser(candidateName);
+    if (outcome.created) {
       created = true;
-      user = candidato;
-    } else if (resultado.conflict === 'user' && resultado.existing) {
+      user = candidateName;
+    } else if (outcome.conflict === 'user' && outcome.existing) {
       // Alguém ganhou a corrida com o mesmo nome. Isto não vira conta nova:
       // segue pela conferência de senha da conta que existe, exatamente como
       // um login normal — senha errada é recusada, e não cria nada.
-      user = resultado.existing;
+      user = outcome.existing;
     } else {
       response.status(409).json({ error: 'Esse nome já pertenceu a alguém neste servidor. Peça ao dono para recuperar a conta.' });
       return;
@@ -773,29 +773,29 @@ app.delete('/api/admin/users/:id', async (request, response) => {
  * que a interface resolveu mostrar: esconder o botão é conveniência, e um
  * cliente que chame a API ou o socket direto passa pelo mesmo lugar.
  */
-async function criarCanal(actor: PublicUser, role: Role, entrada: { name?: unknown; type?: unknown; categoryId?: unknown; topic?: unknown; userLimit?: unknown }): Promise<{ ok: true; channel: Channel } | { ok: false; status: number; error: string }> {
+async function createChannelFromPayload(actor: PublicUser, role: Role, channelInput: { name?: unknown; type?: unknown; categoryId?: unknown; topic?: unknown; userLimit?: unknown }): Promise<{ ok: true; channel: Channel } | { ok: false; status: number; error: string }> {
   if (p2pMode) return { ok: false, status: 400, error: 'O modo P2P possui somente uma conversa e uma call.' };
   if (!canManageChannels(role)) {
-    await audit(actor, 'channel.create', typeof entrada?.name === 'string' ? entrada.name : '', 'denied');
+    await audit(actor, 'channel.create', typeof channelInput?.name === 'string' ? channelInput.name : '', 'denied');
     return { ok: false, status: 403, error: 'Apenas a administração do servidor cria canais.' };
   }
-  const nome = validateChannelName(entrada?.name);
-  if (!nome.ok) return { ok: false, status: 400, error: nome.error ?? 'Nome inválido.' };
-  const type = entrada?.type === 'voice' ? 'voice' : 'text';
-  const topico = validateTopic(entrada?.topic);
-  if (!topico.ok) return { ok: false, status: 400, error: topico.error ?? 'Tópico inválido.' };
-  const limite = validateUserLimit(entrada?.userLimit, type);
-  if (!limite.ok) return { ok: false, status: 400, error: limite.error ?? 'Limite inválido.' };
-  const categoryId = typeof entrada?.categoryId === 'string' && store.categories.some((c) => c.id === entrada.categoryId) ? entrada.categoryId : undefined;
+  const channelName = validateChannelName(channelInput?.name);
+  if (!channelName.ok) return { ok: false, status: 400, error: channelName.error ?? 'Nome inválido.' };
+  const type = channelInput?.type === 'voice' ? 'voice' : 'text';
+  const topic = validateTopic(channelInput?.topic);
+  if (!topic.ok) return { ok: false, status: 400, error: topic.error ?? 'Tópico inválido.' };
+  const channelLimit = validateUserLimit(channelInput?.userLimit, type);
+  if (!channelLimit.ok) return { ok: false, status: 400, error: channelLimit.error ?? 'Limite inválido.' };
+  const categoryId = typeof channelInput?.categoryId === 'string' && store.categories.some((c) => c.id === channelInput.categoryId) ? channelInput.categoryId : undefined;
   // O sufixo aleatório é o que garante id único sem consultar a lista: dois
   // canais com o mesmo nome não colidem, e recriar um nome antigo não herda as
   // mensagens do canal que foi apagado.
   const canal = await store.createChannel({
-    id: `${slugify(nome.value!) || 'canal'}-${randomUUID().slice(0, 4)}`,
-    name: nome.value!, type,
+    id: `${slugify(channelName.value!) || 'canal'}-${randomUUID().slice(0, 4)}`,
+    name: channelName.value!, type,
     ...(categoryId ? { categoryId } : {}),
-    ...(topico.value ? { topic: topico.value } : {}),
-    ...(limite.value ? { userLimit: limite.value } : {}),
+    ...(topic.value ? { topic: topic.value } : {}),
+    ...(channelLimit.value ? { userLimit: channelLimit.value } : {}),
   });
   await audit(actor, 'channel.create', canal.name, 'ok', `${type}`);
   broadcastChannels();
@@ -805,9 +805,9 @@ async function criarCanal(actor: PublicUser, role: Role, entrada: { name?: unkno
 app.post('/api/admin/channels', async (request, response) => {
   const context = requireAdmin(request, response);
   if (!context) return;
-  const resultado = await criarCanal(context.user, normalizeRole(context.user.role), request.body as Record<string, unknown>);
-  if (!resultado.ok) return refuse(response, resultado.status, resultado.error);
-  response.status(201).json({ ok: true, channel: resultado.channel });
+  const outcome = await createChannelFromPayload(context.user, normalizeRole(context.user.role), request.body as Record<string, unknown>);
+  if (!outcome.ok) return refuse(response, outcome.status, outcome.error);
+  response.status(201).json({ ok: true, channel: outcome.channel });
 });
 
 app.patch('/api/admin/channels/:id', async (request, response) => {
@@ -1003,11 +1003,11 @@ app.get('/api/admin/update', async (request, response) => {
   // O estado vem do executor, e não da memória deste processo: uma aplicação
   // reinicia justamente este servidor, e o trabalho precisa continuar legível
   // depois disso.
-  const estado = await selfUpdater.refresh();
+  const updateState = await selfUpdater.refresh();
   try {
-    response.json({ enabled: true, reason: '', current: serverVersion, releases: await selfUpdater.offers(serverVersion), state: estado });
+    response.json({ enabled: true, reason: '', current: serverVersion, releases: await selfUpdater.offers(serverVersion), state: updateState });
   } catch (erro) {
-    response.json({ enabled: true, reason: '', current: serverVersion, releases: [], state: estado, error: erro instanceof Error ? erro.message : 'Não consegui consultar as versões publicadas.' });
+    response.json({ enabled: true, reason: '', current: serverVersion, releases: [], state: updateState, error: erro instanceof Error ? erro.message : 'Não consegui consultar as versões publicadas.' });
   }
 });
 
@@ -1412,11 +1412,11 @@ io.on('connection', (socket) => {
     // Este caminho tinha as próprias regras: outro `slugify`, sem posição, sem
     // categoria, sem tópico, sem limite e sem auditoria — um canal criado por
     // aqui saía diferente de um canal criado por lá.
-    const dono = socket.data.user as PublicUser | undefined;
-    if (!dono) return acknowledge?.({ ok: false, error: 'Sessão expirada; entre de novo.' });
-    const resultado = await criarCanal(dono, roleOfSocket(socket), payload as Record<string, unknown>);
-    if (!resultado.ok) return acknowledge?.({ ok: false, error: resultado.error });
-    acknowledge?.({ ok: true, channel: resultado.channel });
+    const ownerUser = socket.data.user as PublicUser | undefined;
+    if (!ownerUser) return acknowledge?.({ ok: false, error: 'Sessão expirada; entre de novo.' });
+    const outcome = await createChannelFromPayload(ownerUser, roleOfSocket(socket), payload as Record<string, unknown>);
+    if (!outcome.ok) return acknowledge?.({ ok: false, error: outcome.error });
+    acknowledge?.({ ok: true, channel: outcome.channel });
   });
 
   socket.on('voice:join', (input: unknown, acknowledge?: (result: unknown) => void) => {
