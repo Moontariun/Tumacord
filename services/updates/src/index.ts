@@ -295,6 +295,19 @@ admin.post('/admin/catalog', async (request, response) => {
   response.status(201).json({ ok: true, sequence: document.payload.sequence });
 });
 
+/**
+ * O catálogo publicado agora, para recuperação.
+ *
+ * O estado do catálogo vive no ambiente de publicação, porque só lá ele pode
+ * ser produzido. Quando essa pasta se perde, publicar às cegas produziria uma
+ * sequência que anda para trás — e um catálogo assim é recusado aqui e nos
+ * clientes, depois de já ter sido assinado. Esta rota devolve o que está no
+ * ar para o publicador reconstruir o estado a partir dele.
+ */
+admin.get('/admin/catalog', (_request, response) => {
+  response.json(store.state.catalog ?? null);
+});
+
 admin.post('/admin/keys', async (request, response) => {
   const body = request.body as { keys?: unknown };
   if (!Array.isArray(body?.keys)) return response.status(400).json({ error: 'Informe a lista de chaves.' });

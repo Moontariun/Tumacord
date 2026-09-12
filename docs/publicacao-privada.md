@@ -44,25 +44,18 @@ do ar não precisa poder assinar um binário novo.
 ### Gerar as chaves
 
 *Onde:* no ambiente de publicação — **nunca** na VPS.
-*Usuário:* o seu, com o diretório em modo `700`.
+*Usuário:* o seu. A pasta nasce em modo `700` e os arquivos em `600`.
 
 ```bash
-mkdir -p ~/.tumacord-publicacao && chmod 700 ~/.tumacord-publicacao
-node -e '
-const { generateSigningKey } = require("./dist-server/version-helpers.cjs");
-' 2>/dev/null || node --import tsx -e '
-import { generateSigningKey } from "./shared/distributionCrypto.ts";
-import { writeFileSync } from "node:fs";
-for (const escopo of ["manifesto", "catalogo"]) {
-  const chave = generateSigningKey();
-  writeFileSync(`${process.env.HOME}/.tumacord-publicacao/${escopo}.json`, JSON.stringify(chave, null, 2), { mode: 0o600 });
-  console.log(`${escopo}: keyId ${chave.keyId}`);
-}
-'
-chmod 600 ~/.tumacord-publicacao/*.json
+node tools/publisher/publish.mjs keys generate --dir ~/.tumacord-publicacao
 ```
 
-**Saída esperada:** duas linhas com `keyId` de 32 caracteres hexadecimais.
+**Saída esperada:** duas linhas com `keyId` de 32 caracteres hexadecimais, uma
+para `manifest` e outra para `catalog`.
+
+**Se já houver chave na pasta**, o comando **recusa** e não sobrescreve:
+substituir uma chave em uso invalidaria tudo o que ela assinou, e não há como
+desfazer isso. Para trocar de chave, leia [Rotação e revogação](#rotação-e-revogação-de-chaves).
 
 > O `keyId` é derivado da própria chave pública (SHA-256 dela). Ele não é
 > escolhido, então uma chave nova não consegue se apresentar com o id de uma
@@ -71,26 +64,23 @@ chmod 600 ~/.tumacord-publicacao/*.json
 
 ### Registrar as chaves públicas na VPS
 
-*Onde:* na VPS. Só a metade **pública** viaja.
+Só a metade **pública** viaja.
 
 ```bash
-# Monte o documento com as duas públicas e seus escopos, e envie.
-curl -fsS -X POST http://127.0.0.1:4301/admin/keys \
-  -H 'content-type: application/json' \
-  -d '{"keys":[
-        {"keyId":"<id-manifesto>","algorithm":"ed25519","publicKey":"<spki-base64>","scope":["manifest"]},
-        {"keyId":"<id-catalogo>","algorithm":"ed25519","publicKey":"<spki-base64>","scope":["catalog"]}
-      ]}'
+node tools/publisher/publish.mjs keys trusted --dir ~/.tumacord-publicacao --out /tmp/chaves.json
+scp /tmp/chaves.json vps:/tmp/
+ssh vps "curl -fsS -X POST http://127.0.0.1:4301/admin/keys -H 'content-type: application/json' -d @/tmp/chaves.json"
 ```
 
 **Verificação:**
 
 ```bash
-curl -fsS http://127.0.0.1:4300/v1/keys
+ssh vps "curl -fsS http://127.0.0.1:4300/v1/keys"
 ```
 
-**Confira que nenhuma chave privada aparece na saída.** Elas não deveriam ter
-saído da sua máquina.
+O comando `keys trusted` confere, antes de escrever, que nenhuma chave privada
+entrou no documento — e **aborta** se encontrar uma. É barato e evita o pior
+erro possível.
 
 ---
 
@@ -118,19 +108,33 @@ O manifesto descreve cada pacote: OS, arquitetura, formato, jeito de instalar,
 tamanho, SHA-256 e o caminho dentro do armazenamento privado.
 
 ```bash
-export TUMACORD_VERSAO="0.9.9-1"
-export TUMACORD_COMMIT="$(git rev-parse HEAD)"
-node tools/publicador/montar-manifesto.mjs \
-  --versao "$TUMACORD_VERSAO" \
-  --commit "$TUMACORD_COMMIT" \
-  --canal stable \
-  --pacotes release/ \
-  --chave ~/.tumacord-publicacao/manifesto.json \
-  --saida /tmp/manifesto-$TUMACORD_VERSAO.json
+export TUMACORD_VERSAO="0.9.10"
+node tools/publisher/publish.mjs manifest \
+  --version "$TUMACORD_VERSAO" \
+  --commit "$(git rev-parse HEAD)" \
+  --packages release/ \
+  --out /tmp/manifest-$TUMACORD_VERSAO.json
 ```
 
-**Verificação:** o manifesto precisa ter um pacote por jeito de instalar que
-você produziu, e o SHA-256 de cada um precisa bater com o arquivo.
+**Saída esperada:** a release, o commit, o canal, e uma linha por pacote com o
+nome e o tamanho.
+
+**O que ele recusa, e por quê:**
+
+| Recusa | Motivo |
+|---|---|
+| versão fora da convenção | publicar sob uma etiqueta que o aplicativo não sabe ordenar produz uma versão que ninguém recebe |
+| dois arquivos para o mesmo alvo | escolher entre eles seria adivinhar, e o erro apareceria na máquina de quem instalou |
+| pacote vazio | um arquivo de zero byte não é um pacote |
+| nenhum pacote da versão | a pasta de build é de outra versão |
+
+**Faltar um formato não é erro**, e é dito: uma build só de Linux é legítima.
+Quem estiver nos formatos ausentes verá a versão anunciada e sem botão de
+aplicar — o que é melhor do que "não há atualização", que mandaria procurar
+defeito no lugar errado.
+
+As notas saem do `CHANGELOG.md`, da seção daquela versão, com o mesmo recorte
+que o CI usa. Use `--changelog <arquivo>` para apontar outro.
 
 > **O caminho de cada pacote é relativo ao armazenamento** — nunca uma URL.
 > Guardar URL num documento assinado deixaria um manifesto mandar o aplicativo
@@ -138,13 +142,17 @@ você produziu, e o SHA-256 de cada um precisa bater com o arquivo.
 
 ### 3. Enviar os bytes e importar o manifesto
 
-```bash
-# Os arquivos, para o armazenamento privado da VPS.
-rsync -av --progress release/ vps:/var/lib/docker/volumes/<projeto>_tumacord-pacotes/_data/releases/$TUMACORD_VERSAO/
+Os bytes vão para `releases/<versão>/` dentro do armazenamento privado, que é o
+caminho que o manifesto declara.
 
-# O manifesto, pela administração local.
-scp /tmp/manifesto-$TUMACORD_VERSAO.json vps:/tmp/
-ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs releases importar --manifesto /tmp/manifesto-$TUMACORD_VERSAO.json"
+```bash
+# Descubra o volume real, sem presumir o nome:
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs install show --projeto tumacord"
+
+rsync -av release/ vps:/var/lib/docker/volumes/<volume-de-pacotes>/_data/releases/$TUMACORD_VERSAO/
+
+scp /tmp/manifest-$TUMACORD_VERSAO.json vps:/tmp/
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs releases import --manifest /tmp/manifest-$TUMACORD_VERSAO.json"
 ```
 
 **Saída esperada:** `Manifesto da release <id> importado e conferido.`
@@ -155,14 +163,15 @@ catálogo), `bad-signature` (o documento mudou depois de assinado).
 
 ### 4. Validar em homologação, antes de promover
 
-O catálogo é o que muda o que os aplicativos veem. **Não promova sem ter
-instalado a versão em algum lugar.**
+O catálogo é o que muda o que os aplicativos veem. **Não promova no canal
+estável sem ter instalado a versão em algum lugar.**
 
 ```bash
-# Publique primeiro no canal de teste.
-node tools/publicador/montar-catalogo.mjs --canal test --incluir "$TUMACORD_VERSAO" \
-  --chave ~/.tumacord-publicacao/catalogo.json --saida /tmp/catalogo-teste.json
-node tools/tumacordctl/tumacordctl.mjs releases publicar --catalogo /tmp/catalogo-teste.json
+node tools/publisher/publish.mjs catalog \
+  --manifest /tmp/manifest-$TUMACORD_VERSAO.json --channel test \
+  --out /tmp/catalog-teste.json
+scp /tmp/catalog-teste.json vps:/tmp/
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs releases publish --catalog /tmp/catalog-teste.json"
 ```
 
 Instale numa máquina de homologação apontando o canal `test` e verifique.
@@ -170,15 +179,23 @@ Instale numa máquina de homologação apontando o canal `test` e verifique.
 ### 5. Promover
 
 ```bash
-node tools/publicador/montar-catalogo.mjs --canal stable --incluir "$TUMACORD_VERSAO" \
-  --chave ~/.tumacord-publicacao/catalogo.json --saida /tmp/catalogo.json
-node tools/tumacordctl/tumacordctl.mjs releases publicar --catalogo /tmp/catalogo.json
+node tools/publisher/publish.mjs catalog \
+  --manifest /tmp/manifest-$TUMACORD_VERSAO.json \
+  --out /tmp/catalog.json
+scp /tmp/catalog.json vps:/tmp/
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs releases publish --catalog /tmp/catalog.json"
 ```
 
 **Saída esperada:** `Catálogo publicado na sequência <N>.`
 
 A promoção é **atômica**: o catálogo inteiro troca de uma vez, e não existe
 instante em que alguém leia metade dele.
+
+> **O estado do catálogo mora no ambiente de publicação**, em
+> `~/.tumacord-publicacao/catalog-state.json`, porque só lá ele pode ser
+> produzido. Isso significa **um** ambiente de publicação, e esse arquivo faz
+> parte do backup. Se ele se perder, veja
+> [Recuperar o estado do catálogo](#recuperar-o-estado-do-catálogo).
 
 ### O que a publicação recusa
 
@@ -204,23 +221,39 @@ o defeito apareceu. A release **não** é apagada, os bytes continuam no
 armazenamento, e quem já tem o arquivo continua com ele.
 
 ```bash
-node tools/tumacordctl/tumacordctl.mjs releases retirar rel_0991 \
-  --motivo "o áudio sai errado no Windows"
-```
+node tools/publisher/publish.mjs withdraw \
+  --release rel_stable_0-9-10 \
+  --reason "o áudio sai errado no Windows" \
+  --out /tmp/catalog-retirada.json
 
-O comando devolve o catálogo **a assinar** — ele não publica, porque a VPS não
-assina. Assine no ambiente de publicação e publique de volta:
-
-```bash
-node tools/publicador/assinar.mjs --entrada catalogo-retirada.json \
-  --chave ~/.tumacord-publicacao/catalogo.json --saida catalogo-assinado.json
-node tools/tumacordctl/tumacordctl.mjs releases publicar --catalogo catalogo-assinado.json
+scp /tmp/catalog-retirada.json vps:/tmp/
+ssh vps "cd /opt/tumacord && node tools/tumacordctl/tumacordctl.mjs releases publish --catalog /tmp/catalog-retirada.json"
 ```
 
 **O motivo não é enfeite:** ele aparece na tela de quem tentar instalar e na
-lista do painel do servidor.
+lista do painel do servidor. Sem ele o comando recusa — uma versão que some sem
+explicação faz a pessoa achar que o problema é dela.
 
----
+A retirada aumenta a sequência do catálogo **sem oferecer nada novo**. Ela nunca
+vira um convite para voltar a uma versão anterior: o aplicativo não aceita
+downgrade automático.
+
+## Recuperar o estado do catálogo
+
+Se a pasta de publicação se perder — e as chaves vierem do backup —, o estado
+do catálogo é reconstruído a partir do que está publicado:
+
+```bash
+ssh vps "curl -fsS http://127.0.0.1:4301/admin/catalog" > /tmp/publicado.json
+node tools/publisher/publish.mjs state import --from /tmp/publicado.json
+```
+
+**Saída esperada:** `Estado do catálogo importado: sequência <N>.`
+
+**Por que isso importa:** publicar às cegas produziria uma sequência que anda
+para trás, e um catálogo assim é recusado pelo serviço **e** pelos clientes —
+depois de já ter sido assinado. O comando também recusa importar um estado mais
+antigo do que o local, pelo mesmo motivo.
 
 ## Autorizar dispositivos
 
@@ -286,14 +319,16 @@ Nada nesse caminho consulta a rede além da própria VPS.
 
 ## O que ainda não está implementado
 
-`tools/publicador/` — `montar-manifesto.mjs`, `montar-catalogo.mjs` e
-`assinar.mjs` — **não** existe nesta revisão. Os contratos que ele produziria
-estão definidos e testados em `shared/distribution.ts` e
-`tests/distribution.test.ts`, e o serviço já aceita, confere e recusa os
-documentos corretamente (`tests/updateService.integration.test.ts`).
+O caminho de publicação acima está implementado e exercido de ponta a ponta em
+`tests/publisher.integration.test.ts`: uma pasta de build vira release assinada,
+é importada e publicada, e o aplicativo a recebe e a baixa.
 
-O que falta é a ferramenta que monta os documentos a partir de uma pasta de
-binários. Até lá, os documentos precisam ser montados à mão seguindo os tipos
-de `shared/distribution.ts`.
+O que **falta** é do outro lado da operação:
+
+| Item | Enquanto isso |
+|---|---|
+| o executor que aplica uma release ao servidor | [Atualização do servidor](atualizacao-servidor.md), manual |
+| `tumacordctl backup` / `restore` | [Backup e restauração](backup-restore.md), manual |
+| o painel do dono para atualizações | `tumacordctl` faz o mesmo pela linha de comando |
 
 Veja [QA da release](QA.md) para o que foi executado e o que ficou pendente.

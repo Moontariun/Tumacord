@@ -39,13 +39,13 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
 |---|---|---|
-| Testes | **663** aprovados | **867** aprovados |
+| Testes | **663** aprovados | **898** aprovados |
 | Typecheck | limpo | limpo |
 | `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
 
 > A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
 > qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
-> desta revisão: os 204 casos novos existem porque cada um deles reprova no
+> desta revisão: os 235 casos novos existem porque cada um deles reprova no
 > código anterior.
 
 ### O que foi TESTADO
@@ -76,6 +76,15 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 | ↳ credencial revogada some do disco e a tela pede convite novo | | idem |
 | ↳ sem chaveiro, a inscrição vale na sessão e isso é dito | | idem |
 | ↳ **nenhum arquivo do caminho de atualização aponta para o GitHub** | | idem |
+| **O ciclo inteiro: build → release assinada → publicada → app recebe** | 10 casos | `tests/publisher.integration.test.ts` |
+| ↳ as notas saem do CHANGELOG e chegam assinadas ao aplicativo | | idem |
+| ↳ a retirada publicada alcança o aplicativo | | idem |
+| ↳ número publicado não vira conteúdo diferente; sequência sempre cresce | | idem |
+| ↳ chave privada não vaza no documento público; gerar por cima é recusado | | idem |
+| ↳ o estado do catálogo é recuperável, e importar um mais antigo é recusado | | idem |
+| Reconhecimento de pacotes e montagem do catálogo | 21 casos | `tests/publisherPackages.test.ts` |
+| ↳ ambiguidade **para** a publicação em vez de virar sorteio | | idem |
+| ↳ o pacote da versão anterior na mesma pasta não entra nesta release | | idem |
 | ↳ catálogo, manifesto e pacote sem tocar no GitHub | | idem |
 | ↳ retomada real: cancela no meio, continua, e o SHA-256 remontado confere | | idem |
 | ↳ chave desconhecida, catálogo repetido, catálogo vencido no relógio do cliente | | idem |
@@ -145,8 +154,7 @@ executados, **o gate correspondente fica pendente**.
 | Executor de deploy (systemd) | `packaging/servidor/tumacord-executor.service`, com aviso |
 | `tumacordctl server apply` / `server rollback` | `--help` recusa e aponta o manual |
 | `tumacordctl backup` / `restore` / `jobs status` | idem |
-| Ferramentas de publicação (`tools/publicador/`) | [Publicação privada](publicacao-privada.md) |
-| Painel do dono para atualizações | — |
+| Painel do dono para atualizações | o `tumacordctl` faz o mesmo pela linha de comando |
 | Identidade P2P com claims verificáveis | — |
 | Runbook de migração de VPS | — |
 
@@ -155,13 +163,19 @@ executados, **o gate correspondente fica pendente**.
 > código que roda. O aplicativo consulta a origem configurada nele, verifica
 > assinatura e frescor, e baixa por identificador.
 >
-> O que **ainda não existe** é o outro lado da operação: as ferramentas que
-> montam e assinam os documentos (`tools/publicador/`) e o executor que aplica
-> no servidor. Sem elas, uma release precisa ser montada à mão seguindo os
-> tipos de `shared/distribution.ts`, e o servidor é atualizado pelo
-> procedimento manual. A ponte manual continua sendo o caminho **para a
-> primeira** distribuição: um aplicativo 0.9.9 instalado hoje não tem como
-> receber a 0.9.9-1 pelo caminho novo, porque ele ainda é o aplicativo antigo.
+> A publicação também está fechada: `tools/publisher/` monta e assina os
+> documentos a partir de uma pasta de build, e o ciclo inteiro — build, release
+> assinada, importação, promoção, e o aplicativo recebendo e baixando — é
+> exercido em `tests/publisher.integration.test.ts`.
+>
+> O que **ainda não existe** é o executor que aplica uma release ao servidor
+> dedicado: isso continua sendo o procedimento manual de
+> [Atualização do servidor](atualizacao-servidor.md).
+>
+> E a **ponte manual continua sendo o caminho para a primeira distribuição**:
+> um aplicativo 0.9.9 instalado hoje não tem como receber a 0.9.9-1 pelo
+> caminho novo, porque ele ainda é o aplicativo antigo. Quem está na 0.9.9
+> instala a 0.9.9-1 à mão uma vez; da 0.9.9-1 em diante o caminho novo vale.
 
 ### Observações da execução
 
@@ -177,7 +191,7 @@ executados, **o gate correspondente fica pendente**.
 Verificadas pela suíte existente, que continua inteira: login e identidade,
 chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
 deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
-handoff P2P. **867 aprovados, nenhuma falha.**
+handoff P2P. **898 aprovados, nenhuma falha.**
 
 ---
 

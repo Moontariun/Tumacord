@@ -14,6 +14,7 @@ Uma correção pequena deixou de exigir uma versão grande: `0.9.9-1` é a vers�
 - Cada dispositivo é autorizado por um convite de uso único, que o dono cria e passa por canal privado. A credencial só baixa, é revogável na hora, e fica no chaveiro do sistema — sem chaveiro, ela vale para a sessão e o aplicativo diz isso.
 - A retirada de uma versão passou a morar só no catálogo assinado. Antes ela era um comentário de HTML nas notas da Release, e uma segunda autoridade sobre o que está retirado é sempre a que alguém consegue forjar.
 - O download retoma de onde parou, e o resumo conferido é o de tudo o que está no disco.
+- Uma pasta de build vira release assinada por um comando: `tools/publisher/` confere cada pacote, tira as notas do CHANGELOG, assina o manifesto e monta o catálogo. Dois arquivos para o mesmo alvo **param** a publicação em vez de virar sorteio, e um número já publicado não volta a ser usado para conteúdo diferente.
 
 ## 0.9.9 — a mensagem deixa de ser definitiva, e o aplicativo ganha ouvido
 
