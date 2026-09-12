@@ -39,13 +39,13 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
 |---|---|---|
-| Testes | **663** aprovados | **840** aprovados |
+| Testes | **663** aprovados | **855** aprovados |
 | Typecheck | limpo | limpo |
 | `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
 
 > A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
 > qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
-> desta revisão: os 177 casos novos existem porque cada um deles reprova no
+> desta revisão: os 192 casos novos existem porque cada um deles reprova no
 > código anterior.
 
 ### O que foi TESTADO
@@ -68,6 +68,12 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 | Escolha de pacote por OS/arquitetura/formato; manifesto ambíguo não vira sorteio | | `tests/distribution.test.ts` |
 | Serviço de atualizações, unidades: autorização, convites, Range, limites, estado | 31 casos | `tests/updateService.test.ts` |
 | Serviço de atualizações, **de pé, por HTTP** | 15 casos | `tests/updateService.integration.test.ts` |
+| **Cliente falando com o serviço privado, pela rede** | 15 casos | `tests/updateSource.integration.test.ts` |
+| ↳ catálogo, manifesto e pacote sem tocar no GitHub | | idem |
+| ↳ retomada real: cancela no meio, continua, e o SHA-256 remontado confere | | idem |
+| ↳ chave desconhecida, catálogo repetido, catálogo vencido no relógio do cliente | | idem |
+| ↳ manifesto que não é o que o catálogo prometeu; pacote trocado | | idem |
+| ↳ credencial revogada, renovação, convite inventado, versão retirada | | idem |
 | ↳ nenhuma rota de conteúdo anônima; HEAD e Range sob a mesma autorização | | idem |
 | ↳ retomada em dois pedaços que remontam o arquivo com o mesmo SHA-256 | | idem |
 | ↳ revogação corta na hora; retirada devolve 410 a quem já tinha a URL | | idem |
@@ -135,13 +141,19 @@ executados, **o gate correspondente fica pendente**.
 | Ferramentas de publicação (`tools/publicador/`) | [Publicação privada](publicacao-privada.md) |
 | Painel do dono para atualizações | — |
 | Identidade P2P com claims verificáveis | — |
-| Cliente consumindo o serviço privado | o aplicativo ainda consulta as Releases |
+| **Ligação** do `desktop/updater.cjs` ao serviço privado | os módulos existem e estão provados; o `updater.cjs` ainda usa o caminho do GitHub |
 | Runbook de migração de VPS | — |
 
-> **A consequência prática:** os aplicativos desta revisão **ainda não**
-> consultam o serviço privado. A ponte manual continua sendo o caminho, e a
-> distribuição privada está pronta do lado do servidor — contratos, serviço,
-> autorização e testes — mas ainda não do lado do cliente.
+> **A consequência prática:** o aplicativo que você instala nesta revisão
+> **ainda busca atualização no GitHub**, porque `desktop/updater.cjs` continua
+> apontando para lá. O que já existe e está provado é tudo o que fica **em
+> volta** disso: os contratos assinados, o serviço na VPS, a autorização de
+> dispositivos, e os módulos do cliente que falam com ele — exercidos contra o
+> serviço de verdade, pela rede, em 15 casos.
+>
+> O que falta é uma ligação: trocar, dentro do `updater.cjs`, a consulta às
+> Releases pela chamada a `update-source.cjs`. Até isso acontecer, a ponte
+> manual continua sendo o caminho para os aplicativos.
 
 ### Observações da execução
 
@@ -157,7 +169,7 @@ executados, **o gate correspondente fica pendente**.
 Verificadas pela suíte existente, que continua inteira: login e identidade,
 chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
 deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
-handoff P2P. **840 aprovados, nenhuma falha.**
+handoff P2P. **855 aprovados, nenhuma falha.**
 
 ---
 
