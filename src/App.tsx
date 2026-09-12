@@ -17,6 +17,7 @@ import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetTh
 import { ATTACHMENT_SYNC_KEY, attachmentSyncEnabled, attachmentSyncVisible } from './lib/attachmentSync';
 import { FEEDBACK_SOUNDS, SOUND_LABEL, playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, imagePreview, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
+import { syncIdentity } from './lib/identity';
 import { volumeToGain } from './lib/audioGain';
 import { adoptDirectKey, buildInvite, describeGrade, inviteFormat, readDirectReport, requestShortInvite, resolveAnyInvite, type DirectReport } from './lib/directLink';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from './lib/freshness';
@@ -401,7 +402,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [aApagar, setAApagar] = useState<ChatMessage | null>(null);
   // A preferência guardada, como ela está no navegador. O que vale na prática
-  // é `replicaAnexos`, logo abaixo: no dedicado a resposta é sempre não.
+  // é `replicatesAttachments`, logo abaixo: no dedicado a resposta é sempre não.
   const [syncFiles, setSyncFiles] = useState(() => localStorage.getItem(ATTACHMENT_SYNC_KEY) === 'true');
   const [connected, setConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -725,7 +726,13 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
       await publishProfileMedia(local, session.serverUrl, session.token);
       next.emit('chat:sync:push', local, (result: ChatSyncBundle & { ok?: boolean }) => { if (result?.ok !== false && result?.messages) mergeBundle(result); });
     };
-    next.on('connect', () => { setConnected(true); void pushLocalHistory(); });
+    next.on('connect', () => {
+      setConnected(true);
+      void pushLocalHistory();
+      // A identidade do grupo viaja à parte do chat: um host antigo não
+      // responde, e isso não pode atrasar nem quebrar o histórico.
+      if (session.connectionMode === 'p2p') void syncIdentity(next);
+    });
     next.on('disconnect', () => setConnected(false));
     next.on('connect_error', (error) => {
       setConnected(false);

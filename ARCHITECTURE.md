@@ -149,6 +149,22 @@ A pasta de downloads da atualização (`updates`, dentro dos dados do aplicativo
 
 Mensagens e perfis são mesclados entre os computadores online. Perfis usam o nome normalizado como identidade P2P e `updatedAt` como revisão: avatar, banner, bio e cor mais recentes vencem. As mídias de perfil são publicadas no host atual e baixadas para o servidor embutido de cada desktop, permitindo que qualquer participante assuma como host sem voltar para uma foto antiga.
 
+## Identidade no P2P
+
+No dedicado a conta é uma só, e o servidor decide. No P2P cada computador tem o próprio servidor embutido, e a troca de host faz todo mundo autenticar de novo no de quem assumiu. Até a 0.9.9 a conta nascia lá com a senha de quem chegasse primeiro — e, como no P2P a identidade de uma mensagem é o nome normalizado, com ela vinha o direito de editar e apagar as mensagens de outra pessoa.
+
+Cada desktop tem um par Ed25519 (`desktop/identity-key.cjs`), guardado pelo chaveiro do sistema e, sem chaveiro, num arquivo com permissão 0600 — o que é dito. A página nunca assina nada: ela pede ao processo principal, por campos, uma prova de login, um claim ou uma liberação. O texto assinado é montado lá, com um domínio por propósito, pelas regras de `shared/identity.ts`, que o gerador entrega ao processo principal em CJS. Um arquivo ilegível ou um chaveiro que não abre deixam a identidade indisponível e dizem por quê; gerar outra chave por cima tiraria da pessoa o próprio nome, sem aviso.
+
+O grupo de um claim é o SHA-256 da chave do convite, e não a chave. O login P2P pede um desafio de uso único, amarrado ao nome e ao grupo. Com o nome livre, o cliente manda também o claim, e o host só dá sessão depois de gravá-lo e conferir que ele ficou como titular: dois logins simultâneos pelo mesmo nome saem com um dono só.
+
+A precedência entre dois claims do mesmo nome é `firstSeenAt`, carimbado por cada host ao receber, e não o `issuedAt` assinado: atrasar o relógio não compra um nome. Dois dispositivos que reivindicaram o mesmo nome com o grupo dividido deixam o nome em disputa, e a disputa não é resolvida em silêncio — entra quem o host viu primeiro, marcado como provisório, e o outro é recusado até alguém liberar. Uma liberação assinada fica guardada para sempre; sem ela, o claim antigo voltaria por reapresentação.
+
+Os registros viajam à parte do chat, nos eventos `identity:push` e `identity:records`, em páginas pela sequência de chegada de cada host. Cada cliente guarda o que vê no próprio servidor embutido, e é isso que faz um host novo já conhecer os nomes quando a troca cai nele. Um host anterior a esta versão não responde a esses eventos e não anuncia `identityClaims`; um aplicativo anterior continua entrando com um nome livre e é recusado, com o motivo, num nome que já tem dono.
+
+A senha continua sendo de cada host, e ela só cede ao titular confirmado de um nome: uma conta criada num host por outra pessoa, antes de o claim chegar, não tranca o dono para fora. Um titular provisório não tem esse poder.
+
+O que isto **não** cobre: o perfil replicado — foto, bio e cor — continua decidido pelo nome e pela data, sem assinatura.
+
 ## Interface: o que a tela diz, e onde
 
 A regra do projeto, a partir da 0.9.8: **texto explicativo não fica ao lado do

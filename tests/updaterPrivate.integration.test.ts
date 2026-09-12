@@ -73,8 +73,8 @@ interface Environment {
   origin: string;
   adminUrl: string;
   userDataPath: string;
-  novoUpdater: (extra?: Record<string, unknown>) => InstanceType<typeof Updater>;
-  encerrar: () => Promise<void>;
+  newUpdater: (extra?: Record<string, unknown>) => InstanceType<typeof Updater>;
+  close: () => Promise<void>;
 }
 
 async function start(): Promise<Environment> {
@@ -122,8 +122,8 @@ async function start(): Promise<Environment> {
   });
 
   return {
-    origin, adminUrl, userDataPath, novoUpdater: newUpdater,
-    encerrar: async () => {
+    origin, adminUrl, userDataPath, newUpdater: newUpdater,
+    close: async () => {
       await Promise.all(servers.map((serviceServer) => new Promise<void>((resolve) => serviceServer.close(() => resolve()))));
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -141,8 +141,8 @@ async function inviteDevice(adminUrl: string, label = 'máquina de teste'): Prom
 
 test('o updater procura, acha e baixa pelo serviço privado', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
-  const updater = environment.novoUpdater();
+  context.after(() => environment.close());
+  const updater = environment.newUpdater();
 
   // Sem credencial, a procura não acontece — e a tela diz o que fazer.
   const withoutCredential = await updater.check({ manual: true });
@@ -152,7 +152,7 @@ test('o updater procura, acha e baixa pelo serviço privado', { timeout: 30_000 
 
   // O convite vem por canal privado e vale uma vez.
   const enrolled = await updater.enroll(await inviteDevice(environment.adminUrl), 'Linux do teste');
-  assert.equal(enrolled.phase, 'available', JSON.stringify({ erro: enrolled.error, fase: enrolled.phase }));
+  assert.equal(enrolled.phase, 'available', JSON.stringify({ error: enrolled.error, phase: enrolled.phase }));
   assert.equal(enrolled.version, '0.9.10');
   assert.equal(enrolled.title, 'Tumacord 0.9.10 — a próxima');
   assert.equal(enrolled.asset?.name, 'tumacord-0.9.10.tar.gz');
@@ -168,8 +168,8 @@ test('o updater procura, acha e baixa pelo serviço privado', { timeout: 30_000 
 
 test('a sequência do catálogo é guardada, e um catálogo anterior é recusado', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
-  const updater = environment.novoUpdater();
+  context.after(() => environment.close());
+  const updater = environment.newUpdater();
   await updater.enroll(await inviteDevice(environment.adminUrl));
 
   assert.equal(updater.preferences.catalogSequence, 5, 'a maior sequência aceita fica guardada');
@@ -177,14 +177,14 @@ test('a sequência do catálogo é guardada, e um catálogo anterior é recusado
   // Um updater novo, na mesma máquina, já nasce sabendo até onde chegou — e um
   // serviço que voltasse no tempo não consegue reoferecer o que foi deixado
   // para trás.
-  const other = environment.novoUpdater();
+  const other = environment.newUpdater();
   assert.equal(other.preferences.catalogSequence, 5);
 });
 
 test('uma versão retirada para de ser oferecida, e o motivo aparece', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
-  const updater = environment.novoUpdater();
+  context.after(() => environment.close());
+  const updater = environment.newUpdater();
   await updater.enroll(await inviteDevice(environment.adminUrl));
 
   const withdrawn: Catalog = {
@@ -208,8 +208,8 @@ test('uma versão retirada para de ser oferecida, e o motivo aparece', { timeout
 
 test('uma credencial revogada some do disco e a tela pede um convite novo', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
-  const updater = environment.novoUpdater();
+  context.after(() => environment.close());
+  const updater = environment.newUpdater();
   await updater.enroll(await inviteDevice(environment.adminUrl));
 
   const list = await (await fetch(`${environment.adminUrl}/admin/devices`)).json() as { devices: { deviceId: string }[] };
@@ -227,8 +227,8 @@ test('uma credencial revogada some do disco e a tela pede um convite novo', { ti
 
 test('um convite inventado não inscreve, e a mensagem é útil', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
-  const updater = environment.novoUpdater();
+  context.after(() => environment.close());
+  const updater = environment.newUpdater();
   const outcome = await updater.enroll('z'.repeat(64), 'intruso');
   assert.equal(outcome.phase, 'needs-enrollment');
   assert.match(outcome.enrollmentMessage, /não é reconhecido/);
@@ -236,11 +236,11 @@ test('um convite inventado não inscreve, e a mensagem é útil', { timeout: 30_
 
 test('sem chaveiro, a inscrição vale para a sessão e isso é dito', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   // Uma sessão Linux sem gerenciador de segredos é o caso comum. Guardar o
   // token em claro seria a escolha errada: o arquivo de configuração é lido
   // por qualquer coisa que rode como aquele usuário.
-  const updater = environment.novoUpdater({ safeStorage: { isEncryptionAvailable: () => false } });
+  const updater = environment.newUpdater({ safeStorage: { isEncryptionAvailable: () => false } });
   const outcome = await updater.enroll(await inviteDevice(environment.adminUrl));
   assert.match(outcome.enrollmentMessage, /não foi gravada|convite novo/);
   await assert.rejects(() => readFile(path.join(environment.userDataPath, 'update-device.json')));
@@ -248,9 +248,9 @@ test('sem chaveiro, a inscrição vale para a sessão e isso é dito', { timeout
 
 test('sem origem configurada, o updater diz isso em vez de tentar um endereço', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   await rm(path.join(environment.userDataPath, 'update-origin.json'), { force: true });
-  const updater = environment.novoUpdater();
+  const updater = environment.newUpdater();
   const outcome = await updater.check({ manual: true });
   assert.equal(outcome.phase, 'no-origin');
   assert.match(outcome.error, /origem de atualizações/);

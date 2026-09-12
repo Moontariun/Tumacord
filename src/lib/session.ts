@@ -6,6 +6,7 @@
 
 import type { SessionResponse } from '../../shared/types';
 import { originFor } from './origin';
+import { identityForLogin, type IdentityAttempt } from './identity';
 import {
   abandonSession as descartarDoChaveiro,
   activeSession as chaveiroAtivo,
@@ -219,13 +220,27 @@ async function authenticate(
   serverKey = '',
 ): Promise<SavedSession> {
   const normalizedUrl = serverUrl.trim().replace(/\/$/, '');
+  // No P2P o nome é provado pela chave deste dispositivo. Um host anterior a
+  // esta versão não pede prova, e o login segue exatamente como antes.
+  const attempt: IdentityAttempt = connectionMode === 'p2p' ? await identityForLogin(normalizedUrl, username, serverKey.trim()) : {};
   const response = await fetch(`${normalizedUrl}/api/auth/${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password, ...(allowCreate ? { allowCreate: true } : {}), ...(serverKey.trim() ? { serverKey: serverKey.trim() } : {}) }),
+    body: JSON.stringify({
+      username,
+      password,
+      ...(allowCreate ? { allowCreate: true } : {}),
+      ...(serverKey.trim() ? { serverKey: serverKey.trim() } : {}),
+      ...(attempt.identity ? { identity: attempt.identity } : {}),
+    }),
   });
-  const body = await response.json() as SessionResponse & { error?: string };
-  if (!response.ok) throw new Error(body.error || 'Não foi possível entrar.');
+  const body = await response.json() as SessionResponse & { error?: string; identityRefusal?: string };
+  if (!response.ok) {
+    // Um chaveiro fechado não é "atualize o aplicativo". Quando a prova não
+    // saiu por causa deste computador, é o motivo daqui que a pessoa lê.
+    if (body.identityRefusal === 'proof-required' && attempt.unavailableMessage) throw new Error(attempt.unavailableMessage);
+    throw new Error(body.error || 'Não foi possível entrar.');
+  }
   const { installationId } = await resolveDestination(normalizedUrl, connectionMode, serverKey);
   // A senha só precisa acompanhar a sessão no modo dinâmico: ela permite
   // autenticar automaticamente no novo host durante a troca P2P. No servidor

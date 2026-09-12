@@ -8,6 +8,7 @@ import { countOwners, migrateRoles, normalizeRole, type Role } from './roles.js'
 import { applyOrder, detachCategory, nextPosition, normalizePositions, type CategoryRecord, type ChannelRecord } from './channels.js';
 import { appendAudit, type AuditEntry } from './audit.js';
 import type { StoredBoard } from './whiteboards.js';
+import { claimShapeIsValid, emptyLedger, mergeLedger, releaseShapeIsValid, type IdentityLedger, type MergeOptions, type MergeOutcome } from '../shared/identity.js';
 
 export interface StoredUser {
   id: string;
@@ -103,6 +104,9 @@ interface StoredData {
   // partir das contas que existem, que é o histórico que de fato existe. Um
   // nome apagado antes disso não deixou registro e não é possível reconstruí-lo.
   usernameReservations?: UsernameReservation[];
+  // Os claims de nome do P2P e as liberações deles. Ausente nos arquivos
+  // anteriores à 0.9.9-1, e ausência é registro vazio.
+  identityLedger?: IdentityLedger;
 }
 
 export interface MirroredHistory {
@@ -133,7 +137,32 @@ const initialData = (): StoredData => ({
   deletedBoards: [],
   mirrors: {},
   usernameReservations: [],
+  identityLedger: emptyLedger(),
 });
+
+/**
+ * O registro de identidade como ele está no disco, sem confiar nele.
+ *
+ * Um registro que não tem a forma de claim é descartado na carga, e não derruba
+ * a subida: o que sobra continua valendo, e o que era legítimo volta pela
+ * sincronização. A assinatura não é conferida de novo aqui — ela foi conferida
+ * na entrada, e o arquivo é gravado com permissão 0600.
+ */
+function ledgerFromDisk(value: unknown): IdentityLedger {
+  const raw = (value ?? {}) as Partial<IdentityLedger>;
+  const entries = Array.isArray(raw.entries)
+    ? raw.entries.filter((entry) => entry && claimShapeIsValid(entry.claim) && typeof entry.firstSeenAt === 'string' && Number.isSafeInteger(entry.sequence))
+    : [];
+  const releases = Array.isArray(raw.releases)
+    ? raw.releases.filter((entry) => entry && releaseShapeIsValid(entry.release) && typeof entry.firstSeenAt === 'string' && Number.isSafeInteger(entry.sequence))
+    : [];
+  let highest = 0;
+  for (const entry of [...entries, ...releases]) highest = Math.max(highest, entry.sequence);
+  // A sequência nunca anda para trás: um cursor já entregue a um cliente não
+  // pode passar a apontar para outro registro.
+  const sequence = Number.isSafeInteger(raw.sequence) && (raw.sequence as number) >= highest ? raw.sequence as number : highest;
+  return { entries, releases, sequence };
+}
 
 function profileKey(username: string): string {
   return username.normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
@@ -249,6 +278,7 @@ export class JsonStore {
         mirrors: parsed.mirrors ?? {},
         legacyHistoryUntil: parsed.legacyHistoryUntil,
         usernameReservations: parsed.usernameReservations ?? [],
+        identityLedger: ledgerFromDisk(parsed.identityLedger),
       };
       // As reservas nascem do histórico que de fato existe: as contas que
       // estão aqui. Um nome apagado antes desta versão não deixou registro, e
@@ -287,6 +317,38 @@ export class JsonStore {
   get attachments(): readonly StoredAttachment[] { return this.data.attachments; }
   get profiles(): readonly ReplicatedProfile[] { return this.data.profiles; }
   get sessions(): readonly StoredSession[] { return this.data.sessions; }
+  get identityLedger(): IdentityLedger { return this.data.identityLedger ?? emptyLedger(); }
+
+  /**
+   * Junta claims e liberações ao registro, e grava se algo entrou.
+   *
+   * A mescla não devolve o laço de eventos no meio: dois logins simultâneos
+   * pelo mesmo nome livre entram em ordem de sequência, e é essa ordem que
+   * decide quem ficou com o nome neste host.
+   */
+  async mergeIdentity(incoming: { claims?: unknown; releases?: unknown }, options: MergeOptions): Promise<MergeOutcome> {
+    const outcome = mergeLedger(this.identityLedger, incoming, options);
+    if (outcome.added.length || outcome.released.length) {
+      this.data.identityLedger = outcome.ledger;
+      await this.save();
+    }
+    return outcome;
+  }
+
+  /**
+   * Troca o hash de senha de uma conta deste host.
+   *
+   * Só é chamada quando uma prova de identidade confere com o dono do nome. No
+   * P2P a senha é de cada host, e uma conta criada aqui por outra pessoa antes
+   * de o claim chegar não pode trancar para fora a quem o nome pertence.
+   */
+  async replacePasswordHash(userId: string, passwordHash: string): Promise<boolean> {
+    const user = this.data.users.find((candidate) => candidate.id === userId);
+    if (!user) return false;
+    user.passwordHash = passwordHash;
+    await this.save();
+    return true;
+  }
 
   /**
    * Duplicatas de nome encontradas na carga, para o dono resolver.

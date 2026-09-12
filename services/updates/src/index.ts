@@ -238,9 +238,9 @@ app.get('/v1/health', (_request, response) => {
   const catalogDoc = store.state.catalog?.payload;
   response.json({
     ok: true,
-    servico: 'tumacord-atualizacoes',
-    catalogDoc: catalogDoc ? { sequence: catalogDoc.sequence, expiresAt: catalogDoc.expiresAt } : null,
-    downloadsAtivos: gate.active,
+    service: 'tumacord-updates',
+    catalog: catalogDoc ? { sequence: catalogDoc.sequence, expiresAt: catalogDoc.expiresAt } : null,
+    activeDownloads: gate.active,
   });
 });
 

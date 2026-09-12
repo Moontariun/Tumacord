@@ -257,7 +257,7 @@ export function createExecutor(config, { store, execute } = {}) {
   };
 
   const routes = {
-    'GET /health': async () => ({ status: 200, body: { ok: true, servico: 'tumacord-executor' } }),
+    'GET /health': async () => ({ status: 200, body: { ok: true, service: 'tumacord-executor' } }),
 
     'GET /v1/state': async () => {
       const found = await installationOf(config);
@@ -404,7 +404,7 @@ export function createExecutor(config, { store, execute } = {}) {
     }
 
     if (url.pathname === '/health' && request.method === 'GET') {
-      return send(200, { ok: true, servico: 'tumacord-executor' });
+      return send(200, { ok: true, service: 'tumacord-executor' });
     }
 
     if (!secretMatches(bearer(request.headers.authorization), secret)) {

@@ -15,6 +15,10 @@ Uma correção pequena deixou de exigir uma versão grande: `0.9.9-1` é a vers�
 - A retirada de uma versão passou a morar só no catálogo assinado. Antes ela era um comentário de HTML nas notas da Release, e uma segunda autoridade sobre o que está retirado é sempre a que alguém consegue forjar.
 - O download retoma de onde parou, e o resumo conferido é o de tudo o que está no disco.
 - Uma pasta de build vira release assinada por um comando: `tools/publisher/` confere cada pacote, tira as notas do CHANGELOG, assina o manifesto e monta o catálogo. Dois arquivos para o mesmo alvo **param** a publicação em vez de virar sorteio, e um número já publicado não volta a ser usado para conteúdo diferente.
+- O servidor dedicado passou a ser atualizado por um **executor** que roda no host, e não pelo contêiner, que se reiniciava no meio da própria troca. O painel do dono lista as versões do catálogo assinado, e só o identificador da release atravessa: a referência de git é tirada do manifesto, lá no host.
+- Aplicar uma versão exige a cópia dos dados antes. `tumacordctl backup` pausa a escrita, copia e confere o arquivo; `tumacordctl restore` ensaia num volume separado e para se a cópia for de outra instalação.
+- **No P2P, um nome passou a pertencer a quem o reivindicou com a chave do próprio dispositivo.** Na troca de host, a conta nascia no servidor novo com a senha de quem chegasse primeiro — e, com ela, o direito de editar e apagar as mensagens de outra pessoa. Um aplicativo anterior continua entrando com um nome livre, e é recusado, com o motivo, num nome que já tem dono.
+- Um nome reivindicado por dois dispositivos enquanto o grupo estava dividido fica em disputa, e a disputa não é resolvida em silêncio: entra quem aquele host viu primeiro, marcado como provisório, até um dos dois liberar o nome.
 
 ## 0.9.9 — a mensagem deixa de ser definitiva, e o aplicativo ganha ouvido
 

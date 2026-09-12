@@ -27,9 +27,9 @@ function markdownFiles(): string[] {
 }
 
 const documents = markdownFiles().map((filePath) => ({
-  caminho: filePath,
-  relativo: path.relative(repoRoot, filePath),
-  texto: readFileSync(filePath, 'utf8'),
+  filePath: filePath,
+  relative: path.relative(repoRoot, filePath),
+  text: readFileSync(filePath, 'utf8'),
 }));
 
 /** Todo arquivo do projeto que pode consumir uma variável de ambiente. */
@@ -65,14 +65,14 @@ test('há documentos para conferir', () => {
 test('todo link markdown local aponta para um arquivo que existe', () => {
   const broken: string[] = [];
   for (const doc of documents) {
-    for (const match of doc.texto.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
+    for (const match of doc.text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
       const target = match[1];
       // Links externos e âncoras puras não são conferidos aqui.
       if (/^(https?:|mailto:|#)/.test(target)) continue;
       const withoutAnchor = target.split('#')[0];
       if (!withoutAnchor) continue;
-      const resolved = path.resolve(path.dirname(doc.caminho), withoutAnchor);
-      if (!existsSync(resolved)) broken.push(`${doc.relativo} → ${target}`);
+      const resolved = path.resolve(path.dirname(doc.filePath), withoutAnchor);
+      if (!existsSync(resolved)) broken.push(`${doc.relative} → ${target}`);
     }
   }
   assert.deepEqual(broken, [], `links para arquivos que não existem:\n  ${broken.join('\n  ')}`);
@@ -82,8 +82,8 @@ test('todo caminho de arquivo citado em crase existe', () => {
   // Só os que parecem caminho do projeto: com barra e extensão conhecida.
   const broken: string[] = [];
   for (const doc of documents) {
-    const lines = doc.texto.split('\n');
-    for (const match of doc.texto.matchAll(/`([a-zA-Z0-9_./-]+\/[a-zA-Z0-9_.-]+\.(ts|tsx|cjs|mjs|json|sh|ps1|yml|md|service|conf))`/g)) {
+    const lines = doc.text.split('\n');
+    for (const match of doc.text.matchAll(/`([a-zA-Z0-9_./-]+\/[a-zA-Z0-9_.-]+\.(ts|tsx|cjs|mjs|json|sh|ps1|yml|md|service|conf))`/g)) {
       const target = match[1];
       if (target.startsWith('http') || target.includes('<') || target.includes('$')) continue;
       // Exemplos genéricos e caminhos de dentro do contêiner não são do repo.
@@ -94,10 +94,10 @@ test('todo caminho de arquivo citado em crase existe', () => {
       // documentação correta — e é melhor do que apagar o parágrafo e deixar
       // quem procura pelo nome antigo sem resposta. O que não pode é citá-lo
       // como se ele ainda estivesse lá.
-      const lineIndex = doc.texto.slice(0, match.index).split('\n').length - 1;
+      const lineIndex = doc.text.slice(0, match.index).split('\n').length - 1;
       const surrounding = lines.slice(Math.max(0, lineIndex - 3), lineIndex + 4).join(' ');
       if (/\bsa[ií]ram?\b|removid|deixaram? de existir|não existe mais/i.test(surrounding)) continue;
-      broken.push(`${doc.relativo} cita ${target}`);
+      broken.push(`${doc.relative} cita ${target}`);
     }
   }
   assert.deepEqual(broken, [], `arquivos citados que não existem:\n  ${broken.join('\n  ')}`);
@@ -114,9 +114,9 @@ test('nenhum documento manda instalar uma versão que não é a desta entrega', 
     // Um relatório de época é evidência, e a evidência não é reescrita: ele
     // cita o comando da versão dele porque foi ele que rodou. O que ele
     // precisa é se identificar como histórico, e isso é conferido abaixo.
-    if (/^docs\/(RELATORIO|AUDITORIA)-/.test(doc.relativo)) continue;
-    for (const match of doc.texto.matchAll(/install-v(\d+\.\d+\.\d+(?:-\d+)?)\.sh/g)) {
-      if (match[1] !== version) wrong.push(`${doc.relativo}: install-v${match[1]}.sh`);
+    if (/^docs\/(RELATORIO|AUDITORIA)-/.test(doc.relative)) continue;
+    for (const match of doc.text.matchAll(/install-v(\d+\.\d+\.\d+(?:-\d+)?)\.sh/g)) {
+      if (match[1] !== version) wrong.push(`${doc.relative}: install-v${match[1]}.sh`);
     }
   }
   assert.deepEqual(wrong, [], `instaladores de outra versão:\n  ${wrong.join('\n  ')}`);
@@ -155,7 +155,7 @@ test('todo serviço citado nos guias existe no docker-compose.yml', () => {
 
   const cited = new Set<string>();
   for (const doc of documents) {
-    for (const match of doc.texto.matchAll(/docker compose[^\n`]*?\b(tumacord-[a-z-]+|coturn)\b/g)) {
+    for (const match of doc.text.matchAll(/docker compose[^\n`]*?\b(tumacord-[a-z-]+|coturn)\b/g)) {
       cited.add(match[1]);
     }
   }
@@ -172,11 +172,11 @@ test('todo `tumacordctl` citado nos guias existe de verdade', () => {
   const cli = readFileSync(path.join(repoRoot, 'tools/tumacordctl/tumacordctl.mjs'), 'utf8');
   const missing: string[] = [];
   for (const doc of documents) {
-    for (const match of doc.texto.matchAll(/tumacordctl\s+([a-z]+)/g)) {
+    for (const match of doc.text.matchAll(/tumacordctl\s+([a-z]+)/g)) {
       const command = match[1];
       // `--help` e `version` são do próprio CLI; o resto precisa de case.
       if (command === 'version') continue;
-      if (!cli.includes(`case '${command}':`)) missing.push(`${doc.relativo}: tumacordctl ${command}`);
+      if (!cli.includes(`case '${command}':`)) missing.push(`${doc.relative}: tumacordctl ${command}`);
     }
   }
   assert.deepEqual([...new Set(missing)], [], 'comandos citados na documentação que o CLI não tem');
@@ -193,10 +193,10 @@ test('as opções citadas nos guias são opções que o CLI lê', () => {
 
   const unknownOptions: string[] = [];
   for (const doc of documents) {
-    for (const line of doc.texto.split('\n')) {
+    for (const line of doc.text.split('\n')) {
       if (!line.includes('tumacordctl')) continue;
       for (const match of line.matchAll(/--([a-z][a-z-]*)/g)) {
-        if (!known.has(match[1])) unknownOptions.push(`${doc.relativo}: --${match[1]}`);
+        if (!known.has(match[1])) unknownOptions.push(`${doc.relative}: --${match[1]}`);
       }
     }
   }
@@ -209,12 +209,12 @@ test('os campos de `install show --json` citados nos guias são os que ele produ
   const discovery = readFileSync(path.join(repoRoot, 'tools/tumacordctl/lib/discovery.mjs'), 'utf8');
   const absent: string[] = [];
   for (const doc of documents) {
-    for (const line of doc.texto.split('\n')) {
+    for (const line of doc.text.split('\n')) {
       if (!line.includes('install show') || !line.includes('--json')) continue;
       // As chaves usadas no trecho que consome a saída.
-      for (const match of doc.texto.matchAll(/\bi\.([a-zA-Z]+)|\bm\[0\]\.([a-zA-Z]+)|x\.([a-zA-Z]+)\s*===/g)) {
+      for (const match of doc.text.matchAll(/\bi\.([a-zA-Z]+)|\bm\[0\]\.([a-zA-Z]+)|x\.([a-zA-Z]+)\s*===/g)) {
         const field = match[1] ?? match[2] ?? match[3];
-        if (!discovery.includes(`${field}:`) && !discovery.includes(`${field},`)) absent.push(`${doc.relativo}: ${field}`);
+        if (!discovery.includes(`${field}:`) && !discovery.includes(`${field},`)) absent.push(`${doc.relative}: ${field}`);
       }
     }
   }
@@ -227,13 +227,13 @@ test('nenhum documento carrega um segredo de verdade', () => {
   const suspects: string[] = [];
   for (const doc of documents) {
     // Chave privada em qualquer formato.
-    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(doc.texto)) suspects.push(`${doc.relativo}: chave privada`);
+    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(doc.text)) suspects.push(`${doc.relative}: chave privada`);
     // Uma variável de segredo com valor literal preenchido.
-    for (const match of doc.texto.matchAll(/^(?:export )?(TUMACORD_SERVER_ACCESS_KEY|TUMACORD_TURN_SECRET)=(.+)$/gm)) {
+    for (const match of doc.text.matchAll(/^(?:export )?(TUMACORD_SERVER_ACCESS_KEY|TUMACORD_TURN_SECRET)=(.+)$/gm)) {
       const value = match[2].trim();
       // Placeholder, substituição de comando e vazio são aceitáveis.
       if (/^["']?(\$|<|\.\.\.|$)/.test(value) || value === '""' || value === "''") continue;
-      suspects.push(`${doc.relativo}: ${match[1]} com valor literal`);
+      suspects.push(`${doc.relative}: ${match[1]} com valor literal`);
     }
   }
   assert.deepEqual(suspects, [], `possíveis segredos na documentação:\n  ${suspects.join('\n  ')}`);

@@ -1,10 +1,13 @@
 import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { normalizeName } from '../shared/identity.js';
 
 const scrypt = promisify(scryptCallback);
 
 export function normalizeUsername(username: string): string {
-  return username.normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+  // A regra mora em `shared/identity.ts`: o desktop assina a prova de login
+  // com ela, e as duas pontas precisam produzir exatamente o mesmo nome.
+  return normalizeName(username);
 }
 
 export async function hashPassword(password: string): Promise<string> {

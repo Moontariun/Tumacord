@@ -42,16 +42,16 @@ function listening(server: Server): Promise<void> {
 }
 
 interface Cycle {
-  raiz: string;
-  publicacao: string;
-  pacotes: string;
-  armazenamento: string;
+  rootDir: string;
+  publishDir: string;
+  packagesDir: string;
+  storageDir: string;
   userDataPath: string;
   origin: string;
   adminUrl: string;
-  publicar: (...argv: string[]) => Promise<number>;
-  novoUpdater: () => InstanceType<typeof Updater>;
-  encerrar: () => Promise<void>;
+  publish: (...argv: string[]) => Promise<number>;
+  newUpdater: () => InstanceType<typeof Updater>;
+  close: () => Promise<void>;
 }
 
 async function assemble(): Promise<Cycle> {
@@ -105,8 +105,8 @@ async function assemble(): Promise<Cycle> {
   });
 
   return {
-    raiz: rootDir, publicacao: publishDir, pacotes: packagesDir, armazenamento: storageDir, userDataPath, origin, adminUrl, publicar: publish, novoUpdater: newUpdater,
-    encerrar: async () => {
+    rootDir: rootDir, publishDir: publishDir, packagesDir: packagesDir, storageDir: storageDir, userDataPath, origin, adminUrl, publish: publish, newUpdater: newUpdater,
+    close: async () => {
       await Promise.all(servers.map((serviceServer) => new Promise<void>((resolve) => serviceServer.close(() => resolve()))));
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -117,7 +117,7 @@ const json = { 'content-type': 'application/json' };
 
 /** Leva os bytes dos pacotes para o armazenamento, como o `rsync` faria. */
 async function sendBytes(cycle: Cycle, version = '0.9.10') {
-  const destination = path.join(cycle.armazenamento, 'releases', version);
+  const destination = path.join(cycle.storageDir, 'releases', version);
   await mkdir(destination, { recursive: true });
   for (const name of Object.keys(CONTENT)) {
     await writeFile(path.join(destination, name), CONTENT[name as keyof typeof CONTENT]);
@@ -125,25 +125,25 @@ async function sendBytes(cycle: Cycle, version = '0.9.10') {
 }
 
 /** O caminho completo: chaves, manifesto, bytes, importação e publicação. */
-async function publishVersion(cycle: Cycle): Promise<{ manifesto: string; catalogo: string }> {
-  assert.equal(await cycle.publicar('keys', 'generate'), 0);
-  assert.equal(await cycle.publicar('keys', 'trusted', '--out', path.join(cycle.raiz, 'chaves.json')), 0);
+async function publishVersion(cycle: Cycle): Promise<{ manifestPath: string; catalogPath: string }> {
+  assert.equal(await cycle.publish('keys', 'generate'), 0);
+  assert.equal(await cycle.publish('keys', 'trusted', '--out', path.join(cycle.rootDir, 'chaves.json')), 0);
 
-  const keys = JSON.parse(await readFile(path.join(cycle.raiz, 'chaves.json'), 'utf8'));
+  const keys = JSON.parse(await readFile(path.join(cycle.rootDir, 'chaves.json'), 'utf8'));
   await fetch(`${cycle.adminUrl}/admin/keys`, { method: 'POST', headers: json, body: JSON.stringify(keys) });
 
-  const manifest = path.join(cycle.raiz, 'manifest.json');
-  assert.equal(await cycle.publicar(
+  const manifest = path.join(cycle.rootDir, 'manifest.json');
+  assert.equal(await cycle.publish(
     'manifest', '--version', '0.9.10', '--commit', 'a'.repeat(40),
-    '--packages', cycle.pacotes, '--out', manifest,
+    '--packages', cycle.packagesDir, '--out', manifest,
   ), 0);
 
   await sendBytes(cycle);
   const imported = await fetch(`${cycle.adminUrl}/admin/manifest`, { method: 'POST', headers: json, body: await readFile(manifest, 'utf8') });
   assert.equal(imported.status, 201, await imported.text());
 
-  const catalog = path.join(cycle.raiz, 'catalog.json');
-  assert.equal(await cycle.publicar('catalog', '--manifest', manifest, '--out', catalog), 0);
+  const catalog = path.join(cycle.rootDir, 'catalog.json');
+  assert.equal(await cycle.publish('catalog', '--manifest', manifest, '--out', catalog), 0);
   const published = await fetch(`${cycle.adminUrl}/admin/catalog`, { method: 'POST', headers: json, body: await readFile(catalog, 'utf8') });
   assert.equal(published.status, 201, await published.text());
 
@@ -152,7 +152,7 @@ async function publishVersion(cycle: Cycle): Promise<{ manifesto: string; catalo
     path.join(cycle.userDataPath, 'update-origin.json'),
     JSON.stringify({ origin: cycle.origin, trustedKeys: keys.keys }, null, 2),
   );
-  return { manifesto: manifest, catalogo: catalog };
+  return { manifestPath: manifest, catalogPath: catalog };
 }
 
 async function inviteDevice(adminUrl: string): Promise<string> {
@@ -164,12 +164,12 @@ async function inviteDevice(adminUrl: string): Promise<string> {
 
 test('uma pasta de build vira release, e o aplicativo a recebe e a baixa', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
 
-  const updater = cycle.novoUpdater();
+  const updater = cycle.newUpdater();
   const enrolled = await updater.enroll(await inviteDevice(cycle.adminUrl), 'máquina do ciclo');
-  assert.equal(enrolled.phase, 'available', JSON.stringify({ fase: enrolled.phase, erro: enrolled.error }));
+  assert.equal(enrolled.phase, 'available', JSON.stringify({ phase: enrolled.phase, error: enrolled.error }));
   assert.equal(enrolled.version, '0.9.10');
   // As notas vieram do CHANGELOG, pelo publicador, e chegaram assinadas.
   assert.equal(enrolled.title, 'Tumacord 0.9.10 — a próxima');
@@ -184,13 +184,13 @@ test('uma pasta de build vira release, e o aplicativo a recebe e a baixa', { tim
 
 test('a retirada publicada alcança o aplicativo', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
-  const updater = cycle.novoUpdater();
+  const updater = cycle.newUpdater();
   await updater.enroll(await inviteDevice(cycle.adminUrl));
 
-  const withdrawn = path.join(cycle.raiz, 'catalog-withdraw.json');
-  assert.equal(await cycle.publicar(
+  const withdrawn = path.join(cycle.rootDir, 'catalog-withdraw.json');
+  assert.equal(await cycle.publish(
     'withdraw', '--release', 'rel_stable_0-9-10', '--reason', 'o áudio sai errado no Windows', '--out', withdrawn,
   ), 0);
   const published = await fetch(`${cycle.adminUrl}/admin/catalog`, { method: 'POST', headers: json, body: await readFile(withdrawn, 'utf8') });
@@ -205,14 +205,14 @@ test('a retirada publicada alcança o aplicativo', { timeout: 60_000 }, async (c
 
 test('uma versão fora da convenção não vira release', { timeout: 30_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
-  await cycle.publicar('keys', 'generate');
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args) => errors.push(args.join(' '));
   try {
     // `rc` saiu da convenção: quem é ensaio é decidido pelo canal.
-    assert.equal(await cycle.publicar('manifest', '--version', '0.9.10-rc1', '--commit', 'a'.repeat(40), '--packages', cycle.pacotes), 1);
+    assert.equal(await cycle.publish('manifest', '--version', '0.9.10-rc1', '--commit', 'a'.repeat(40), '--packages', cycle.packagesDir), 1);
   } finally {
     console.error = original;
   }
@@ -221,12 +221,12 @@ test('uma versão fora da convenção não vira release', { timeout: 30_000 }, a
 
 test('dois pacotes para o mesmo alvo param a publicação', { timeout: 30_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
-  await cycle.publicar('keys', 'generate');
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
   // Um segundo arquivo que casa com o mesmo padrão. Escolher entre eles seria
   // adivinhar, e o erro apareceria na máquina de quem instalou.
-  await writeFile(path.join(cycle.pacotes, 'Tumacord-0.9.10-Setup.exe.bak'), Buffer.alloc(10));
-  await writeFile(path.join(cycle.pacotes, 'tumacord-0.9.10.tar.gz'), Buffer.alloc(10));
+  await writeFile(path.join(cycle.packagesDir, 'Tumacord-0.9.10-Setup.exe.bak'), Buffer.alloc(10));
+  await writeFile(path.join(cycle.packagesDir, 'tumacord-0.9.10.tar.gz'), Buffer.alloc(10));
 
   const errors: string[] = [];
   const original = console.error;
@@ -235,7 +235,7 @@ test('dois pacotes para o mesmo alvo param a publicação', { timeout: 30_000 },
     // Com `.bak` o padrão não casa; o caso de verdade é um nome que casa duas
     // vezes, então o teste confere a ausência de ambiguidade aqui e a presença
     // dela no caso unitário de `scanPackages`.
-    assert.equal(await cycle.publicar('manifest', '--version', '0.9.10', '--commit', 'b'.repeat(40), '--packages', cycle.pacotes), 0);
+    assert.equal(await cycle.publish('manifest', '--version', '0.9.10', '--commit', 'b'.repeat(40), '--packages', cycle.packagesDir), 0);
   } finally {
     console.error = original;
   }
@@ -243,22 +243,22 @@ test('dois pacotes para o mesmo alvo param a publicação', { timeout: 30_000 },
 
 test('publicar o mesmo número apontando para outra release é recusado', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
 
   // Um manifesto da mesma versão, com outro releaseId. Reaproveitar o número
   // faria metade do grupo estar numa 0.9.10 e a outra metade noutra.
-  const forged = JSON.parse(await readFile(path.join(cycle.raiz, 'manifest.json'), 'utf8'));
+  const forged = JSON.parse(await readFile(path.join(cycle.rootDir, 'manifest.json'), 'utf8'));
   forged.payload.releaseId = 'rel_stable_outra';
 
-  const other = path.join(cycle.raiz, 'manifest-outro.json');
+  const other = path.join(cycle.rootDir, 'manifest-outro.json');
   await writeFile(other, JSON.stringify(forged, null, 2));
 
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args) => errors.push(args.join(' '));
   try {
-    assert.equal(await cycle.publicar('catalog', '--manifest', other, '--out', path.join(cycle.raiz, 'catalog-2.json')), 1);
+    assert.equal(await cycle.publish('catalog', '--manifest', other, '--out', path.join(cycle.rootDir, 'catalog-2.json')), 1);
   } finally {
     console.error = original;
   }
@@ -267,15 +267,15 @@ test('publicar o mesmo número apontando para outra release é recusado', { time
 
 test('a sequência do catálogo cresce a cada publicação', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
 
-  const stateDir = JSON.parse(await readFile(path.join(cycle.publicacao, 'catalog-state.json'), 'utf8'));
+  const stateDir = JSON.parse(await readFile(path.join(cycle.publishDir, 'catalog-state.json'), 'utf8'));
   assert.equal(stateDir.sequence, 1);
 
   // Uma retirada não oferece nada novo, e ainda assim faz a sequência andar.
-  await cycle.publicar('withdraw', '--release', 'rel_stable_0-9-10', '--reason', 'x', '--out', path.join(cycle.raiz, 'c2.json'));
-  const after = JSON.parse(await readFile(path.join(cycle.publicacao, 'catalog-state.json'), 'utf8'));
+  await cycle.publish('withdraw', '--release', 'rel_stable_0-9-10', '--reason', 'x', '--out', path.join(cycle.rootDir, 'c2.json'));
+  const after = JSON.parse(await readFile(path.join(cycle.publishDir, 'catalog-state.json'), 'utf8'));
   assert.equal(after.sequence, 2);
 });
 
@@ -283,14 +283,14 @@ test('a sequência do catálogo cresce a cada publicação', { timeout: 60_000 }
 
 test('as chaves privadas não saem da pasta de publicação', { timeout: 30_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
-  await cycle.publicar('keys', 'generate');
-  const output = path.join(cycle.raiz, 'chaves.json');
-  await cycle.publicar('keys', 'trusted', '--out', output);
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
+  const output = path.join(cycle.rootDir, 'chaves.json');
+  await cycle.publish('keys', 'trusted', '--out', output);
 
   const publicKeys = await readFile(output, 'utf8');
   for (const scope of ['manifest', 'catalog']) {
-    const pair = JSON.parse(await readFile(path.join(cycle.publicacao, `${scope}.json`), 'utf8'));
+    const pair = JSON.parse(await readFile(path.join(cycle.publishDir, `${scope}.json`), 'utf8'));
     assert.equal(publicKeys.includes(pair.privateKey), false, `a chave privada de ${scope} vazou no documento público`);
     assert.equal(publicKeys.includes(pair.publicKey), true);
   }
@@ -299,15 +299,15 @@ test('as chaves privadas não saem da pasta de publicação', { timeout: 30_000 
 
 test('gerar por cima de uma chave existente é recusado', { timeout: 30_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
-  assert.equal(await cycle.publicar('keys', 'generate'), 0);
+  context.after(() => cycle.close());
+  assert.equal(await cycle.publish('keys', 'generate'), 0);
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args) => errors.push(args.join(' '));
   try {
     // Sobrescrever uma chave em uso invalidaria tudo o que ela assinou, e não
     // há como desfazer isso.
-    assert.equal(await cycle.publicar('keys', 'generate'), 1);
+    assert.equal(await cycle.publish('keys', 'generate'), 1);
   } finally {
     console.error = original;
   }
@@ -318,37 +318,37 @@ test('gerar por cima de uma chave existente é recusado', { timeout: 30_000 }, a
 
 test('o estado do catálogo é recuperável a partir do que está publicado', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
 
   // A pasta de publicação se perdeu — mas as chaves foram restauradas do
   // backup. Sem o estado, publicar às cegas produziria uma sequência que anda
   // para trás, e o catálogo seria recusado depois de já assinado.
-  await rm(path.join(cycle.publicacao, 'catalog-state.json'));
+  await rm(path.join(cycle.publishDir, 'catalog-state.json'));
 
-  const published = path.join(cycle.raiz, 'publicado.json');
+  const published = path.join(cycle.rootDir, 'publicado.json');
   await writeFile(published, await (await fetch(`${cycle.adminUrl}/admin/catalog`)).text());
-  assert.equal(await cycle.publicar('state', 'import', '--from', published), 0);
+  assert.equal(await cycle.publish('state', 'import', '--from', published), 0);
 
-  const stateDir = JSON.parse(await readFile(path.join(cycle.publicacao, 'catalog-state.json'), 'utf8'));
+  const stateDir = JSON.parse(await readFile(path.join(cycle.publishDir, 'catalog-state.json'), 'utf8'));
   assert.equal(stateDir.sequence, 1);
 });
 
 test('importar um estado mais antigo do que o local é recusado', { timeout: 60_000 }, async (context) => {
   const cycle = await assemble();
-  context.after(() => cycle.encerrar());
+  context.after(() => cycle.close());
   await publishVersion(cycle);
-  await cycle.publicar('withdraw', '--release', 'rel_stable_0-9-10', '--reason', 'x', '--out', path.join(cycle.raiz, 'c2.json'));
+  await cycle.publish('withdraw', '--release', 'rel_stable_0-9-10', '--reason', 'x', '--out', path.join(cycle.rootDir, 'c2.json'));
 
   // O que está na VPS é a sequência 1; o local já foi para 2.
-  const older = path.join(cycle.raiz, 'antigo.json');
+  const older = path.join(cycle.rootDir, 'antigo.json');
   await writeFile(older, await (await fetch(`${cycle.adminUrl}/admin/catalog`)).text());
 
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args) => errors.push(args.join(' '));
   try {
-    assert.equal(await cycle.publicar('state', 'import', '--from', older), 1);
+    assert.equal(await cycle.publish('state', 'import', '--from', older), 1);
   } finally {
     console.error = original;
   }

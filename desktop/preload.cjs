@@ -65,6 +65,22 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
       return () => ipcRenderer.removeListener('tumacord:update-changed', handler);
     },
   },
+  // A identidade P2P. A página pede uma prova ou uma liberação por campos; o
+  // texto assinado é montado, e assinado, no processo principal.
+  identity: {
+    describe: () => ipcRenderer.invoke('tumacord:identity-describe'),
+    login: (request) => ipcRenderer.invoke('tumacord:identity-login', {
+      inviteKey: String(request?.inviteKey ?? ''),
+      username: String(request?.username ?? ''),
+      nonce: String(request?.nonce ?? ''),
+      withClaim: request?.withClaim === true,
+      legacy: request?.legacy === true,
+    }),
+    release: (request) => ipcRenderer.invoke('tumacord:identity-release', {
+      inviteKey: String(request?.inviteKey ?? ''),
+      username: String(request?.username ?? ''),
+    }),
+  },
   toggleFullscreen: () => ipcRenderer.invoke('tumacord:toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('tumacord:is-fullscreen'),
   onFullscreenChanged: (listener) => {

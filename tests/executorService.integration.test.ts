@@ -67,7 +67,7 @@ test('a saúde responde sem segredo, e não conta nada sobre a instalação', as
   const { status, body } = await requestJson(base, '/health');
   assert.equal(status, 200);
   // Só o suficiente para o systemd e o proxy saberem que ele está de pé.
-  assert.deepEqual(body, { ok: true, servico: 'tumacord-executor' });
+  assert.deepEqual(body, { ok: true, service: 'tumacord-executor' });
 });
 
 test('o executor recusa escutar fora do laço local', async () => {

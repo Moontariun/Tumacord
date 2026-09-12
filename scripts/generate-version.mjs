@@ -39,13 +39,16 @@ const packageFile = resolve(projectRoot, 'package.json');
  * da distribuição. `tests/version.test.ts` regera e compara.
  */
 const MODULES = [
-  { fonte: 'shared/version.ts', destino: 'desktop/version.generated.cjs' },
-  { fonte: 'shared/distribution.ts', destino: 'desktop/distribution.generated.cjs' },
-  { fonte: 'shared/distributionCrypto.ts', destino: 'desktop/distribution-crypto.generated.cjs' },
+  { source: 'shared/version.ts', destination: 'desktop/version.generated.cjs' },
+  { source: 'shared/distribution.ts', destination: 'desktop/distribution.generated.cjs' },
+  { source: 'shared/distributionCrypto.ts', destination: 'desktop/distribution-crypto.generated.cjs' },
+  // A identidade P2P: o processo principal monta e assina o que o servidor
+  // confere, e os dois precisam produzir exatamente os mesmos bytes.
+  { source: 'shared/identity.ts', destination: 'desktop/identity.generated.cjs' },
 ];
 
-const source = resolve(projectRoot, MODULES[0].fonte);
-const destination = resolve(projectRoot, MODULES[0].destino);
+const source = resolve(projectRoot, MODULES[0].source);
+const destination = resolve(projectRoot, MODULES[0].destination);
 
 const GENERATED_NOTICE = `// ATENÇÃO: arquivo gerado por scripts/generate-version.mjs a partir de
 // shared/version.ts. Não edite aqui — a edição seria perdida na próxima
@@ -115,12 +118,12 @@ function syncPackageJson(shouldWrite) {
   const json = JSON.parse(raw);
   const desired = packageFields(json.version);
   const currentBuild = { buildNumber: json.build?.buildNumber, buildVersion: json.build?.buildVersion };
-  if (currentBuild.buildNumber === desired.buildNumber && currentBuild.buildVersion === desired.buildVersion) return { mudou: false };
-  if (!shouldWrite) return { mudou: true, desejado: desired };
+  if (currentBuild.buildNumber === desired.buildNumber && currentBuild.buildVersion === desired.buildVersion) return { changed: false };
+  if (!shouldWrite) return { changed: true, desired };
   json.build = { ...json.build, ...desired };
   // Reescreve preservando a indentação de dois espaços do arquivo.
   writeFileSync(packageFile, `${JSON.stringify(json, null, 2)}\n`);
-  return { mudou: true, desejado: desired };
+  return { changed: true, desired };
 }
 
 // Só a invocação direta escreve ou encerra o processo. Os testes importam
@@ -137,31 +140,31 @@ function runCli() {
   void generated;
   void current;
   for (const loadedModule of MODULES) {
-    const output = generateModule(loadedModule.fonte);
-    const filePath = resolve(projectRoot, loadedModule.destino);
+    const output = generateModule(loadedModule.source);
+    const filePath = resolve(projectRoot, loadedModule.destination);
     const onDisk = (() => {
       try { return readFileSync(filePath, 'utf8'); } catch { return null; }
     })();
     if (output === onDisk) {
-      if (!checkOnly) console.log(`${loadedModule.destino} já está em dia.`);
+      if (!checkOnly) console.log(`${loadedModule.destination} já está em dia.`);
       continue;
     }
     if (checkOnly) {
-      console.error(`${loadedModule.destino} está fora de sincronia com ${loadedModule.fonte}.`);
+      console.error(`${loadedModule.destination} está fora de sincronia com ${loadedModule.source}.`);
       failed = true;
       continue;
     }
     writeFileSync(filePath, output);
-    console.log(`${loadedModule.destino} gerado a partir de ${loadedModule.fonte}.`);
+    console.log(`${loadedModule.destination} gerado a partir de ${loadedModule.source}.`);
   }
 
   const packageOutcome = syncPackageJson(!checkOnly);
-  if (packageOutcome.mudou) {
+  if (packageOutcome.changed) {
     if (checkOnly) {
-      console.error(`package.json: build.buildNumber/buildVersion deveriam ser ${JSON.stringify(packageOutcome.desejado)}.`);
+      console.error(`package.json: build.buildNumber/buildVersion deveriam ser ${JSON.stringify(packageOutcome.desired)}.`);
       failed = true;
     } else {
-      console.log(`package.json: build.buildNumber=${packageOutcome.desejado.buildNumber}, build.buildVersion=${packageOutcome.desejado.buildVersion}.`);
+      console.log(`package.json: build.buildNumber=${packageOutcome.desired.buildNumber}, build.buildVersion=${packageOutcome.desired.buildVersion}.`);
     }
   } else if (!checkOnly) {
     console.log('package.json já está em dia.');

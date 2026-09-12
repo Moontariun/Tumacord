@@ -78,6 +78,21 @@ const screenAudioRouter = createScreenAudioRouter({
 // deste dispositivo fica. Sem ele — sessão Linux sem gerenciador de segredos —
 // a credencial vale só para a sessão, e o aplicativo diz isso.
 const updater = new Updater({ app, safeStorage, log: (details) => appendRuntimeEvent(runtimeLogFile, details) });
+
+// A identidade deste dispositivo nos grupos P2P. Carregada no primeiro uso, e
+// não na subida: quem nunca entra num grupo não precisa tocar no chaveiro.
+const { IdentityKey } = require('./identity-key.cjs');
+const identityKey = new IdentityKey({ userDataPath: app.getPath('userData'), safeStorage });
+
+function readyIdentity() {
+  if (identityKey.status === 'unloaded') identityKey.load();
+  return identityKey;
+}
+
+/** Só texto curto atravessa o IPC da identidade: nada de objeto, nada de buffer. */
+function identityField(value, max) {
+  return typeof value === 'string' ? value.slice(0, max) : '';
+}
 updater.onChange((state) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:update-changed', state);
 });
@@ -566,6 +581,24 @@ app.whenReady().then(async () => {
     typeof label === 'string' ? label : '',
   ));
   ipcMain.handle('tumacord:update-restart', () => restartForUpdate());
+  ipcMain.handle('tumacord:identity-describe', () => readyIdentity().describe());
+  // A prova de login, e o claim quando o host diz que o nome está livre. O
+  // processo principal monta os dois a partir de campos: a página nunca manda
+  // o texto a ser assinado.
+  ipcMain.handle('tumacord:identity-login', (_event, request) => {
+    const key = readyIdentity();
+    const inviteKey = identityField(request?.inviteKey, 256);
+    const username = identityField(request?.username, 64);
+    const proof = key.proveLogin({ inviteKey, name: username, nonce: identityField(request?.nonce, 128) });
+    const claim = request?.withClaim === true
+      ? key.claim({ inviteKey, name: username, displayName: username, legacy: request?.legacy === true })
+      : null;
+    return { proof, claim };
+  });
+  ipcMain.handle('tumacord:identity-release', (_event, request) => readyIdentity().release({
+    inviteKey: identityField(request?.inviteKey, 256),
+    name: identityField(request?.username, 64),
+  }));
   ipcMain.handle('tumacord:update-open-page', () => {
     const page = updater.state().pageUrl;
     // Só um endereço de Release do GitHub, e só o que o próprio atualizador

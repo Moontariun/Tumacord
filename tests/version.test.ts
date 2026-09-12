@@ -199,27 +199,27 @@ test('o electron-builder produz uma versão numérica diferente para a revisão'
 
   const numeric = (version: string) => {
     const app = new AppInfo({ metadata: { version, name: 'tumacord' }, config: { ...packageFields(version) }, framework: {} }, null);
-    return { numerica: app.getVersionInWeirdWindowsForm(), arquivo: app.buildVersion, produto: app.version };
+    return { windowsForm: app.getVersionInWeirdWindowsForm(), fileVersion: app.buildVersion, productVersion: app.version };
   };
 
   // O defeito, em uma linha: sem os campos derivados, os dois dão `0.9.9.0`.
   const withoutDerived = new AppInfo({ metadata: { version: '0.9.9-1', name: 'tumacord' }, config: {}, framework: {} }, null);
   assert.equal(withoutDerived.getVersionInWeirdWindowsForm(), '0.9.9.0', 'é este o comportamento que precisa ser corrigido');
 
-  assert.equal(numeric('0.9.9').numerica, '0.9.9.0');
-  assert.equal(numeric('0.9.9-1').numerica, '0.9.9.1');
-  assert.equal(numeric('0.9.9-10').numerica, '0.9.9.10');
-  assert.notEqual(numeric('0.9.9').numerica, numeric('0.9.9-1').numerica, 'a revisão não pode ter o número da versão que ela corrige');
+  assert.equal(numeric('0.9.9').windowsForm, '0.9.9.0');
+  assert.equal(numeric('0.9.9-1').windowsForm, '0.9.9.1');
+  assert.equal(numeric('0.9.9-10').windowsForm, '0.9.9.10');
+  assert.notEqual(numeric('0.9.9').windowsForm, numeric('0.9.9-1').windowsForm, 'a revisão não pode ter o número da versão que ela corrige');
 
   // E a versão numérica é exatamente a que a implementação única calcula.
   for (const parsedVersion of ['0.9.9', '0.9.9-1', '0.9.9-10', '1.0.0', '1.0.0-2']) {
-    assert.equal(numeric(parsedVersion).numerica, windowsVersion(parsedVersion), parsedVersion);
+    assert.equal(numeric(parsedVersion).windowsForm, windowsVersion(parsedVersion), parsedVersion);
   }
 
   // A versão textual do produto não é contaminada pelo número de build:
   // `0.9.9-1.1` apareceria como FileVersion no instalador.
-  assert.equal(numeric('0.9.9-1').arquivo, '0.9.9-1');
-  assert.equal(numeric('0.9.9-1').produto, '0.9.9-1');
+  assert.equal(numeric('0.9.9-1').fileVersion, '0.9.9-1');
+  assert.equal(numeric('0.9.9-1').productVersion, '0.9.9-1');
 });
 
 test('o package.json declara a versão do produto e os campos derivados dela', async () => {

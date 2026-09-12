@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, randomUUID, verify as verifySignatureBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -25,6 +25,7 @@ import { INVITE_TOKEN_LENGTH, createInviteToken, createToken, hashPassword, hash
 import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './turn.js';
 import { AuthRateLimiter, TokenBucket } from './rateLimit.js';
 import { MAX_MESSAGE_BODY, canModify, deleteMessage, editMessage } from '../shared/messageSync.js';
+import { LOCAL_NETWORK_GROUP, LOGIN_MESSAGES, NONCE_TTL_MS, decideLogin, isGroupId, recordsForSync, statusOfName, verifyClaim, verifyLoginProof, type IdentityClaim, type LoginDecision, type LoginProof, type SignatureVerifier } from '../shared/identity.js';
 import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
 import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
@@ -195,6 +196,130 @@ function directKeyMatches(presented: string): boolean {
     if (verifySecret(presented, candidate)) return true;
   }
   return false;
+}
+
+// ── Identidade verificável no P2P ───────────────────────────────────────────
+//
+// O nome dentro de um grupo pertence a quem assinou o claim dele. A regra mora
+// em `shared/identity.ts`; aqui fica o que só o servidor tem: as chaves de
+// convite aceitas, o desafio de uso único e a gravação.
+
+const identityVerifier: SignatureVerifier = (publicKey, message, signature) => {
+  const key = createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+  return verifySignatureBytes(null, Buffer.from(message, 'utf8'), key, Buffer.from(signature, 'base64'));
+};
+
+function groupOfKey(key: string): string {
+  return createHash('sha256').update(key, 'utf8').digest('hex');
+}
+
+/** Os grupos deste host: o de cada convite aceito, e a rede local. */
+function identityGroups(): Set<string> {
+  return new Set([LOCAL_NETWORK_GROUP, ...[...acceptedDirectKeys].map(groupOfKey)]);
+}
+
+/**
+ * O grupo de quem pede, pela chave que ele apresentou.
+ *
+ * Só uma chave aceita por este host dá um grupo de convite. Sem chave, ou com
+ * uma que não abre nada aqui, o grupo é a rede local — e um claim da rede local
+ * não vale para o grupo de convite de ninguém.
+ */
+function groupOfPresentedKey(presented: string): string {
+  if (!presented) return LOCAL_NETWORK_GROUP;
+  for (const candidate of acceptedDirectKeys) {
+    if (verifySecret(presented, candidate)) return groupOfKey(candidate);
+  }
+  return LOCAL_NETWORK_GROUP;
+}
+
+interface PendingChallenge { name: string; group: string; expiresAt: number }
+const pendingChallenges = new Map<string, PendingChallenge>();
+const MAX_PENDING_CHALLENGES = 2_000;
+
+function issueChallenge(name: string, group: string): { nonce: string; expiresAt: number } {
+  const now = Date.now();
+  for (const [nonce, pending] of pendingChallenges) if (pending.expiresAt <= now) pendingChallenges.delete(nonce);
+  // Um teto, para uma enxurrada de desafios não virar memória ocupada. O mais
+  // antigo sai primeiro: é o que mais perto está de vencer.
+  while (pendingChallenges.size >= MAX_PENDING_CHALLENGES) pendingChallenges.delete(pendingChallenges.keys().next().value as string);
+  const nonce = randomBytes(24).toString('base64url');
+  const expiresAt = now + NONCE_TTL_MS;
+  pendingChallenges.set(nonce, { name, group, expiresAt });
+  return { nonce, expiresAt };
+}
+
+/** Consome o desafio: ele vale uma vez, para o nome e o grupo em que nasceu. */
+function consumeChallenge(nonce: string, name: string, group: string): boolean {
+  const pending = pendingChallenges.get(nonce);
+  if (!pending) return false;
+  pendingChallenges.delete(nonce);
+  return pending.expiresAt > Date.now() && pending.name === name && pending.group === group;
+}
+
+type IdentityCheck =
+  | { ok: false; status: number; error: string; reason: string }
+  | { ok: true; decision: Extract<LoginDecision, { allow: true }>; group: string; proof: LoginProof | null; claim: IdentityClaim | null };
+
+const identityBodySchema = z.object({ proof: z.unknown(), claim: z.unknown().optional() });
+
+/**
+ * Se quem pede pode usar este nome neste grupo.
+ *
+ * Só no P2P. No dedicado a conta é uma só e o servidor é a autoridade: não há
+ * troca de host para alguém chegar primeiro.
+ */
+function checkIdentity(body: unknown, name: string, presentedKey: string): IdentityCheck {
+  if (!p2pMode) return { ok: true, decision: { allow: true, binding: 'none', provisional: false }, group: '', proof: null, claim: null };
+  const group = groupOfPresentedKey(presentedKey);
+  const raw = (body as { identity?: unknown } | undefined)?.identity;
+  let proof: LoginProof | null = null;
+  let claim: IdentityClaim | null = null;
+  let valid = false;
+  if (raw !== undefined) {
+    const parsed = identityBodySchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, status: 400, error: 'A prova de identidade está fora do formato.', reason: 'bad-proof' };
+    proof = parsed.data.proof as LoginProof;
+    claim = (parsed.data.claim ?? null) as IdentityClaim | null;
+    const nonce = (proof as Partial<LoginProof> | null)?.nonce;
+    // O desafio é consumido antes de qualquer outra conferência: uma prova que
+    // falhou não pode ser corrigida e reapresentada com o mesmo desafio.
+    if (typeof nonce !== 'string' || !consumeChallenge(nonce, name, group)) {
+      return { ok: false, status: 401, error: 'O desafio de identidade venceu ou já foi usado. Tente entrar de novo.', reason: 'bad-proof' };
+    }
+    valid = verifyLoginProof(proof, identityVerifier) && proof.name === name && proof.group === group;
+  }
+  const offered = raw === undefined ? null : { publicKey: String((proof as Partial<LoginProof> | null)?.publicKey ?? ''), valid };
+  const decision = decideLogin(statusOfName(store.identityLedger, group, name), offered);
+  if (!decision.allow) return { ok: false, status: decision.status, error: LOGIN_MESSAGES[decision.reason], reason: decision.reason };
+  if (decision.binding === 'new') {
+    const fits = claim !== null && verifyClaim(claim, identityVerifier) && claim.group === group && claim.name === name && claim.publicKey === proof?.publicKey;
+    if (!fits) return { ok: false, status: 400, error: 'O nome está livre neste grupo, e o pedido não trouxe o claim assinado dele.', reason: 'bad-proof' };
+  }
+  return { ok: true, decision, group, proof, claim };
+}
+
+/** Se a prova é do titular confirmado do nome — e só então a senha deste host cede. */
+function identityOwnsAccount(check: IdentityCheck): boolean {
+  return check.ok && check.proof !== null && check.decision.binding === 'existing' && !check.decision.provisional;
+}
+
+/**
+ * Grava o claim de quem acabou de entrar, e confere de novo depois.
+ *
+ * Conferir de novo não é redundância: dois dispositivos podem ter passado pela
+ * decisão ao mesmo tempo com o mesmo nome livre. A mescla entra em ordem, e só
+ * quem ficou como titular neste host sai daqui com sessão.
+ */
+async function bindIdentity(check: IdentityCheck, name: string): Promise<{ ok: true; state: 'unverified' | 'bound' | 'provisional' } | { ok: false; error: string }> {
+  if (!check.ok || !check.proof) return { ok: true, state: 'unverified' };
+  if (check.decision.binding === 'new' && check.claim) {
+    await store.mergeIdentity({ claims: [check.claim] }, { verify: identityVerifier, acceptedGroups: identityGroups(), now: Date.now() });
+  }
+  const status = statusOfName(store.identityLedger, check.group, name);
+  if (status.state === 'free') return { ok: false, error: 'Não consegui registrar o nome neste grupo agora. Tente entrar de novo.' };
+  if (status.holder.claim.publicKey !== check.proof.publicKey) return { ok: false, error: LOGIN_MESSAGES.contested };
+  return { ok: true, state: status.state === 'contested' ? 'provisional' : 'bound' };
 }
 
 function directAccessAllowed(request: express.Request): boolean {
@@ -386,6 +511,9 @@ app.get('/api/health', (_request, response) => {
       // depois: o dedicado guarda, o P2P mantém enquanto o grupo durar.
       boards: true,
       boardPersistence: !p2pMode,
+      // Identidade verificável por nome, no P2P. Um cliente que não vê isto
+      // está falando com um host anterior, que ainda aceita qualquer nome.
+      identityClaims: p2pMode,
     },
   });
 });
@@ -495,6 +623,24 @@ app.get('/api/invite/:token', (request, response) => {
   response.json({ callId: invite.callId, callName: invite.callName, hostUsername: invite.hostUsername, expiresAt: invite.expiresAt });
 });
 
+// O desafio do login com identidade. Ele não diz nada que o login não diria —
+// se o nome está livre e se há conta com ele neste host —, e é disso que o
+// cliente precisa para montar o claim certo.
+app.post('/api/auth/challenge', (request, response) => {
+  if (!p2pMode) return void response.status(404).json({ error: 'Não há identidade de grupo num servidor dedicado.' });
+  const parsed = z.object({ username: credentialsInput.shape.username }).safeParse(request.body);
+  if (!parsed.success) return void response.status(400).json({ error: 'Use um nome de 2–24 caracteres.' });
+  const name = normalizeUsername(parsed.data.username);
+  const group = groupOfPresentedKey(presentedDirectKey(request));
+  const { nonce, expiresAt } = issueChallenge(name, group);
+  response.json({
+    nonce,
+    expiresAt,
+    nameState: statusOfName(store.identityLedger, group, name).state,
+    accountExists: store.users.some((candidate) => candidate.normalizedUsername === name),
+  });
+});
+
 app.post('/api/auth/register', async (request, response) => {
   const parsed = credentialsInput.safeParse(request.body);
   if (!parsed.success) {
@@ -506,6 +652,11 @@ app.post('/api/auth/register', async (request, response) => {
     return;
   }
   const normalizedUsername = normalizeUsername(parsed.data.username);
+  const identityCheck = checkIdentity(request.body, normalizedUsername, presentedDirectKey(request));
+  if (!identityCheck.ok) {
+    response.status(identityCheck.status).json({ error: identityCheck.error, identityRefusal: identityCheck.reason });
+    return;
+  }
   // A recusa rápida, antes de gastar um hash de senha. Ela é conveniência e
   // **não** é a garantia: entre esta linha e a inserção há um `await`, e é
   // nessa janela que seis pedidos simultâneos do mesmo nome produziam seis
@@ -536,7 +687,12 @@ app.post('/api/auth/register', async (request, response) => {
     });
     return;
   }
-  response.status(201).json({ token: await issueSession(user), user: publicUser(user), serverName, created: true });
+  const bound = await bindIdentity(identityCheck, normalizedUsername);
+  if (!bound.ok) {
+    response.status(409).json({ error: bound.error, identityRefusal: 'contested' });
+    return;
+  }
+  response.status(201).json({ token: await issueSession(user), user: publicUser(user), serverName, created: true, identity: bound.state });
 });
 
 app.post('/api/auth/login', async (request, response) => {
@@ -557,6 +713,12 @@ app.post('/api/auth/login', async (request, response) => {
   if (!hasServerAccess(parsed.data.serverKey)) {
     loginLimiter.fail(identity, origin);
     response.status(403).json({ error: 'Chave do servidor incorreta.' });
+    return;
+  }
+  const identityCheck = checkIdentity(request.body, identity, presentedDirectKey(request));
+  if (!identityCheck.ok) {
+    if (identityCheck.status === 401) loginLimiter.fail(identity, origin);
+    response.status(identityCheck.status).json({ error: identityCheck.error, identityRefusal: identityCheck.reason });
     return;
   }
   const normalizedUsername = identity;
@@ -600,12 +762,23 @@ app.post('/api/auth/login', async (request, response) => {
     }
   }
   if (!(await verifyPassword(parsed.data.password, user.passwordHash))) {
-    loginLimiter.fail(identity, origin);
-    response.status(401).json({ error: 'Senha incorreta.' });
+    // A exceção é de quem prova ser o titular confirmado do nome neste grupo.
+    // No P2P a senha é de cada host: uma conta criada aqui por outra pessoa,
+    // antes de o claim chegar, não pode trancar para fora o dono do nome.
+    if (!identityOwnsAccount(identityCheck)) {
+      loginLimiter.fail(identity, origin);
+      response.status(401).json({ error: 'Senha incorreta.' });
+      return;
+    }
+    await store.replacePasswordHash(user.id, await hashPassword(parsed.data.password));
+  }
+  const bound = await bindIdentity(identityCheck, identity);
+  if (!bound.ok) {
+    response.status(409).json({ error: bound.error, identityRefusal: 'contested' });
     return;
   }
   loginLimiter.succeed(identity, origin);
-  response.json({ token: await issueSession(user), user: publicUser(user), serverName, created });
+  response.json({ token: await issueSession(user), user: publicUser(user), serverName, created, identity: bound.state });
 });
 
 function publicUser(user: StoredUser): PublicUser {
@@ -1246,6 +1419,28 @@ app.post('/api/local/sync', async (request, response) => {
   response.json({ ok: true });
 });
 
+// O registro de identidade deste computador. É ele que faz um host novo já
+// conhecer os nomes do grupo quando a troca de host cai aqui.
+app.get('/api/local/identity', requireLoopback, (request, response) => {
+  const after = z.coerce.number().int().min(0).safeParse(request.query.after ?? 0);
+  const ledger = store.identityLedger;
+  const groups = new Set([...ledger.entries.map((entry) => entry.claim.group), ...ledger.releases.map((entry) => entry.release.group)]);
+  response.json(recordsForSync(ledger, groups, after.success ? after.data : 0));
+});
+
+app.post('/api/local/identity', requireLoopback, async (request, response) => {
+  const body = (request.body ?? {}) as { claims?: unknown; releases?: unknown };
+  // Localmente o grupo de cada registro vale: é a própria interface guardando o
+  // que viu nas calls em que entrou. A assinatura continua sendo conferida.
+  const groups = identityGroups();
+  for (const record of [...(Array.isArray(body.claims) ? body.claims : []), ...(Array.isArray(body.releases) ? body.releases : [])]) {
+    const group = (record as { group?: unknown } | null)?.group;
+    if (isGroupId(group)) groups.add(group);
+  }
+  const outcome = await store.mergeIdentity(body, { verify: identityVerifier, acceptedGroups: groups, now: Date.now() });
+  response.json({ ok: true, added: outcome.added.length, released: outcome.released.length, rejected: outcome.rejected.length });
+});
+
 app.put('/api/local/attachments/:id', requireLoopback, express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
   const parsed = z.string().uuid().safeParse(request.params.id);
   const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
@@ -1389,6 +1584,23 @@ io.on('connection', (socket) => {
       profiles: store.profiles,
       availableAttachmentIds: await store.availableAttachmentIds(),
     });
+  });
+
+  // A identidade do grupo, em páginas. Separada da replicação do chat: um host
+  // anterior a esta versão simplesmente não responde, e o histórico segue
+  // funcionando como sempre.
+  socket.on('identity:records', (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    if (typeof acknowledge !== 'function') return;
+    if (!p2pMode) return acknowledge({ ok: false });
+    const after = z.number().int().min(0).safeParse((payload as { after?: unknown } | null)?.after ?? 0);
+    acknowledge({ ok: true, ...recordsForSync(store.identityLedger, identityGroups(), after.success ? after.data : 0) });
+  });
+
+  socket.on('identity:push', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    if (!p2pMode) return acknowledge?.({ ok: false });
+    const body = (payload && typeof payload === 'object' ? payload : {}) as { claims?: unknown; releases?: unknown };
+    const outcome = await store.mergeIdentity({ claims: body.claims, releases: body.releases }, { verify: identityVerifier, acceptedGroups: identityGroups(), now: Date.now() });
+    acknowledge?.({ ok: true, added: outcome.added.length, released: outcome.released.length, rejected: outcome.rejected.length });
   });
 
   socket.on('chat:file:find', (payload: unknown) => {

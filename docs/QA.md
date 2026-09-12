@@ -24,8 +24,8 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | |
 |---|---|
-| Sistema | CachyOS, Linux 7.2.3-1-cachyos |
-| Node | v26.8.1 |
+| Sistema | CachyOS, Linux 7.2.4-3-cachyos |
+| Node | v26.8.2 |
 | npm | 12.0.2 |
 | git | 2.55.0 |
 | Docker | 29.7.2 |
@@ -39,13 +39,13 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
 |---|---|---|
-| Testes | **663** aprovados | **952** aprovados |
+| Testes | **663** aprovados | **982** aprovados |
 | Typecheck | limpo | limpo |
 | `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
 
 > A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
 > qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
-> desta revisão. Os 289 casos novos cobrem o que ela acrescentou ou corrigiu;
+> desta revisão. Os 319 casos novos cobrem o que ela acrescentou ou corrigiu;
 > os que provam a correção de um defeito reprovam no código anterior.
 
 ### O que foi TESTADO
@@ -117,6 +117,17 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 | ↳ executor fora do ar não declara a atualização como falha | | idem |
 | Oferta de versões a partir do catálogo assinado, e não do GitHub | 18 casos | `tests/serverUpdate.test.ts` |
 | O segredo do executor abre **só** a pausa de escrita, no servidor de verdade | 2 casos | `tests/adminAuthorization.integration.test.ts` |
+| **Identidade P2P: o contrato** — forma canônica, domínio por propósito, precedência, liberação, páginas, decisão de login | 17 casos | `tests/identity.test.ts` |
+| ↳ atrasar o `issuedAt` não compra um nome; uma liberação não é desfeita por reapresentação | | idem |
+| ↳ o cursor da sincronização não repete nem pula registros que chegaram no mesmo instante | | idem |
+| **A chave do dispositivo**, no processo principal | 7 casos | `tests/identityKey.test.ts` |
+| ↳ não troca de chave quando o chaveiro some, nem quando o arquivo está ilegível | | idem |
+| ↳ não assina texto qualquer, e confere a forma antes de assinar | | idem |
+| **Identidade P2P contra um host de verdade**, com dois dispositivos | 6 casos | `tests/identity.integration.test.ts` |
+| ↳ outro dispositivo não entra com o nome, nem sabendo a senha | | idem |
+| ↳ aplicativo antigo entra com nome livre, e recebe 426 com o motivo num nome que tem dono | | idem |
+| ↳ o desafio vale uma vez; uma conta criada antes do claim não tranca o dono para fora | | idem |
+| ↳ disputa: provisório para quem o host viu primeiro, resolvida por liberação assinada | | idem |
 | Documentação: links, arquivos, variáveis, serviços, versões; comandos, opções e campos citados existem | 13 casos | `tests/documentacao.test.ts` |
 | `docker compose config` com e sem `docker-compose.executor.yml`; sem segredo, recusa dizendo de onde tirá-lo | validado | manual, nesta máquina |
 | `npm run build` (web + servidor + serviço) | ok | manual, nesta máquina |
@@ -157,6 +168,8 @@ executados, **o gate correspondente fica pendente**.
 | Executor instalado, painel ligado por socket | [Atualização do servidor](atualizacao-servidor.md), "O executor" | o painel lista as versões do catálogo; aplicar gera um trabalho com `backup` e `validate` em `ok` |
 | Aplicação que falha na validação | idem | o trabalho termina `failed` em `validate`, e `server rollback` volta ao deployment registrado |
 | Cópia pelo executor, pausando a escrita do servidor real | [Backup e restauração](backup-restore.md) | a auditoria registra `executor` em `server.pause-writes` e `server.resume-writes` |
+| Identidade entre dois desktops reais, com troca de host | duas máquinas no mesmo grupo | quem assume o host já recusa o nome de outra pessoa, e o dono entra no host novo sem digitar nada |
+| Chaveiro indisponível no Linux | sessão gráfica sem serviço de segredos | a identidade fica no arquivo 0600, e a interface diz isso |
 | Migração para uma segunda VPS | ainda sem runbook próprio | — |
 | Windows: usuário comum e administrador, UAC aceito e cancelado | [Testar no Windows](windows-testing.md) | EACCES **não** derruba o app; UAC cancelado mantém o app aberto |
 | Windows: arquivo bloqueado, caminho com espaço e acento, portable | idem | cada causa é distinguida na mensagem |
@@ -171,7 +184,8 @@ executados, **o gate correspondente fica pendente**.
 
 | Item | Onde está dito |
 |---|---|
-| Identidade P2P com claims verificáveis | — |
+| Botão para liberar um nome em disputa | a liberação existe no protocolo e é exercida em `tests/identity.integration.test.ts`; falta a tela que a chama, que precisa de estado de sessão novo em `src/App.tsx` e não havia como exercitar sem abrir o Electron |
+| Perfil replicado assinado | `ARCHITECTURE.md`, "Identidade no P2P": foto, bio e cor seguem decididas por nome e data |
 | Runbook de migração de VPS | — |
 
 > **A consequência prática:** o caminho de atualização do aplicativo **não
@@ -202,7 +216,14 @@ executados, **o gate correspondente fica pendente**.
   seguintes. Os testes de integração sobem servidores reais, e a suíte ficou
   mais pesada com os novos. É contenção, não regressão — mas está registrado
   porque um teste instável esconde uma regressão no dia em que ela chegar.
-  Na rodada final a suíte inteira passou de primeira: 952 casos, 29 s.
+  Na rodada do executor a suíte inteira passou de primeira: 952 casos, 29 s.
+  Na rodada da identidade P2P, com seis servidores reais a mais na suíte, o
+  mesmo caso reprovou de novo pelo mesmo motivo — `tempo esgotado em
+  server:snapshot`, 15,8 s — e passou isolado três vezes seguidas (10 de 10,
+  cerca de 6,5 s cada). A suíte ficou mais pesada, e é plausível que a
+  contenção tenha aumentado com ela. A rodada seguinte da suíte inteira
+  passou sem falha: 982 casos, 29,6 s. As duas rodadas estão registradas
+  como aconteceram.
 - **Defeitos achados antes de chegarem a uma VPS.** Três, no caminho novo, e
   cada um tem agora um teste que reprova se ele voltar: o `docker exec` da
   pausa não repassava o token ao contêiner (`-e T`), e a pausa falharia em toda
@@ -215,7 +236,7 @@ executados, **o gate correspondente fica pendente**.
 Verificadas pela suíte existente, que continua inteira: login e identidade,
 chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
 deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
-handoff P2P. **952 aprovados, nenhuma falha.**
+handoff P2P. **982 aprovados na última rodada, nenhuma falha.**
 
 ---
 

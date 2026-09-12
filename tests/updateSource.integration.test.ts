@@ -64,7 +64,7 @@ interface Environment {
   adminUrl: string;
   token: string;
   downloads: string;
-  encerrar: () => Promise<void>;
+  close: () => Promise<void>;
 }
 
 /**
@@ -112,7 +112,7 @@ async function start(): Promise<Environment> {
 
   return {
     origin, adminUrl, downloads, token: enrolled.token,
-    encerrar: async () => {
+    close: async () => {
       await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -123,7 +123,7 @@ async function start(): Promise<Environment> {
 
 test('o cliente busca catálogo, manifesto e pacote sem tocar no GitHub', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const { origin, token } = environment;
 
   const catalogDoc = await sourceModule.fetchCatalog({ origin, token, trustedKeys: trusted, acceptedSequence: 0 });
@@ -147,7 +147,7 @@ test('o cliente busca catálogo, manifesto e pacote sem tocar no GitHub', { time
 
 test('o progresso é reportado e chega ao total', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const manifestDoc = manifest();
   const progressReports: { received: number; total: number }[] = [];
   await sourceModule.downloadArtifact({
@@ -164,7 +164,7 @@ test('o progresso é reportado e chega ao total', { timeout: 30_000 }, async (co
 
 test('um download interrompido continua de onde parou', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const manifestDoc = manifest();
   const destination = path.join(environment.downloads, 'retomado.tar.gz');
 
@@ -192,7 +192,7 @@ test('um download interrompido continua de onde parou', { timeout: 30_000 }, asy
 
 test('um catálogo assinado por chave desconhecida não decide nada', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const intruder = generateSigningKey();
   await assert.rejects(
     () => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: [{ ...intruder, scope: ['catalog'] }], acceptedSequence: 0 }),
@@ -202,7 +202,7 @@ test('um catálogo assinado por chave desconhecida não decide nada', { timeout:
 
 test('um catálogo mais antigo do que o já aceito é recusado', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   // O serviço publicou a sequência 3. Um cliente que já aceitou a 9 recusa.
   await assert.rejects(
     () => sourceModule.fetchCatalog({ origin: environment.origin, token: environment.token, trustedKeys: trusted, acceptedSequence: 9 }),
@@ -212,7 +212,7 @@ test('um catálogo mais antigo do que o já aceito é recusado', { timeout: 30_0
 
 test('o serviço recusa publicar um catálogo já vencido', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const expired: Catalog = { ...catalog(4), expiresAt: new Date(Date.now() - 1000).toISOString() };
   const reply = await fetch(`${environment.adminUrl}/admin/catalog`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signDocument(expired, [catalogKey])),
@@ -226,7 +226,7 @@ test('o serviço recusa publicar um catálogo já vencido', { timeout: 30_000 },
 
 test('um catálogo que venceu no relógio do cliente não instala nada', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   // O catálogo é válido quando publicado e vence depois. Quem percebe é o
   // cliente, no relógio dele — e a recusa é falha segura: sem saber qual é a
   // política vigente, não se instala nada.
@@ -239,7 +239,7 @@ test('um catálogo que venceu no relógio do cliente não instala nada', { timeo
 
 test('o manifesto que não é o que o catálogo prometeu é recusado', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   // Os dois documentos podem ser autênticos e ainda assim ser o par errado.
   await assert.rejects(
     () => sourceModule.fetchManifest({
@@ -252,7 +252,7 @@ test('o manifesto que não é o que o catálogo prometeu é recusado', { timeout
 
 test('um pacote trocado no armazenamento é descartado, e o resumo é o que pega', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const manifestDoc = manifest();
   // O manifesto assinado promete um resumo; o pacote entregue é outro. O
   // tamanho bate, então só o resumo pega — que é o caso que importa.
@@ -269,7 +269,7 @@ test('um pacote trocado no armazenamento é descartado, e o resumo é o que pega
 
 test('sem credencial não se busca nada', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   await assert.rejects(
     () => sourceModule.fetchCatalog({ origin: environment.origin, token: '', trustedKeys: trusted, acceptedSequence: 0 }),
     /convite|autorizado/i,
@@ -278,7 +278,7 @@ test('sem credencial não se busca nada', { timeout: 30_000 }, async (context) =
 
 test('uma credencial revogada para de buscar, com a razão dita', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const list = await (await fetch(`${environment.adminUrl}/admin/devices`)).json() as { devices: { deviceId: string }[] };
   await fetch(`${environment.adminUrl}/admin/devices/${list.devices[0].deviceId}/revoke`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'teste' }),
@@ -292,7 +292,7 @@ test('uma credencial revogada para de buscar, com a razão dita', { timeout: 30_
 
 test('renovar troca o token, e o antigo para de valer', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const renewed = await sourceModule.renewDevice({ origin: environment.origin, token: environment.token });
   assert.notEqual(renewed.token, environment.token);
   assert.equal((await sourceModule.fetchCatalog({ origin: environment.origin, token: renewed.token, trustedKeys: trusted, acceptedSequence: 0 })).sequence, 3);
@@ -301,7 +301,7 @@ test('renovar troca o token, e o antigo para de valer', { timeout: 30_000 }, asy
 
 test('um convite inventado não inscreve ninguém', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   await assert.rejects(
     () => sourceModule.enrollDevice({ origin: environment.origin, invite: 'z'.repeat(64), label: 'intruso' }),
     /não é reconhecido/,
@@ -310,7 +310,7 @@ test('um convite inventado não inscreve ninguém', { timeout: 30_000 }, async (
 
 test('uma versão retirada não é baixada, nem por quem já tinha o endereço', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   const manifestDoc = manifest();
   const withdrawn: Catalog = {
     ...catalog(4),
@@ -335,7 +335,7 @@ test('uma versão retirada não é baixada, nem por quem já tinha o endereço',
 
 test('a origem precisa ser https fora de localhost', { timeout: 30_000 }, async (context) => {
   const environment = await start();
-  context.after(() => environment.encerrar());
+  context.after(() => environment.close());
   // Um `http` para fora entregaria o catálogo e a credencial a quem estiver no
   // caminho — e a assinatura provaria que o documento é autêntico sem impedir
   // que ele seja o documento *antigo*.

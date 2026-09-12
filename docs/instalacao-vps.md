@@ -165,7 +165,7 @@ curl -fsS http://127.0.0.1:4300/v1/health | head -c 200; echo
 ```
 
 O primeiro `curl` responde um JSON com `installationId`. O segundo responde
-`{"ok":true,"servico":"tumacord-updates",...}` com `"catalogo":null` — é o
+`{"ok":true,"service":"tumacord-updates",...}` com `"catalog":null` — é o
 esperado: ainda não há nada publicado.
 
 **Efeito sobre dados e chamadas:** nenhum. Esta é uma instalação nova.

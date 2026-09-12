@@ -101,6 +101,14 @@ interface TumacordUpdateState {
   enrollmentMessage: string;
 }
 
+/** O que a interface pode saber da identidade deste dispositivo: nada que assine. */
+interface TumacordIdentityDescription {
+  status: 'unloaded' | 'ready' | 'locked' | 'corrupt';
+  protection: '' | 'keyring' | 'file';
+  publicKey: string;
+  message: string;
+}
+
 interface DocumentPictureInPicture extends EventTarget {
   readonly window: Window | null;
   requestWindow: (options?: { width?: number; height?: number; disallowReturnToOpener?: boolean; preferInitialWindowPlacement?: boolean }) => Promise<Window>;
@@ -152,6 +160,14 @@ interface Window {
       enroll: (invite: string, label?: string) => Promise<TumacordUpdateState>;
       openPage: () => Promise<string>;
       onChanged: (listener: (state: TumacordUpdateState) => void) => () => void;
+    };
+    identity?: {
+      describe: () => Promise<TumacordIdentityDescription>;
+      login: (request: { inviteKey: string; username: string; nonce: string; withClaim: boolean; legacy: boolean }) => Promise<{
+        proof: import('../shared/identity').LoginProof;
+        claim: import('../shared/identity').IdentityClaim | null;
+      }>;
+      release: (request: { inviteKey: string; username: string }) => Promise<import('../shared/identity').IdentityRelease>;
     };
     toggleFullscreen: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;

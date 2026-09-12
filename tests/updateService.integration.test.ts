@@ -20,8 +20,8 @@ import { generateSigningKey, signDocument } from '../shared/distributionCrypto';
 interface ServiceHandle {
   url: string;
   adminUrl: string;
-  encerrar: () => Promise<void>;
-  pacotes: string;
+  close: () => Promise<void>;
+  packagesDir: string;
 }
 
 /**
@@ -65,8 +65,8 @@ async function start(): Promise<ServiceHandle> {
   return {
     url: `http://127.0.0.1:${(servers[0].address() as AddressInfo).port}`,
     adminUrl: `http://127.0.0.1:${(servers[1].address() as AddressInfo).port}`,
-    pacotes: packagesDir,
-    encerrar: async () => {
+    packagesDir: packagesDir,
+    close: async () => {
       await Promise.all(servers.map((serviceServer) => new Promise<void>((resolve) => serviceServer.close(() => resolve()))));
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -112,8 +112,8 @@ function catalog(sequence = 1): Catalog {
 
 /** Deixa o serviço no estado de um servidor já publicado, com um dispositivo. */
 async function prepare(service: ServiceHandle): Promise<{ token: string }> {
-  await mkdir(path.join(service.pacotes, 'releases', '0.9.9-1'), { recursive: true });
-  await writeFile(path.join(service.pacotes, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), CONTENT);
+  await mkdir(path.join(service.packagesDir, 'releases', '0.9.9-1'), { recursive: true });
+  await writeFile(path.join(service.packagesDir, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), CONTENT);
 
   const json = { 'content-type': 'application/json' };
   await fetch(`${service.adminUrl}/admin/keys`, { method: 'POST', headers: json, body: JSON.stringify({ keys: trusted }) });
@@ -132,7 +132,7 @@ const fetchArtifact = (url: string, token: string, init: RequestInit = {}) =>
 
 test('nenhuma rota de conteúdo responde sem credencial', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   await prepare(service);
 
   // Uma função de autorização perfeita que ninguém chamou numa rota é uma rota
@@ -148,7 +148,7 @@ test('nenhuma rota de conteúdo responde sem credencial', { timeout: 20_000 }, a
 
 test('HEAD e Range passam pela mesma autorização do GET', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   await prepare(service);
   const target = `${service.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
@@ -160,7 +160,7 @@ test('HEAD e Range passam pela mesma autorização do GET', { timeout: 20_000 },
 
 test('não há listagem de diretório nem caminho estático para os pacotes', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
 
   // O segundo caminho para o mesmo conteúdo é sempre o que ninguém lembra de
@@ -181,7 +181,7 @@ test('não há listagem de diretório nem caminho estático para os pacotes', { 
 
 test('o pacote é entregue inteiro e confere com o resumo do manifesto', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
 
   const reply = await fetchArtifact(`${service.url}/v1/artifacts/rel-0991/linux-x64-tar`, token);
@@ -196,7 +196,7 @@ test('o pacote é entregue inteiro e confere com o resumo do manifesto', { timeo
 
 test('a retomada continua de onde parou, e os pedaços remontam o arquivo', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
   const target = `${service.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
@@ -219,7 +219,7 @@ test('a retomada continua de onde parou, e os pedaços remontam o arquivo', { ti
 
 test('uma faixa impossível devolve 416, e não o arquivo inteiro', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
   const reply = await fetchArtifact(`${service.url}/v1/artifacts/rel-0991/linux-x64-tar`, token, { headers: { range: 'bytes=99999999-' } });
   assert.equal(reply.status, 416);
@@ -230,7 +230,7 @@ test('uma faixa impossível devolve 416, e não o arquivo inteiro', { timeout: 2
 
 test('uma credencial revogada para de baixar na hora', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
   const target = `${service.url}/v1/artifacts/rel-0991/linux-x64-tar`;
 
@@ -254,7 +254,7 @@ test('uma credencial revogada para de baixar na hora', { timeout: 20_000 }, asyn
 
 test('renovar troca o token, e o antigo deixa de valer', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
 
   const renewed = await (await fetchArtifact(`${service.url}/v1/devices/renew`, token, { method: 'POST' })).json() as { token: string };
@@ -267,7 +267,7 @@ test('renovar troca o token, e o antigo deixa de valer', { timeout: 20_000 }, as
 
 test('retirar uma versão impede o download, inclusive de quem já tinha a URL', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
   const target = `${service.url}/v1/artifacts/rel-0991/linux-x64-tar`;
   assert.equal((await fetchArtifact(target, token)).status, 200);
@@ -293,7 +293,7 @@ test('retirar uma versão impede o download, inclusive de quem já tinha a URL',
 
 test('um manifesto sem assinatura confiável não entra', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   await prepare(service);
   const intruder = generateSigningKey();
 
@@ -310,7 +310,7 @@ test('um manifesto sem assinatura confiável não entra', { timeout: 20_000 }, a
 
 test('um catálogo repetido não volta no tempo', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   await prepare(service);
 
   const older = await fetch(`${service.adminUrl}/admin/catalog`, {
@@ -323,7 +323,7 @@ test('um catálogo repetido não volta no tempo', { timeout: 20_000 }, async (co
 
 test('quem assina catálogo não consegue publicar manifesto, e vice-versa', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   await prepare(service);
   const json = { 'content-type': 'application/json' };
 
@@ -344,7 +344,7 @@ test('quem assina catálogo não consegue publicar manifesto, e vice-versa', { t
 
 test('nenhuma resposta devolve token, convite ou hash', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
 
   for (const route of ['/v1/catalog', '/v1/releases/rel-0991/manifest', '/v1/keys', '/v1/health']) {
@@ -362,7 +362,7 @@ test('nenhuma resposta devolve token, convite ou hash', { timeout: 20_000 }, asy
 
 test('o método errado é recusado sem abrir o arquivo', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
   const reply = await fetchArtifact(`${service.url}/v1/artifacts/rel-0991/linux-x64-tar`, token, { method: 'DELETE' });
   assert.equal(reply.status, 405);
@@ -371,12 +371,12 @@ test('o método errado é recusado sem abrir o arquivo', { timeout: 20_000 }, as
 
 test('o pacote em disco que não confere com o manifesto não é servido', { timeout: 20_000 }, async (context) => {
   const service = await start();
-  context.after(() => service.encerrar());
+  context.after(() => service.close());
   const { token } = await prepare(service);
 
   // Alguém trocou o arquivo no armazenamento. Servir assim entregaria bytes
   // que ninguém assinou.
-  await writeFile(path.join(service.pacotes, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), Buffer.from('outro conteudo'));
+  await writeFile(path.join(service.packagesDir, 'releases', '0.9.9-1', 'tumacord-0.9.9-1.tar.gz'), Buffer.from('outro conteudo'));
   const reply = await fetchArtifact(`${service.url}/v1/artifacts/rel-0991/linux-x64-tar`, token);
   assert.equal(reply.status, 409);
   assert.equal((await reply.json() as { reason: string }).reason, 'size-mismatch');
