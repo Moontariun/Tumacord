@@ -1,5 +1,16 @@
 # Histórico de versões
 
+## 0.9.9-1 — a revisão de manutenção passa a existir, e a ordem para de mentir
+
+<!-- tumacord:resumo -->
+Uma correção pequena deixou de exigir uma versão grande: `0.9.9-1` é a versão seguinte à `0.9.9`, e o aplicativo, o servidor e os scripts agora concordam sobre isso.
+
+- A regra de ordenação de versões passou a ter uma implementação só, em `shared/version.ts`. Antes ela estava escrita quatro vezes, e as cópias divergiam: `0.9.9-1` era lida como ensaio e ficava *abaixo* da `0.9.9`, de modo que quem estava na `0.9.9` nunca seria oferecido a correção dela.
+- No Windows, a revisão passou a ter número próprio: `0.9.9` vira `0.9.9.0` e `0.9.9-1` vira `0.9.9.1`. Os dois davam o mesmo número antes, e o sistema tratava a atualização como reinstalação da mesma coisa.
+- `alpha`, `beta`, `rc` e `+build` saíram da convenção de versão. Quem é ensaio passou a ser decidido pelo canal, que é um campo separado — misturar as duas coisas obrigava a ler o mesmo `-1` como "antes" num caso e "depois" no outro.
+- Uma versão malformada deixou de ser lida como "é a mesma versão". Ela era o suficiente para convencer um cliente de que ele já estava em dia.
+- O CI parou de marcar como ensaio toda etiqueta com hífen, e passou a recusar etiqueta fora da convenção antes de publicar.
+
 ## 0.9.9 — a mensagem deixa de ser definitiva, e o aplicativo ganha ouvido
 
 <!-- tumacord:resumo -->

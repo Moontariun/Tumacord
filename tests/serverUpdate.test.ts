@@ -11,6 +11,11 @@ import { TAG_PATTERN, compareVersions, defaultChoice, installableTag, offeredRel
 const releases = [
   { tag_name: 'v0.9.9', published_at: '2026-09-12T10:00:00Z', html_url: 'https://exemplo/0.9.9' },
   { tag_name: 'v0.9.8', published_at: '2026-09-11T10:00:00Z', html_url: 'https://exemplo/0.9.8' },
+  // Uma revisão de manutenção: a correção da 0.9.8, que vem *depois* dela.
+  { tag_name: 'v0.9.8-1', published_at: '2026-09-11T20:00:00Z', html_url: 'https://exemplo/0.9.8-1' },
+  // `rc` deixou de fazer parte da convenção de versão na 0.9.9-1: quem é
+  // ensaio passou a ser decidido pelo canal, que é um campo separado. Uma
+  // etiqueta assim não é mais uma versão deste projeto e fica de fora.
   { tag_name: 'v0.9.0-rc1', published_at: '2026-09-01T10:00:00Z', prerelease: true },
   { tag_name: 'v0.8.10', published_at: '2026-08-20T10:00:00Z' },
   { tag_name: 'v0.8.9', published_at: '2026-08-10T10:00:00Z' },
@@ -21,13 +26,23 @@ const releases = [
 test('0.8.10 é maior que 0.8.9, e a lista vem da mais nova para a mais antiga', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1, 'a comparação textual diria o contrário');
   assert.deepEqual(offeredReleases(releases, '0.9.8').map((entrada) => entrada.tag),
-    ['v0.9.9', 'v0.9.8', 'v0.9.0-rc1', 'v0.8.10', 'v0.8.9']);
+    ['v0.9.9', 'v0.9.8-1', 'v0.9.8', 'v0.8.10', 'v0.8.9']);
 });
 
-test('rascunho e o que não é versão ficam de fora', () => {
+test('rascunho, pré-versão e o que não é versão ficam de fora', () => {
   const lista = offeredReleases(releases, '0.9.8');
   assert.equal(lista.some((entrada) => entrada.tag.includes('rascunho')), false);
   assert.equal(lista.some((entrada) => entrada.tag.includes('nao-e-versao')), false);
+  assert.equal(lista.some((entrada) => entrada.tag.includes('rc1')), false, 'rc não é versão desta convenção');
+});
+
+// A regressão que dá nome à 0.9.9-1: o painel precisa oferecer a revisão de
+// manutenção como o passo *seguinte*, e não como um passo atrás.
+test('a revisão de manutenção é oferecida acima da versão que ela corrige', () => {
+  const lista = offeredReleases(releases, '0.9.8');
+  const revisao = lista.find((entrada) => entrada.tag === 'v0.9.8-1');
+  assert.equal(revisao?.newer, true, '0.9.8-1 é mais nova que 0.9.8');
+  assert.equal(lista.find((entrada) => entrada.tag === 'v0.9.8')?.current, true);
 });
 
 test('a versão em uso é apontada como tal', () => {

@@ -130,3 +130,23 @@ test('a build do Linux não foi tocada pela do Windows', () => {
   assert.match(manifest.scripts['package:linux'], /electron-builder --linux AppImage tar\.gz/);
   assert.equal(/build:native:win/.test(manifest.scripts['package:linux']), false, 'o componente do Windows não entra na build do Linux');
 });
+
+// A versão do componente nativo precisa distinguir a revisão de manutenção.
+//
+// Até a 0.9.9 a normalização do `build.ps1` era `-replace '[^0-9.].*$', ''`,
+// que apagava o sufixo inteiro: `0.9.9-1` saía como `0.9.9` e era preenchido
+// para `0.9.9.0` — o mesmo número da versão que a revisão corrige.
+//
+// NOTA: este teste confere o **script**, não a execução dele. Não há
+// PowerShell no ambiente de desenvolvimento em Linux; a execução real do
+// `build.ps1` é verificada na máquina Windows e está registrada em docs/QA.md.
+test('o componente nativo do Windows recebe a revisão no quarto campo', () => {
+  const script = readFileSync(path.join(projectRoot, 'native', 'windows', 'audio-helper', 'build.ps1'), 'utf8');
+  assert.ok(
+    !script.includes("-replace '[^0-9.].*$', ''"),
+    'a normalização que apagava o sufixo numérico não pode voltar',
+  );
+  assert.match(script, /\(\?<rev>\[1-9\]\[0-9\]\*\)/, 'a revisão é lida como um campo próprio');
+  assert.match(script, /65535/, 'o limite do campo de 16 bits é conferido antes de compilar');
+  assert.match(script, /throw "Versao fora da convencao do produto/, 'uma versão fora da convenção falha a build em vez de virar 0.0.0');
+});

@@ -29,11 +29,28 @@ if (-not $Version) {
     }
 }
 if (-not $Version) { $Version = '0.0.0' }
-$numeric = ($Version -replace '[^0-9.].*$', '')
-$parts = @($numeric.Split('.') | Where-Object { $_ -ne '' })
-while ($parts.Count -lt 4) { $parts += '0' }
-$versionComma = ($parts[0..3] -join ',')
-$versionText = ($parts[0..3] -join '.')
+# A versao numerica de quatro campos que o Windows entende, pela convencao do
+# produto: (major, minor, patch, revisao). `0.9.9` vira `0.9.9.0` e `0.9.9-1`
+# vira `0.9.9.1`.
+#
+# Ate a 0.9.9 a normalizacao daqui recortava tudo a partir do primeiro
+# caractere que nao fosse digito ou ponto, e com isso apagava o sufixo inteiro:
+# a revisao 0.9.9-1 saia como 0.9.9 e era preenchida para 0.9.9.0, exatamente o
+# mesmo numero da versao que ela corrige. O componente nativo da revisao ficava
+# indistinguivel do da versao anterior para o Windows.
+#
+# Esta e a mesma regra de `shared/version.ts`, e `tests/version.test.ts`
+# confere que as duas concordam.
+$normalizada = $Version.Trim() -replace '^[vV]', ''
+if ($normalizada -notmatch '^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(?:-(?<rev>[1-9][0-9]*))?$') {
+    throw "Versao fora da convencao do produto: '$Version'. Esperado 0.9.9 ou 0.9.9-1."
+}
+$parts = @($Matches['major'], $Matches['minor'], $Matches['patch'], $(if ($Matches['rev']) { $Matches['rev'] } else { '0' }))
+foreach ($campo in $parts) {
+    if ([int]$campo -gt 65535) { throw "Campo de versao acima de 65535 nao cabe no formato do Windows: '$Version'." }
+}
+$versionComma = ($parts -join ',')
+$versionText = ($parts -join '.')
 
 function Import-VisualStudioEnvironment {
     if ($env:VSINSTALLDIR -and (Get-Command cl.exe -ErrorAction SilentlyContinue)) { return }

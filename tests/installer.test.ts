@@ -152,7 +152,10 @@ test('README, instalador e atualizador seguem a versão do package.json', () => 
   assert.ok(branch, `${instalador} precisa declarar a branch que instala`);
 
   const readme = readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
-  const citados = [...new Set([...readme.matchAll(/install-v(\d+\.\d+\.\d+)\.sh/g)].map((achado) => achado[1]))];
+  // A forma aceita inclui a revisão de manutenção: `install-v0.9.9-1.sh`. Com
+  // o padrão de três números, o instalador da revisão não era reconhecido e o
+  // README podia ficar apontando o da versão anterior sem reprovar aqui.
+  const citados = [...new Set([...readme.matchAll(/install-v(\d+\.\d+\.\d+(?:-\d+)?)\.sh/g)].map((achado) => achado[1]))];
   assert.deepEqual(citados, [version], 'o README não pode mandar copiar instalador de outra versão');
   assert.ok(readme.includes(`/${branch}/scripts/${instalador}`), `o README precisa apontar ${instalador} na branch ${branch}`);
   assert.ok(readme.includes(`/${branch}/scripts/install-from-github.sh`), `o instalador genérico do README precisa vir da branch ${branch}`);

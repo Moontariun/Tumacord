@@ -52,6 +52,11 @@ jobs:
 
       - name: Validar projeto
         run: |
+          # A política de versão tem uma implementação só, e as adaptações dela
+          # são geradas. Se alguém editar a saída em vez da fonte, ou publicar
+          # sem regerar, a divergência aparece aqui — e não na máquina de quem
+          # instalou.
+          node scripts/gerar-versao.mjs --check
           npm run typecheck
           # O log completo de uma execução exige login no GitHub, e uma versão
           # reprovada sem motivo visível custa uma ida ao navegador toda vez.
@@ -106,6 +111,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          # A etiqueta precisa caber na convenção de versão do produto antes de
+          # virar uma Release. `v0.9.9` e `v0.9.9-1` passam; `v0.9.9-rc1`,
+          # `v01.0.0` e `v1.0` não — publicar sob uma etiqueta que o aplicativo
+          # não sabe ordenar produz uma versão que ninguém recebe.
+          if ! node -e '
+            const { TAG_PATTERN } = require("./desktop/version.generated.cjs");
+            if (!TAG_PATTERN.test(process.argv[1])) {
+              console.error(`Etiqueta fora da convenção do produto: ${process.argv[1]}`);
+              process.exit(1);
+            }
+          ' "$tag"; then
+            exit 1
+          fi
           # As notas da Release saem do CHANGELOG: é lá que a versão está
           # explicada, e uma lista de commits gerada automaticamente não conta
           # a mesma história para quem só quer saber o que mudou.
@@ -121,8 +139,19 @@ jobs:
           headline="$(awk -v version="${tag#v}" 'index($0, "## " version " ") == 1 { sub(/^## /, ""); print; exit }' CHANGELOG.md)"
           title="Tumacord ${headline:-$tag}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
+            # O canal é um campo explícito, e não um palpite sobre o
+            # formato da etiqueta.
+            #
+            # Até a 0.9.9 este passo marcava como prerelease **toda** etiqueta
+            # com hífen. Na convenção do produto o hífen é a revisão de
+            # manutenção — `v0.9.9-1` é a correção da 0.9.9, a versão mais
+            # estável que existe no momento em que sai —, e marcá-la como
+            # ensaio faria o cliente que só aceita canal estável recusar
+            # justamente a correção que ele precisa.
             extra=()
-            [[ "$tag" == *-* ]] && extra+=(--prerelease)
+            if [[ "${TUMACORD_CANAL:-stable}" == "test" ]]; then
+              extra+=(--prerelease)
+            fi
             if [[ -s "$notes_file" ]]; then
               gh release create "$tag" --title "$title" --notes-file "$notes_file" "${extra[@]}"
             else

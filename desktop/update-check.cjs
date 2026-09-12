@@ -50,32 +50,16 @@ const REQUIRED_MARKER = /<!--\s*tumacord:parada-obrigatoria\s*-->/i;
 // errado aqui significaria escrever no lugar errado da máquina de alguém.
 const INSTALL_KINDS = ['linux-managed', 'linux-appimage', 'windows-installed', 'windows-portable', 'unknown'];
 
-function parseVersion(text) {
-  const raw = typeof text === 'string' ? text.trim().replace(/^v/i, '') : '';
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+](.+))?$/.exec(raw);
-  if (!match) return null;
-  return {
-    text: raw,
-    numbers: [Number(match[1]), Number(match[2]), Number(match[3])],
-    pre: match[4] ?? '',
-  };
-}
-
-// 0.8.10 é maior que 0.8.9. A comparação textual diria o contrário, e é
-// exatamente esta a numeração do projeto — a 0.7 já passou por 0.7.10 e 0.7.11.
-function compareVersions(left, right) {
-  const a = typeof left === 'string' ? parseVersion(left) : left;
-  const b = typeof right === 'string' ? parseVersion(right) : right;
-  if (!a || !b) return 0;
-  for (let index = 0; index < 3; index += 1) {
-    if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] > b.numbers[index] ? 1 : -1;
-  }
-  // Uma pré-versão vem antes da versão final de mesmo número: 0.9.0-rc1 < 0.9.0.
-  if (a.pre === b.pre) return 0;
-  if (!a.pre) return 1;
-  if (!b.pre) return -1;
-  return a.pre > b.pre ? 1 : -1;
-}
+// A política de versão do produto vem de `shared/version.ts`, pela adaptação
+// gerada — é a mesma implementação que o servidor, o publicador e os scripts
+// usam. Até a 0.9.9 esta cópia era escrita à mão aqui, e ela divergia: lia
+// `0.9.9-1` como pré-versão e a punha *abaixo* da 0.9.9, de modo que quem
+// estava na 0.9.9 nunca era oferecido a correção dela.
+//
+// `compareVersions` **lança** para entrada malformada. Quem chama já filtra
+// com `parseVersion` antes; a exceção existe para que uma entrada corrompida
+// não seja lida como "é a mesma versão, está tudo em dia".
+const { compareVersions, parseVersion } = require('./version.generated.cjs');
 
 function requiredStopReason(version, body) {
   const known = REQUIRED_STOPS.get(typeof version === 'string' ? version.replace(/^v/i, '') : '');

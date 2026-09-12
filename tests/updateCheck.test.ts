@@ -37,12 +37,16 @@ const release = (tag: string, extra: Record<string, unknown> = {}) => ({
 // A numeração deste projeto já passou por 0.7.10 e 0.7.11. Comparar como texto
 // diria que a 0.8.9 é mais nova que a 0.8.10, e o aplicativo pararia de
 // oferecer atualização exatamente quando ela existisse.
-test('0.8.10 é mais nova que 0.8.9, e a pré-versão vem antes da final', () => {
+test('0.8.10 é mais nova que 0.8.9, e a revisão vem depois da versão', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1);
   assert.equal(compareVersions('v0.9.0', '0.8.10'), 1);
   assert.equal(compareVersions('0.9.0', '0.9.0'), 0);
-  assert.equal(compareVersions('0.9.0-rc1', '0.9.0'), -1);
+  // A convenção da 0.9.9-1: o sufixo numérico é a revisão de manutenção e vem
+  // *depois* da versão que ela corrige. `rc` saiu da convenção — quem é ensaio
+  // é decidido pelo canal, que é um campo separado da release.
+  assert.equal(compareVersions('0.9.0-1', '0.9.0'), 1);
   assert.equal(parseVersion('nada disso'), null);
+  assert.equal(parseVersion('0.9.0-rc1'), null);
 });
 
 test('a 0.8.9 não é oferecida a ninguém, nem sendo a mais nova', () => {
@@ -75,10 +79,23 @@ test('nunca se oferece uma versão mais antiga do que a instalada', () => {
   assert.equal(decisao.version, undefined);
 });
 
-test('pré-versão só entra quando alguém pede', () => {
-  const releases = [release('v0.9.1-rc1', { prerelease: true })];
+// Ensaio é um campo explícito da release, e não um sufixo na versão. A versão
+// de um ensaio é uma versão normal desta convenção — o que o marca como ensaio
+// é o canal em que ele foi publicado.
+test('pré-versão só entra quando alguém pede, e sua versão é normal', () => {
+  const releases = [release('v0.9.1', { prerelease: true })];
   assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed' }).status, 'up-to-date');
-  assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed', allowPrerelease: true }).version, '0.9.1-rc1');
+  assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed', allowPrerelease: true }).version, '0.9.1');
+});
+
+// A regressão que dá nome à revisão, no lado do aplicativo: quem está na 0.9.9
+// precisa receber a 0.9.9-1 como atualização, e não como um passo atrás.
+test('a revisão de manutenção é oferecida a quem está na versão que ela corrige', () => {
+  const decisao = chooseUpdate({ releases: [release('v0.9.9-1')], currentVersion: '0.9.9', kind: 'windows-installed' });
+  assert.equal(decisao.status, 'available');
+  assert.equal(decisao.version, '0.9.9-1');
+  // E o contrário não vale: quem já está na revisão não recebe a 0.9.9 de volta.
+  assert.equal(chooseUpdate({ releases: [release('v0.9.9')], currentVersion: '0.9.9-1', kind: 'windows-installed' }).status, 'up-to-date');
 });
 
 test('rascunho não existe para quem está esperando uma versão', () => {

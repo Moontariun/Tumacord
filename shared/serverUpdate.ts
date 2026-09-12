@@ -14,8 +14,12 @@
 // caminho. `installableTag` é onde essa conferência acontece, e ela é feita de
 // novo na hora de aplicar — a lista mostrada pode ter envelhecido.
 
-/** O formato de etiqueta que este projeto publica, e o único que é aceito. */
-export const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
+// A política de versão vem de `shared/version.ts`, que é a implementação
+// única do projeto. Até a 0.9.9 esta metade tinha a própria cópia da regra de
+// ordenação, e a cópia divergiu da do aplicativo: `0.9.9-1` era lida como
+// pré-versão aqui e o painel a oferecia *abaixo* da 0.9.9.
+export { TAG_PATTERN, compareVersions, parseVersion } from './version.js';
+import { TAG_PATTERN, type Version, compareVersions, parseVersion } from './version.js';
 
 // O mesmo marcador invisível que o aplicativo já lê. As notas de cada Release
 // saem do CHANGELOG, então marcar a versão como quebrada lá e republicar as
@@ -59,34 +63,6 @@ export interface OfferedRelease {
   newer: boolean;
 }
 
-interface ParsedVersion {
-  text: string;
-  numbers: [number, number, number];
-  pre: string;
-}
-
-export function parseVersion(text: unknown): ParsedVersion | null {
-  const raw = typeof text === 'string' ? text.trim().replace(/^v/i, '') : '';
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+](.+))?$/.exec(raw);
-  if (!match) return null;
-  return { text: raw, numbers: [Number(match[1]), Number(match[2]), Number(match[3])], pre: match[4] ?? '' };
-}
-
-// 0.8.10 é maior que 0.8.9, e a comparação textual diria o contrário. Esta
-// numeração já passou por 0.7.10 e 0.7.11.
-export function compareVersions(left: unknown, right: unknown): number {
-  const a = typeof left === 'string' ? parseVersion(left) : (left as ParsedVersion | null);
-  const b = typeof right === 'string' ? parseVersion(right) : (right as ParsedVersion | null);
-  if (!a || !b) return 0;
-  for (let index = 0; index < 3; index += 1) {
-    if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] > b.numbers[index] ? 1 : -1;
-  }
-  if (a.pre === b.pre) return 0;
-  if (!a.pre) return 1;
-  if (!b.pre) return -1;
-  return a.pre > b.pre ? 1 : -1;
-}
-
 function brokenReason(version: string, body: unknown): string {
   const embutida = BROKEN_VERSIONS.get(version);
   if (embutida) return embutida;
@@ -102,7 +78,7 @@ function brokenReason(version: string, body: unknown): string {
  * motivo, e não são aplicáveis.
  */
 export function offeredReleases(releases: unknown, currentVersion: string): OfferedRelease[] {
-  const atual = parseVersion(currentVersion);
+  const atual: Version | null = parseVersion(currentVersion);
   const lista: OfferedRelease[] = [];
   for (const entrada of Array.isArray(releases) ? releases as ReleaseInput[] : []) {
     if (!entrada || entrada.draft === true) continue;
