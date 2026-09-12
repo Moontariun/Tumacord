@@ -1,0 +1,80 @@
+# O executor de atualizações do Tumacord.
+#
+# Ele existe porque o contêiner não consegue reconstruir a si mesmo: quem para,
+# recria e sobe o `tumacord-server` precisa estar **fora** do processo que vai
+# reiniciar. Ligar `TUMACORD_SELF_UPDATE=1` sem este serviço faz o painel
+# mostrar as versões e a aplicação falhar — era a inconsistência que o
+# `.env.example` anterior carregava.
+#
+# O que ele NÃO faz, e é por isso que ele pode existir:
+#
+#   · não monta o socket do Docker dentro do contêiner de chat;
+#   · não oferece shell, URL arbitrária, caminho arbitrário nem comando vindo
+#     do navegador;
+#   · não aceita "a branch mais recente". Ele recebe um identificador de
+#     release e o valida contra o catálogo aprovado antes de qualquer coisa.
+#
+# ATENÇÃO — NÃO HABILITE AINDA.
+#
+# Este arquivo é o DESENHO do executor, versionado para as permissões e a
+# interface ficarem decididas e revisáveis. O programa que ele chama
+# (`tools/tumacordctl/executor.mjs`) **ainda não foi escrito** na 0.9.9-1:
+# habilitar esta unidade agora produz um serviço que falha ao subir.
+#
+# Enquanto ele não existe, a atualização do servidor é o procedimento manual
+# de docs/atualizacao-servidor.md, e `TUMACORD_SELF_UPDATE` fica em 0.
+#
+# Quando existir, a instalação será:
+#   sudo cp packaging/servidor/tumacord-executor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tumacord-executor
+#
+# Ajuste `WorkingDirectory` e `Environment` para a sua instalação antes de
+# habilitar. Os valores abaixo são exemplo e não servem para nenhuma máquina
+# específica.
+
+[Unit]
+Description=Executor de atualizações do Tumacord
+Documentation=file:///opt/tumacord/docs/atualizacao-servidor.md
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# O diretório do projeto desta instalação.
+WorkingDirectory=/opt/tumacord
+Environment=TUMACORD_PROJETO=tumacord
+# Onde o estado dos trabalhos vive. Fora do checkout, que é descartável.
+Environment=TUMACORD_EXECUTOR_STATE=/var/lib/tumacord/executor
+# A interface local, e só ela. O executor nunca escuta na internet.
+Environment=TUMACORD_EXECUTOR_HOST=127.0.0.1
+Environment=TUMACORD_EXECUTOR_PORT=4302
+# A administração do serviço de atualizações, também no laço local.
+Environment=TUMACORD_UPDATES_ADMIN=http://127.0.0.1:4301
+ExecStart=/usr/bin/node /opt/tumacord/tools/tumacordctl/executor.mjs
+
+# Permissões limitadas. O executor precisa do Docker e do diretório do
+# projeto; não precisa de mais nada, e o que ele não precisa fica fechado.
+User=tumacord
+Group=docker
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/tumacord /opt/tumacord
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+Restart=on-failure
+RestartSec=5s
+# O executor pode ser reiniciado no meio de um trabalho. O estado dos
+# trabalhos é persistido justamente para ele saber onde parou.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

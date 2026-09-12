@@ -7,7 +7,13 @@ RUN npm run build
 
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production \
+# O commit de onde esta imagem saiu. `version` sozinha não prova que a
+# atualização aconteceu: uma imagem que não foi reconstruída responde a versão
+# nova do package.json com o código antigo dentro.
+#   docker compose build --build-arg TUMACORD_COMMIT="$(git rev-parse HEAD)"
+ARG TUMACORD_COMMIT=""
+ENV TUMACORD_COMMIT=${TUMACORD_COMMIT} \
+    NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4600 \
     DATA_DIR=/data \

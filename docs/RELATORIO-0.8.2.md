@@ -1,5 +1,10 @@
 # Relatório da 0.8.2 — o relay fora do ar, e o relay como escolha
 
+> **DOCUMENTO HISTÓRICO.** Esta é a evidência da 0.8.2, preservada como foi
+> escrita — ela não é o guia atual e não descreve o comportamento de agora.
+> Os comandos, caminhos e números aqui valiam na data acima. Para operar hoje,
+> comece pelo [README](../README.md) e pelos guias correntes em `docs/`.
+
 Duas coisas nesta versão: um defeito de produção que estava calado desde a
 0.8.0, e uma mudança de política sobre quem decide usar o relay.
 

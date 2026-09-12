@@ -1,6 +1,11 @@
 services:
   tumacord-server:
-    build: .
+    build:
+      context: .
+      args:
+        # O commit entra na imagem para o health poder prová-lo. Sem ele, o
+        # campo sai vazio — e vazio é dito, não inventado.
+        TUMACORD_COMMIT: ${TUMACORD_COMMIT:-}
     container_name: tumacord-server
     init: true
     restart: unless-stopped

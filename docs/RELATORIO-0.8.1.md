@@ -1,5 +1,10 @@
 # Relatório da 0.8.1 — estabilidade de mídia e painel de administração
 
+> **DOCUMENTO HISTÓRICO.** Esta é a evidência da 0.8.1, preservada como foi
+> escrita — ela não é o guia atual e não descreve o comportamento de agora.
+> Os comandos, caminhos e números aqui valiam na data acima. Para operar hoje,
+> comece pelo [README](../README.md) e pelos guias correntes em `docs/`.
+
 Base: `release/rendezvous-and-turn-v0.8.0` (commit `5ec8b80`).
 Branch: `release/stability-and-admin-v0.8.1`.
 

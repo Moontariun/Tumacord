@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -209,5 +209,68 @@ test('uma falha ao gravar desfaz a conta em memória', async () => {
     assert.equal(store.reservationFor('renan'), undefined, 'e o nome não fica reservado por uma conta que não existe');
     // E o nome continua disponível de verdade.
     assert.equal((await store.createUser(conta('Renan'))).created, true);
+  });
+});
+
+// ── Pausa de escrita, para o backup capturar um ponto ──────────────────────
+//
+// Um `tar` do volume enquanto o servidor grava pode capturar o JSON entre o
+// `write` e o `rename`. A falha não aparece na hora: ela aparece na
+// restauração, quando já não há de onde tirar outra cópia.
+
+test('pausar espera o que estava pendente e segura o que vem depois', async () => {
+  await comStore(async (store) => {
+    await store.createUser(conta('Antes'));
+
+    await store.pauseWrites(60_000);
+    assert.equal(store.writesPaused, true);
+
+    // O disco já está em dia quando `pauseWrites` volta: é essa espera que dá
+    // o ponto consistente.
+    const gravado = JSON.parse(await readFile(path.join((store as unknown as { file: string }).file), 'utf8')) as { users: { username: string }[] };
+    assert.deepEqual(gravado.users.map((u) => u.username), ['Antes']);
+
+    // Uma conta criada agora muda a memória e fica esperando o disco.
+    let gravou = false;
+    const pendente = store.createUser(conta('Durante')).then(() => { gravou = true; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(gravou, false, 'a gravação esperou a pausa');
+    assert.equal(store.users.length, 2, 'mas a memória já tem a conta');
+
+    const durante = JSON.parse(await readFile((store as unknown as { file: string }).file, 'utf8')) as { users: unknown[] };
+    assert.equal(durante.users.length, 1, 'o disco fica parado enquanto o backup lê');
+
+    store.resumeWrites();
+    await pendente;
+    assert.equal(gravou, true);
+    const depois = JSON.parse(await readFile((store as unknown as { file: string }).file, 'utf8')) as { users: { username: string }[] };
+    assert.deepEqual(depois.users.map((u) => u.username), ['Antes', 'Durante'], 'nada foi perdido na pausa');
+  });
+});
+
+test('a pausa se solta sozinha se o backup morrer no meio', async () => {
+  await comStore(async (store) => {
+    // Sem isto, um backup interrompido deixaria o servidor sem gravar para
+    // sempre — e o estrago apareceria só no próximo reinício.
+    await store.pauseWrites(40);
+    assert.equal(store.writesPaused, true);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    assert.equal(store.writesPaused, false);
+    await store.createUser(conta('Depois'));
+    const gravado = JSON.parse(await readFile((store as unknown as { file: string }).file, 'utf8')) as { users: unknown[] };
+    assert.equal(gravado.users.length, 1);
+  });
+});
+
+test('pausar duas vezes não trava a segunda', async () => {
+  await comStore(async (store) => {
+    await store.pauseWrites(60_000);
+    await store.pauseWrites(60_000);
+    store.resumeWrites();
+    assert.equal(store.writesPaused, false);
+    // E liberar sem pausa não quebra nada.
+    store.resumeWrites();
+    await store.createUser(conta('Fim'));
+    assert.equal(store.users.length, 1);
   });
 });

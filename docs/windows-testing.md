@@ -34,7 +34,7 @@ Não repita à mão o que a automação já garante:
 
 - **Windows A** — Windows 11 x64, Tumacord instalado pelo `Setup.exe`;
 - **Windows B** — segunda máquina Windows, para o Caso 1;
-- **Linux C** — instalação pelo `install-v0.8.8.sh`, com PipeWire;
+- **Linux C** — instalação pelo `install-v0.9.9-1.sh`, com PipeWire;
 - fone de ouvido em uma das máquinas e **caixas de som** em outra: o eco
   acústico só aparece com caixas;
 - Discord instalado no Windows A, com uma segunda conta para o Caso 4.
@@ -147,10 +147,10 @@ Em Configurações › Diagnóstico, durante 4.9, o relatório precisa mostrar
 
 | # | Passo | Esperado | OK |
 | --- | --- | --- | --- |
-| 8.1 | executar `Tumacord-0.8.8-Setup.exe` | um único prompt de UAC, durante a instalação | ☐ |
+| 8.1 | executar `Tumacord-0.9.9-1-Setup.exe` | um único prompt de UAC, durante a instalação | ☐ |
 | 8.2 | conferir a pasta escolhida | o instalador permitiu escolher | ☐ |
 | 8.3 | abrir pelo Menu Iniciar e pelo atalho da área de trabalho | os dois abrem o aplicativo | ☐ |
-| 8.4 | conferir **Aplicativos instalados** | aparece "Tumacord 0.8.8", com ícone e editor | ☐ |
+| 8.4 | conferir **Aplicativos instalados** | aparece "Tumacord 0.9.9-1", com ícone e editor | ☐ |
 | 8.5 | entrar numa call, mandar mensagem, fechar e abrir de novo | a sessão e as mensagens continuam lá | ☐ |
 | 8.6 | abrir uma segunda vez com o aplicativo já aberto | a janela existente vem para a frente; **não** abre uma segunda instância | ☐ |
 | 8.7 | instalar por cima (mesma versão ou mais nova) com o app aberto | o instalador encerra o app com aviso e conclui | ☐ |
@@ -165,7 +165,7 @@ Em Configurações › Diagnóstico, durante 4.9, o relatório precisa mostrar
 
 | # | Passo | Esperado | OK |
 | --- | --- | --- | --- |
-| 9.1 | `Get-AuthenticodeSignature .\Tumacord-0.8.8-Setup.exe` | `Status = Valid` | ☐ |
+| 9.1 | `Get-AuthenticodeSignature .\Tumacord-0.9.9-1-Setup.exe` | `Status = Valid` | ☐ |
 | 9.2 | idem para o `portable.exe` | `Status = Valid` | ☐ |
 | 9.3 | idem para `Tumacord.exe` e `resources\audio-helper\tumacord-audio-helper.exe` da pasta instalada | `Status = Valid` nos dois | ☐ |
 | 9.4 | conferir o publisher em todos | é o mesmo, e o mesmo da versão anterior | ☐ |

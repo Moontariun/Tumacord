@@ -1,5 +1,10 @@
 # Auditoria da 0.9.2
 
+> **DOCUMENTO HISTÓRICO.** Esta é a evidência da 0.9.2, preservada como foi
+> escrita — ela não é o guia atual e não descreve o comportamento de agora.
+> Os comandos, caminhos e números aqui valiam na data acima. Para operar hoje,
+> comece pelo [README](../README.md) e pelos guias correntes em `docs/`.
+
 Estado conferido em `8c38547`, branch `release/bandeja-e-correcoes-v0.9.2`,
 árvore limpa e idêntica ao remoto. Nenhum trabalho de terceiros pendente.
 

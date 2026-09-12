@@ -830,10 +830,58 @@ export class JsonStore {
     // Uma falha transitória (disco desmontado, diretório recriado, etc.) não
     // pode envenenar a fila: o próximo snapshot completo ainda precisa ter a
     // chance de persistir o estado atual.
+    //
+    // A pausa entra **antes** da gravação e depois do snapshot: quem chamou já
+    // mudou a memória e recebe a promessa de que isso chega ao disco. Bloquear
+    // aqui segura a gravação sem perder a mudança.
     this.saveChain = this.saveChain.catch(() => undefined).then(async () => {
+      if (this.writeGate) await this.writeGate;
       await writeFile(temporary, snapshot, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, this.file);
     });
     return this.saveChain;
+  }
+
+  // ── Pausa de escrita, para o backup ────────────────────────────────────────
+  //
+  // Um `tar` do volume enquanto o servidor grava pode capturar o JSON entre o
+  // `write` e o `rename`, ou o estado de um instante com os anexos de outro.
+  // Nenhuma dessas falhas aparece na hora: elas aparecem na restauração, meses
+  // depois, quando já não há de onde tirar outra cópia.
+  //
+  // Pausar aqui é o que torna a cópia um ponto: as gravações pendentes
+  // terminam, as novas esperam, e o disco fica parado enquanto o backup lê.
+
+  private writeGate: Promise<void> | null = null;
+  private releaseGate: (() => void) | null = null;
+  private gateTimer: NodeJS.Timeout | null = null;
+
+  /** Se a escrita está pausada agora. */
+  get writesPaused(): boolean { return this.writeGate !== null; }
+
+  /**
+   * Descarrega o que está pendente e segura as gravações seguintes.
+   *
+   * Volta só depois de o disco estar em dia — é essa espera que dá o ponto
+   * consistente. O `timeoutMs` é uma rede de segurança: um backup que morreu
+   * no meio não pode deixar o servidor sem gravar para sempre.
+   */
+  async pauseWrites(timeoutMs = 5 * 60 * 1000): Promise<void> {
+    if (this.writeGate) return;
+    this.writeGate = new Promise<void>((resolve) => { this.releaseGate = resolve; });
+    // As gravações que já estavam na fila entraram antes do portão e terminam.
+    await this.saveChain.catch(() => undefined);
+    this.gateTimer = setTimeout(() => this.resumeWrites(), timeoutMs);
+    // `unref` para o processo poder encerrar mesmo com a pausa pendurada.
+    this.gateTimer.unref?.();
+  }
+
+  /** Libera as gravações que esperavam. */
+  resumeWrites(): void {
+    if (this.gateTimer) { clearTimeout(this.gateTimer); this.gateTimer = null; }
+    const liberar = this.releaseGate;
+    this.writeGate = null;
+    this.releaseGate = null;
+    liberar?.();
   }
 }

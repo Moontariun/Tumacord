@@ -4,6 +4,29 @@ O Tumacord é um chat pessoal de voz, vídeo e texto para um grupo pequeno. Ele 
 
 Na mesma rede as calls aparecem sozinhas, sem configurar nada. Para chamar alguém de fora, é preciso um servidor: o convite aponta para ele, e os dois lados chegam por conexão de saída. O ZeroTier continua disponível como opção que se liga nas configurações.
 
+## Documentação
+
+Este README é a entrada. Cada procedimento de operação mora num guia próprio,
+e é lá que ele está completo — com plataforma, diretório, usuário, comando,
+saída esperada, efeito sobre dados e chamadas, e o que fazer em cada falha.
+
+| Guia | Para quê |
+|---|---|
+| [Instalação na VPS](docs/instalacao-vps.md) | subir o dedicado e o serviço de atualizações do zero |
+| [Configuração](docs/configuracao.md) | cada variável, o que ela faz, e o que muda se faltar |
+| [Atualização do servidor](docs/atualizacao-servidor.md) | trocar a versão em uso, validar e voltar atrás |
+| [Backup e restauração](docs/backup-restore.md) | cópia consistente e restauração ensaiada |
+| [Publicação privada](docs/publicacao-privada.md) | assinar, importar, promover e retirar versões |
+| [Versionamento](docs/versionamento.md) | a convenção `0.9.9-1` e por que ela não é SemVer |
+| [Solução de problemas](docs/solucao-de-problemas.md) | sintomas concretos e o que fazer |
+| [QA da release](docs/QA.md) | o que foi testado, o que foi analisado e o que ficou pendente |
+| [Compilar no Windows](docs/windows-build.md) | produzir os pacotes de Windows |
+| [Testar no Windows](docs/windows-testing.md) | roteiro de verificação na máquina real |
+
+Os documentos em `docs/` com prefixo `RELATORIO-` ou `AUDITORIA-` são
+**históricos**: eles preservam a evidência da versão que os produziu e não
+descrevem o comportamento de agora. Cada um diz isso no topo.
+
 ## O que já funciona
 
 - cadastro e login explícitos com usuário + senha;

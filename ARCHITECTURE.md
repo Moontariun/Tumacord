@@ -88,16 +88,22 @@ O contêiner serve `dist-web`, API e Socket.IO na porta `4600`; o servidor embut
 
 O nome administrativo é configurável por `ADMIN_USERNAME` e vale apenas no servidor dedicado. O painel expõe estado do serviço, canais e usuários conectados; ações administrativas exigem uma sessão autenticada desse usuário.
 
-## Desenho sobre a transmissão
+## Desenho sobre a transmissão — removido
 
-As coordenadas viajam como fração de 0 a 1 do quadro capturado, nunca em pixels: quem desenha em uma janela de 600 px e quem transmite em 4K precisam ver o traço no mesmo lugar do *conteúdo*. `shared/telestration.ts` guarda essa conversão, o prazo do traço e os tetos que protegem contra um cliente falante; o servidor reenvia cada traço para a sala inteira com um balde por socket.
+Até a 0.9.8 era possível rabiscar por cima da transmissão de alguém. Isso
+**saiu na 0.9.9**, e com ele saíram `shared/telestration.ts` e
+`desktop/drawing-overlay.cjs`, que esta seção descrevia.
 
-Duas permissões decidem se um traço passa, e as duas moram no servidor:
+O motivo foi o desequilíbrio entre o que o recurso prometia e onde ele
+funcionava: a sobreposição só se comportava no Windows. No Linux ela roubava o
+foco do teclado de quem estava jogando e voltava para dentro da captura do
+portal do PipeWire, de modo que o traço aparecia espelhado dentro do próprio
+vídeo. Um recurso que só existe em metade das máquinas do grupo é um recurso
+que ninguém combina de usar.
 
-- `allowDraw` — a preferência de quem transmite, publicada no estado de voz;
-- `drawSupported` — o *sistema* de quem transmite, que só é verdadeiro no Windows. `desktop/drawing-overlay.cjs` abre uma janela sem moldura sobre o monitor capturado para o traço aparecer na área de trabalho de verdade; no Windows ela não rouba foco e sai da captura por `setContentProtection`, e no Linux ela faz as duas coisas erradas — tira o foco do teclado de quem está jogando e volta dentro da captura do portal do PipeWire. O processo principal recusa a sobreposição fora do Windows, e o servidor recusa o traço: esconder o lápis é conveniência da interface, não proteção.
-
-Ausência de `drawSupported` é lida como "não recebe": um cliente anterior à 0.9.0 não declara o sistema, e adivinhar o sistema de alguém para pintar na área de trabalho dele seria a escolha errada.
+O desenho do Tumacord passou a ser a **mesa compartilhada**, abaixo: ela é
+desenhada dentro do próprio aplicativo, não depende de live nem de call, e é
+igual no Linux e no Windows.
 
 ## Mesa de desenho compartilhada
 

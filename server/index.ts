@@ -39,6 +39,8 @@ const serverName = process.env.SERVER_NAME?.trim() || 'Tumacord';
 const dataDirectory = process.env.DATA_DIR ?? './data';
 const sessionTtl = Number(process.env.SESSION_TTL_DAYS ?? 30) * 86_400_000;
 const serverVersion = packageMetadata.version;
+// Posto pelo empacotamento (`--build-arg TUMACORD_COMMIT`). Sem ele, vazio.
+const serverCommit = (process.env.TUMACORD_COMMIT ?? '').trim();
 const startedAt = new Date();
 const p2pMode = process.env.TUMACORD_P2P_MODE === '1';
 const serveWeb = process.env.TUMACORD_SERVE_WEB !== '0';
@@ -356,6 +358,12 @@ app.get('/api/health', (_request, response) => {
     name: serverName,
     users: connectedUsers.size,
     version: serverVersion,
+    // O commit exato de onde esta build saiu. `version` sozinha não prova que
+    // a atualização aconteceu: duas builds do mesmo número podem diferir, e
+    // uma imagem que não foi reconstruída responde a versão nova do
+    // `package.json` com o código antigo dentro. Vazio quando a build não
+    // recebeu o commit — e vazio é dito, não inventado.
+    commit: serverCommit,
     mode: p2pMode ? 'p2p' : 'server',
     web: serveWeb,
     // Identidade estável desta instalação. É ela que o cliente usa para não
@@ -972,6 +980,45 @@ app.get('/api/admin/update', async (request, response) => {
 });
 
 const updateBucket = new TokenBucket(3, 1);
+
+/**
+ * Pausar a escrita, para o backup capturar um ponto consistente.
+ *
+ * O servidor grava de forma coordenada dentro do processo, mas isso não
+ * protege contra alguém copiar o volume no meio de uma gravação: o `tar`
+ * pegaria o JSON entre o `write` e o `rename`, ou o estado de um instante com
+ * os anexos de outro. Nenhuma dessas falhas aparece na hora — elas aparecem na
+ * restauração, quando já não há de onde tirar outra cópia.
+ *
+ * Volta só depois de o disco estar em dia. É essa espera que dá o ponto.
+ *
+ * A call **não** é interrompida: voz e vídeo não passam pelo armazenamento. O
+ * que fica em espera são o envio de mensagem e de anexo, por segundos.
+ */
+app.post('/api/admin/pausar-escrita', async (request, response) => {
+  const context = requireOwner(request, response);
+  if (!context) return;
+  const parsed = z.object({ timeoutMs: z.number().int().min(1_000).max(30 * 60_000).optional() }).safeParse(request.body ?? {});
+  if (!parsed.success) return refuse(response, 400, 'Tempo limite inválido.');
+  await store.pauseWrites(parsed.data.timeoutMs);
+  await audit(context.user, 'server.pause-writes', '', 'ok');
+  response.json({
+    ok: true,
+    paused: true,
+    // O tempo limite é uma rede de segurança: um backup que morreu no meio não
+    // pode deixar o servidor sem gravar para sempre.
+    autoResumeMs: parsed.data.timeoutMs ?? 5 * 60_000,
+  });
+});
+
+/** Liberar as gravações que esperavam. */
+app.post('/api/admin/liberar-escrita', async (request, response) => {
+  const context = requireOwner(request, response);
+  if (!context) return;
+  store.resumeWrites();
+  await audit(context.user, 'server.resume-writes', '', 'ok');
+  response.json({ ok: true, paused: false });
+});
 
 app.post('/api/admin/update', async (request, response) => {
   const context = requireOwner(request, response);
