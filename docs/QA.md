@@ -1,20 +1,179 @@
-# Checklist de QA — 0.8.1
+# QA das releases
 
-Este arquivo separa o que já foi provado do que ainda depende de duas máquinas
-reais. Os marcadores são fixos:
+Este arquivo acumula a evidência de cada versão. **Cada seção é a evidência da
+versão que a produziu** — as seções antigas não valem como validação de uma
+entrega nova, e estão preservadas como foram escritas.
 
-- **TESTADO AUTOMATICAMENTE** — há teste no `npm test` cobrindo isso;
-- **VALIDADO POR ANÁLISE** — verificado lendo o código, sem execução;
-- **IMPLEMENTADO — REQUER TESTE MANUAL** — o código existe, ninguém executou;
-- **FALHOU** — executado e não passou.
+A seção corrente está no topo. Para operar hoje, comece pelo
+[README](../README.md) e pelos guias em `docs/`.
 
-Nada aqui é marcado como testado sem execução. Plataformas oficiais: **Fedora**
-e **CachyOS/Arch** (mesma pilha: PipeWire, WirePlumber, xdg-desktop-portal,
-KDE/Wayland).
+Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
+
+- **TESTADO** — executado, com resultado observado;
+- **ANALISADO** — verificado lendo o código, sem execução;
+- **NÃO EXECUTADO** — o código existe e ninguém rodou. Vem sempre com o
+  procedimento e o critério de aceite;
+- **FALHOU** — executado e não passou;
+- **NÃO IMPLEMENTADO** — não existe nesta entrega.
 
 ---
 
-## Experimento do microfone — executado
+## 0.9.9-1 — revisão de manutenção
+
+### Ambiente
+
+| | |
+|---|---|
+| Sistema | CachyOS, Linux 7.2.3-1-cachyos |
+| Node | v26.8.1 |
+| npm | 12.0.2 |
+| git | 2.55.0 |
+| Docker | 29.7.2 |
+| Docker Compose | 5.5.1 |
+| PowerShell | **indisponível** neste ambiente |
+| Windows | **indisponível** neste ambiente |
+| Segunda máquina | **indisponível** neste ambiente |
+| VPS | **não fornecida** nesta auditoria |
+
+### Linha de base e resultado
+
+| | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
+|---|---|---|
+| Testes | **663** aprovados | **840** aprovados |
+| Typecheck | limpo | limpo |
+| `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
+
+> A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
+> qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
+> desta revisão: os 177 casos novos existem porque cada um deles reprova no
+> código anterior.
+
+### O que foi TESTADO
+
+| Área | Evidência | Onde |
+|---|---|---|
+| Ordem de versões, vetores da convenção, inválidos, sufixos 2/10, limites, etiquetas | 18 casos | `tests/version.test.ts` |
+| Adaptação CJS em dia com a fonte, e decidindo igual nos mesmos vetores | regera e compara | `tests/version.test.ts` |
+| Versão numérica do Windows **contra o electron-builder real** | `0.9.9-1` dava `0.9.9.0`; agora dá `0.9.9.1` | `tests/version.test.ts` |
+| Inscrição da live: enlace refeito reemite, intenção sobrevive, live nova exige nova escolha | 12 casos | `tests/liveSubscription.test.ts` |
+| Tela não vaza para quem não assinou; fechar a live não é desfeito pela reconciliação | plano antigo e novo lado a lado | `tests/liveSubscription.test.ts` |
+| Unicidade de conta: 6 pedidos simultâneos → 1 conta | medido nos dois caminhos: antigo cria 6, novo cria 1 | `tests/accountUniqueness.test.ts` |
+| Reserva de nome sobrevive à remoção e ao reinício | 14 casos | `tests/accountUniqueness.test.ts` |
+| Duplicatas legadas detectadas sem escolher vencedora, relatório sem hash | | `tests/accountUniqueness.test.ts` |
+| Pausa de escrita: pendentes terminam, novas esperam, nada se perde | | `tests/accountUniqueness.test.ts` |
+| Lançador do Windows: `EACCES` assíncrono tratado, falha síncrona tratada, sem duplo desfecho | 13 casos | `tests/windowsInstaller.test.ts` |
+| Caminho do instalador não vira comando, verbo de elevação correto | | `tests/windowsInstaller.test.ts` |
+| Contratos da distribuição: forma canônica, assinatura, escopo de chave, rotação, revogação | 28 casos | `tests/distribution.test.ts` |
+| Catálogo vencido, repetido, torto; retirada que não vira downgrade | | `tests/distribution.test.ts` |
+| Escolha de pacote por OS/arquitetura/formato; manifesto ambíguo não vira sorteio | | `tests/distribution.test.ts` |
+| Serviço de atualizações, unidades: autorização, convites, Range, limites, estado | 31 casos | `tests/updateService.test.ts` |
+| Serviço de atualizações, **de pé, por HTTP** | 15 casos | `tests/updateService.integration.test.ts` |
+| ↳ nenhuma rota de conteúdo anônima; HEAD e Range sob a mesma autorização | | idem |
+| ↳ retomada em dois pedaços que remontam o arquivo com o mesmo SHA-256 | | idem |
+| ↳ revogação corta na hora; retirada devolve 410 a quem já tinha a URL | | idem |
+| ↳ nenhuma resposta devolve token, convite ou hash; nenhum redirect | | idem |
+| ↳ quem assina catálogo não publica manifesto, e vice-versa | | idem |
+| Descoberta de instalação estruturada; ambiguidade para a operação | 24 casos | `tests/tumacordctl.test.ts` |
+| Preflight: sem mount em `/data` **falha** em vez de seguir sem backup | | `tests/tumacordctl.test.ts` |
+| Valores de variáveis nunca saem da descoberta | | `tests/tumacordctl.test.ts` |
+| Anexos: preferência do P2P não atravessa para o dedicado | 6 casos | `tests/attachmentSync.test.ts` |
+| Criação de canal: socket e API produzem o mesmo canal, com posição e auditoria | integração com servidor real | `tests/adminAuthorization.integration.test.ts` |
+| Documentação: links locais, arquivos citados, variáveis, serviços, versões | 11 casos | `tests/documentacao.test.ts` |
+| `docker compose config` com exemplo | validado | manual, nesta máquina |
+| `npm run build` (web + servidor + serviço) | ok | manual, nesta máquina |
+| `npm run package:linux` | produziu os dois pacotes com a revisão no nome | manual, nesta máquina |
+
+**Pacotes de Linux produzidos e conferidos nesta máquina:**
+
+| Arquivo | Tamanho | Conferência |
+|---|---|---|
+| `release/Tumacord-0.9.9-1.AppImage` | 126 419 499 B | ELF executável x86-64 |
+| `release/tumacord-0.9.9-1.tar.gz` | 120 210 059 B | abre, 95 entradas, raiz `tumacord-0.9.9-1/` |
+
+O nome do arquivo carrega a revisão — o que confirma, do lado do
+empacotamento, que `0.9.9-1` não colide com `0.9.9`. Os pacotes **não** foram
+instalados nem executados: isso exige uma máquina limpa e está na lista de
+**NÃO EXECUTADO**.
+
+### O que foi ANALISADO
+
+| Item | Por que não foi executado |
+|---|---|
+| `native/windows/audio-helper/build.ps1` | não há PowerShell nesta máquina. O **script** é conferido por teste; a execução é Windows |
+| Configuração do proxy (`packaging/proxy/`) | `nginx -t` exige Nginx instalado e certificados |
+| Unidade systemd do executor | é o desenho; o programa que ela chama não existe |
+
+### NÃO EXECUTADO — com procedimento e critério
+
+Cada item abaixo tem o que fazer e o que observar. Enquanto eles não forem
+executados, **o gate correspondente fica pendente**.
+
+| Item | Procedimento | Critério de aceite |
+|---|---|---|
+| Instalação limpa numa VPS | [Instalação na VPS](instalacao-vps.md) | `doctor` sai 0; `/api/health` e `/v1/saude` respondem; `/v1/catalogo` dá 401 sem credencial |
+| Atualização de instalação antiga com projeto/volume não padrão | [Atualização do servidor](atualizacao-servidor.md) | `version` e `commit` batem; `installationId` **inalterado** |
+| Backup e restauração ensaiados | [Backup e restauração](backup-restore.md) | restauração em volume separado sobe e mostra o mesmo `installationId` |
+| Falha e rollback | idem, seção 7 | volta ao deployment registrado, e a versão confirma |
+| Publicação e importação offline | [Publicação privada](publicacao-privada.md) | catálogo promovido; aplicativo recebe a versão |
+| Migração para uma segunda VPS | ainda sem runbook próprio | — |
+| Windows: usuário comum e administrador, UAC aceito e cancelado | [Testar no Windows](windows-testing.md) | EACCES **não** derruba o app; UAC cancelado mantém o app aberto |
+| Windows: arquivo bloqueado, caminho com espaço e acento, portable | idem | cada causa é distinguida na mensagem |
+| Windows: instalação por máquina preservada | idem | escopo, appId, atalhos e dados no lugar |
+| Linux: AppImage e instalação gerenciada | — | substituição depois da verificação; anterior preservado |
+| Dedicado + Windows/Linux numa call | — | voz, câmera e tela funcionam entre os dois |
+| P2P entre máquinas, troca de host, TURN | — | a live **não** cai na troca de host |
+| Tráfego confirmando que live não assistida não recebe mídia | `chrome://webrtc-internals` | zero bytes de vídeo de tela para quem não assinou |
+| Mute individual que não persistia | relato do usuário | mutar alguém vale quando ela entra na call depois |
+
+### NÃO IMPLEMENTADO nesta entrega
+
+| Item | Onde está dito |
+|---|---|
+| Executor de deploy (systemd) | `packaging/servidor/tumacord-executor.service`, com aviso |
+| `tumacordctl server apply` / `server rollback` | `--help` recusa e aponta o manual |
+| `tumacordctl backup` / `restore` / `jobs status` | idem |
+| Ferramentas de publicação (`tools/publicador/`) | [Publicação privada](publicacao-privada.md) |
+| Painel do dono para atualizações | — |
+| Identidade P2P com claims verificáveis | — |
+| Cliente consumindo o serviço privado | o aplicativo ainda consulta as Releases |
+| Runbook de migração de VPS | — |
+
+> **A consequência prática:** os aplicativos desta revisão **ainda não**
+> consultam o serviço privado. A ponte manual continua sendo o caminho, e a
+> distribuição privada está pronta do lado do servidor — contratos, serviço,
+> autorização e testes — mas ainda não do lado do cliente.
+
+### Observações da execução
+
+- **Instabilidade sob carga.** `tests/serverAuthority.integration.test.ts`
+  reprovou uma vez (`apagar um canal de voz tira da call quem estava dentro`,
+  15,8 s) numa execução da suíte completa e passou isolado e nas execuções
+  seguintes. Os testes de integração sobem servidores reais, e a suíte ficou
+  mais pesada com os novos. É contenção, não regressão — mas está registrado
+  porque um teste instável esconde uma regressão no dia em que ela chegar.
+
+### Funções que não podiam regredir
+
+Verificadas pela suíte existente, que continua inteira: login e identidade,
+chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
+deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
+handoff P2P. **840 aprovados, nenhuma falha.**
+
+---
+
+
+## Evidência das versões anteriores
+
+> **Daqui para baixo é histórico.** Cada seção é a evidência da versão que a
+> produziu, preservada como foi escrita, com o ambiente e os marcadores
+> daquela época. **Nada abaixo vale como validação da 0.9.9-1** — o que vale
+> para esta entrega está na seção acima.
+>
+> Os marcadores antigos (`TESTADO AUTOMATICAMENTE`, `VALIDADO POR ANÁLISE`,
+> `IMPLEMENTADO — REQUER TESTE MANUAL`) correspondem aos atuais `TESTADO`,
+> `ANALISADO` e `NÃO EXECUTADO`.
+
+### Experimento do microfone — executado (0.8.1)
 
 Instrumento: `node scripts/diagnose-microphone.cjs`. Abre uma janela Electron
 invisível, captura o microfone e mede a energia que realmente entra. Nada é
@@ -66,7 +225,7 @@ aparecerem recapturas sem motivo.
 
 ---
 
-## Mídia — requer duas máquinas
+### Mídia — requer duas máquinas
 
 Rodar cada bloco pelo menos **três vezes**. "Funcionou uma vez" não conta.
 
@@ -106,7 +265,7 @@ Conferir em cada modo qual par venceu (o app registra em `[webrtc]`):
 
 ---
 
-## Matriz de mídia
+### Matriz de mídia
 
 A mesma engine serve os três modos — existe **uma única** criação de
 `RTCPeerConnection` no projeto, com a mesma configuração ICE. O que muda entre
@@ -132,7 +291,7 @@ faixas, o diagnóstico por camada e a leitura do par ICE são funções puras so
 um retrato do estado. O que nenhum teste local alcança é a camada `peer`, que
 exige duas máquinas em redes diferentes.
 
-## Matriz administrativa
+### Matriz administrativa
 
 | | Estado |
 | --- | --- |
@@ -155,7 +314,7 @@ exige duas máquinas em redes diferentes.
 
 ---
 
-## Autorização — já executado
+### Autorização — já executado
 
 | Item | Estado |
 | --- | --- |
@@ -167,7 +326,7 @@ exige duas máquinas em redes diferentes.
 
 ---
 
-## Atualização pelo aplicativo — 0.9.0
+### Atualização pelo aplicativo — 0.9.0
 
 A parte que decide — qual versão oferecer, se ela foi retirada, qual arquivo
 serve para cada jeito de instalação — roda sem rede e sem disco e está coberta
@@ -193,7 +352,7 @@ Windows**: nem o instalador NSIS abrindo, nem o portable sendo trocado.
 | Atualizar com uma call aberta sem interromper a call | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Consulta ao GitHub na abertura, sem atrasar a janela | IMPLEMENTADO — REQUER TESTE MANUAL |
 
-## Mensagens, som, servidor e o que saiu — 0.9.9
+### Mensagens, som, servidor e o que saiu — 0.9.9
 
 | Item | Estado |
 | --- | --- |
@@ -270,7 +429,7 @@ O que **não** foi medido é o timbre, que não tem número: ele foi construído
 | A mesa de desenho compartilhada continua inteira | TESTADO AUTOMATICAMENTE (18 casos contra servidor real) |
 | A janela sobreposta do Windows não é mais aberta por nada | VALIDADO POR ANÁLISE (o IPC e o módulo saíram) |
 
-## Entrada reformulada e contas guardadas — 0.9.8
+### Entrada reformulada e contas guardadas — 0.9.8
 
 | Item | Estado |
 | --- | --- |
@@ -296,7 +455,7 @@ duas contas guardadas. O caminho da foto pelo cache local só existe no
 aplicativo instalado — no navegador ele nem é tentado — e por isso está dito
 como pendente.
 
-## Live por escolha explícita — 0.9.7
+### Live por escolha explícita — 0.9.7
 
 | Item | Estado |
 | --- | --- |
@@ -316,7 +475,7 @@ foi exercitado aqui é a sinalização, contra um servidor de verdade. A metade 
 mídia — as faixas entrando e saindo do enlace — depende de duas máquinas e está
 dita como pendente.
 
-## Chaveiro de contas e convites — 0.9.6
+### Chaveiro de contas e convites — 0.9.6
 
 | Item | Estado |
 | --- | --- |
@@ -343,7 +502,7 @@ dita como pendente.
 | Download válido sobrevive a procurar de novo | VALIDADO POR ANÁLISE |
 | Marcador do resumo chega ao aplicativo | TESTADO AUTOMATICAMENTE (era removido antes de chegar) |
 
-## Isolamento por origem e notas resumidas — 0.9.5
+### Isolamento por origem e notas resumidas — 0.9.5
 
 | Item | Estado |
 | --- | --- |
@@ -361,7 +520,7 @@ dita como pendente.
 | Versão sem resumo mostra o texto inteiro | TESTADO AUTOMATICAMENTE |
 | Troca P2P → dedicado → outro dedicado → P2P no app real | IMPLEMENTADO — REQUER TESTE MANUAL |
 
-## Autoridade do servidor dedicado — 0.9.4
+### Autoridade do servidor dedicado — 0.9.4
 
 | Item | Estado |
 | --- | --- |
@@ -379,7 +538,7 @@ dita como pendente.
 | Aviso de remoção chegando na interface | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Cache local separado por origem (Prioridade 1-A) | FORA DESTA VERSÃO |
 
-## Traço e exclusão de mesas — 0.9.3
+### Traço e exclusão de mesas — 0.9.3
 
 | Item | Estado |
 | --- | --- |
@@ -396,7 +555,7 @@ dita como pendente.
 | Traço com caneta física e pressão | FORA DESTA VERSÃO |
 | Arrasto com dois clientes desenhando ao mesmo tempo | IMPLEMENTADO — REQUER TESTE MANUAL |
 
-## Bandeja, mesa e atualização — 0.9.2
+### Bandeja, mesa e atualização — 0.9.2
 
 | Item | Estado |
 | --- | --- |
@@ -416,7 +575,7 @@ dita como pendente.
 | Instalador do Windows apagado na abertura seguinte | IMPLEMENTADO — REQUER TESTE MANUAL |
 | Configurações de desenho refeitas | TESTADO NO APLICATIVO |
 
-## Mesa de desenho compartilhada — 0.9.1
+### Mesa de desenho compartilhada — 0.9.1
 
 | Item | Estado |
 | --- | --- |
@@ -447,7 +606,7 @@ dita como pendente.
 | Caneta com pressão / tela sensível ao toque | FORA DESTA VERSÃO |
 | Desenhar em uma mesa aberta durante uma call real | IMPLEMENTADO — REQUER TESTE MANUAL |
 
-## Desenho só na transmissão do Windows — 0.9.0
+### Desenho só na transmissão do Windows — 0.9.0
 
 | Item | Estado |
 | --- | --- |
