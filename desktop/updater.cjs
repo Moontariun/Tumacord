@@ -16,7 +16,8 @@
 //     arquivo em uso é sobrescrito, e a sessão aberta continua inteira.
 
 const { createHash } = require('node:crypto');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
+const { failureMessage, launchElevatedInstaller, verifyInstallerFile } = require('./windows-installer.cjs');
 const fs = require('node:fs');
 const https = require('node:https');
 const path = require('node:path');
@@ -246,6 +247,10 @@ class Updater {
         mustStop: decision.mustStop ?? null,
         progress: { received: 0, total: decision.asset?.size ?? 0 },
         file: baixadaSegueValendo ? this.snapshot.file : '',
+        // O resumo acompanha o arquivo. Preservá-lo é o que permite conferir
+        // de novo na hora de aplicar; descartá-lo junto com uma oferta que
+        // mudou é o que impede o resumo velho de "validar" o arquivo novo.
+        sha256: baixadaSegueValendo ? (this.snapshot.sha256 || '') : '',
         applied: null,
         lastCheck: preferences.lastCheck,
         error: '',
@@ -274,7 +279,12 @@ class Updater {
         throw new Error('O arquivo baixado não confere com o resumo publicado; ele foi descartado.');
       }
       this.log({ event: 'update-downloaded', version: this.snapshot.version, file: path.basename(destination) });
-      return this.update({ phase: 'ready', file: destination });
+      // O resumo do que foi baixado é guardado com o estado. Ele é conferido
+      // de novo imediatamente antes de executar: entre baixar e aplicar há uma
+      // janela em que o arquivo pode ser trocado, e essa janela é maior quando
+      // a pessoa adia a instalação. O resumo publicado pode faltar; este,
+      // calculado aqui, nunca falta.
+      return this.update({ phase: 'ready', file: destination, sha256: digest });
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
       if (!this.cancelled) this.log({ event: 'update-download-failed', message });
@@ -386,9 +396,12 @@ class Updater {
     try {
       const applied = await this.applyFile(this.snapshot.file, this.snapshot.version);
       this.log({ event: 'update-applied', version: this.snapshot.version, kind: this.kind, restart: applied.restart });
-      // Aplicado, nada mais na pasta de downloads serve para alguma coisa. O
-      // que estiver em uso resiste aqui e some na abertura seguinte.
-      this.sweepDownloads();
+      // Aplicado, o resto da pasta de downloads não serve mais para nada — com
+      // uma exceção: o instalador do Windows continua sendo lido pelo processo
+      // que acabou de ser elevado. Apagá-lo aqui é tirar o arquivo debaixo de
+      // quem está instalando. Ele é preservado e sai na abertura seguinte,
+      // quando a versão nova já estiver confirmada.
+      this.sweepDownloads(applied.keepFile || '');
       return this.update({ phase: 'applied', applied, error: '' });
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
@@ -501,14 +514,42 @@ class Updater {
   }
 
   // O instalador do Windows pede elevação e substitui a instalação inteira;
-  // ele não pode fazer isso com o aplicativo aberto. Quem fecha é o Tumacord,
-  // logo depois de entregar o instalador ao Windows.
-  applyWindowsInstaller(file) {
-    const child = spawn(file, [], { detached: true, stdio: 'ignore' });
-    child.unref();
+  // ele não pode fazer isso com o aplicativo aberto. Mas fechar antes de saber
+  // que ele começou deixa a pessoa sem instalador **e** sem Tumacord — e era
+  // isso que acontecia: o `spawn` era dado como sucesso sem ninguém conferir.
+  //
+  // Aqui a ordem é: conferir o arquivo de novo, pedir a elevação, **esperar a
+  // resposta**, e só então dizer que pode fechar. Nada disso pode derrubar o
+  // processo principal, que é o que o print da 0.9.8 mostrava acontecendo.
+  async applyWindowsInstaller(file) {
+    // A verificação do download não vale para este momento: entre baixar e
+    // aplicar o arquivo pode ter sido trocado, truncado ou removido. Um
+    // executável que vai receber administrador é o último lugar onde faz
+    // sentido confiar em verificação antiga.
+    const conferido = verifyInstallerFile(file, this.snapshot.sha256 || '');
+    if (!conferido.ok) throw new Error(failureMessage(conferido.cause));
+
+    const resultado = await launchElevatedInstaller(file, { env: this.env });
+    if (!resultado.started) {
+      this.log({ event: 'update-windows-launch-failed', cause: resultado.cause, kind: this.kind });
+      // O arquivo continua no disco de propósito: a pessoa pode executá-lo à
+      // mão, e é isso que a mensagem diz. Apagá-lo aqui tiraria a única saída
+      // que resta quando a elevação não passa.
+      const erro = new Error(`${failureMessage(resultado.cause)} O instalador está em ${file}.`);
+      erro.cause = resultado.cause;
+      erro.installerPath = file;
+      throw erro;
+    }
+
+    this.log({ event: 'update-windows-launched', pid: resultado.pid, kind: this.kind });
     return {
       restart: 'quit',
-      message: 'O instalador foi aberto. O Tumacord vai fechar para ele poder substituir a instalação; o Windows vai pedir sua confirmação.',
+      // O instalador é conservado até a próxima abertura confirmar a versão.
+      // Apagá-lo agora tiraria o arquivo debaixo de um instalador que ainda
+      // está lendo dele.
+      keepFile: file,
+      installerPid: resultado.pid,
+      message: 'O instalador começou. O Tumacord vai fechar para ele poder substituir a instalação.',
     };
   }
 
