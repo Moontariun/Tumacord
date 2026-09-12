@@ -305,7 +305,7 @@ svg { width: 20px; height: 20px; }
 .message-attachment button svg { width: 17px; height: 17px; }
 
 .call-view { position: relative; min-height: 0; display: grid; grid-template-rows: 1fr auto; background: radial-gradient(circle at 50% 15%, #222537, #111219 66%); overflow: hidden; }
-.stage-grid { min-height: 0; display: grid; gap: 10px; padding: 18px; overflow: hidden; }
+.stage-grid { position: relative; min-height: 0; display: grid; gap: 10px; padding: 18px; overflow: hidden; }
 .stage-grid.count-1 { grid-template-columns: 1fr; }
 .stage-grid.count-2 { grid-template-columns: repeat(2, 1fr); }
 .stage-grid.count-3, .stage-grid.count-4 { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); }
@@ -342,6 +342,54 @@ svg { width: 20px; height: 20px; }
 .video-actions button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(8,9,13,.78); color: white; backdrop-filter: blur(8px); }
 .video-actions button:hover { background: rgba(125,92,255,.94); transform: translateY(-1px); }
 .video-actions svg { width: 17px; height: 17px; }
+
+/* O volume de uma live, no próprio quadro.
+   Só o ícone fica visível: a barra é a área que a pessoa abriu a tela cheia
+   para ganhar, e uma barra permanente sobre a imagem come justamente essa
+   área. Ela aparece ao passar o mouse e ao receber foco pelo teclado. */
+.tile-volume { position: relative; display: flex; }
+.tile-volume > button.is-muted { background: rgba(255,77,79,.85); }
+.tile-volume-slider {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px; border-radius: 10px;
+  background: rgba(8,9,13,.92); backdrop-filter: blur(8px);
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .13s, transform .13s, visibility .13s;
+}
+.tile-volume:hover .tile-volume-slider,
+.tile-volume:focus-within .tile-volume-slider { opacity: 1; visibility: visible; transform: translateY(0); }
+.tile-volume-slider input { width: 104px; accent-color: var(--violet); }
+.tile-volume-slider small { min-width: 32px; color: #b8b9c5; font-size: 9px; font-weight: 700; text-align: right; }
+
+/* Tela cheia da grade inteira: com duas ou três lives abertas, a tela cheia
+   de um quadro só obriga a escolher qual delas olhar. */
+.stage-fullscreen {
+  position: absolute; left: 12px; top: 12px; z-index: 6;
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; border-radius: 10px;
+  background: rgba(8,9,13,.78); color: white; backdrop-filter: blur(8px);
+  font-size: 9px; font-weight: 800;
+  opacity: .6; transition: opacity .15s, background .15s;
+}
+.stage-grid:hover .stage-fullscreen { opacity: 1; }
+.stage-fullscreen:hover { background: rgba(125,92,255,.94); }
+.stage-fullscreen svg { width: 15px; height: 15px; }
+.stage-grid.is-stage-fullscreen { background: #05060a; border-radius: 0; padding: 12px; }
+
+/* "Assistir", junto da pessoa que está transmitindo.
+   A live se anuncia aqui e não no meio da tela: a área principal é de quem já
+   escolheu o que ver. */
+.voice-member-watch {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; margin: 2px 0 4px; padding: 6px 9px 6px 30px;
+  border-radius: 7px; background: rgba(125,92,255,.16); color: #c9c0ff;
+  font-size: 9px; font-weight: 800; text-align: left;
+}
+.voice-member-watch:hover { background: var(--violet); color: white; }
+.voice-member-watch svg { width: 13px; height: 13px; }
+.voice-member-watch.is-watching { background: rgba(255,77,79,.14); color: #ff9294; }
+.voice-member-watch.is-watching:hover { background: var(--tomato-deep); color: white; }
 .stream-recovery-card { min-width: 0; min-height: 150px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; padding: 20px; border: 1px solid rgba(255,77,79,.2); border-radius: 14px; background: linear-gradient(145deg, rgba(39,31,39,.96), rgba(20,21,29,.96)); text-align: center; }
 .stream-recovery-card strong { font-size: 13px; }
 .stream-recovery-card p { margin: 0; color: #9698a8; font-size: 10px; }

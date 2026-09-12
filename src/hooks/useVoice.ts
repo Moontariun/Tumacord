@@ -470,6 +470,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // O que já foi pedido a cada peer, na geração atual do enlace dele. Zerado
   // quando o enlace é reconstruído, e é isso que dispara o pedido de novo.
   const watchSent = useRef(new Map<string, string>());
+  const watchLiveRef = useRef<(peerId: string, streamId: string) => void>(() => undefined);
   const handoffStarted = useRef(false);
   const speakingRef = useRef(false);
   const speakingMonitor = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; timer: number } | null>(null);
@@ -647,7 +648,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
         const meta = streamMeta.current.get(streamMetadataKey(peerId, stream.id));
         // Sem dono identificado, o volume individual cai no padrão e o
         // controle da barra lateral parece não fazer efeito.
-        media.push({ peerId, user: peer.user ?? remoteMember, stream, kind: classifyRemoteStream(meta, stream, remoteMember, liveVideoStreamCount) });
+        // O membro atual vem antes do instantâneo guardado no enlace. O
+        // instantâneo é de quando o enlace nasceu e nunca é atualizado: com
+        // ele na frente, um perfil ou uma identidade que mudaram depois
+        // continuavam a valer, e o volume e o silêncio individuais passavam a
+        // ser procurados por uma chave que já não é a da pessoa.
+        media.push({ peerId, user: remoteMember ?? peer.user, stream, kind: classifyRemoteStream(meta, stream, remoteMember, liveVideoStreamCount) });
       }
     }
     setRemoteMedia(media);
@@ -1625,6 +1631,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
           });
         }
         setLiveOffers((atual) => (atual[from] === meta.streamId ? atual : { ...atual, [from]: meta.streamId }));
+        liveOffersRef.current = { ...liveOffersRef.current, [from]: meta.streamId };
+        // O "Assistir" clicado antes do anúncio vira inscrição agora, que é
+        // quando esta cópia finalmente sabe a qual transmissão ele se refere.
+        if (watchPending.current.delete(from)) watchLiveRef.current(from, meta.streamId);
       }
       refreshRemote();
     };
@@ -1741,6 +1751,8 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   // é ela. Sem isso não haveria a que consentir — o "sim" precisa se referir a
   // uma live específica, senão ele sobreviveria ao fim dela.
   const [liveOffers, setLiveOffers] = useState<Record<string, string>>({});
+  const liveOffersRef = useRef(liveOffers);
+  liveOffersRef.current = liveOffers;
 
   // As lives que esta pessoa escolheu assistir, por transmissão.
   //
@@ -1752,6 +1764,14 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const watchingRef = useRef(watching);
   watchingRef.current = watching;
 
+  // Um pedido de assistir feito antes de o anúncio chegar.
+  //
+  // Clicar em "Assistir" na lista lateral pode exigir entrar na call antes, e
+  // o anúncio daquela transmissão só chega depois do ingresso. O pedido fica
+  // guardado aqui e vira inscrição quando o anúncio chega — nunca antes: só
+  // se assina o que já foi anunciado.
+  const watchPending = useRef(new Set<string>());
+
   const watchLive = useCallback((peerId: string, streamId: string) => {
     if (!peerId || !streamId) return;
     watchIntent.current = { ...watchIntent.current, [peerId]: streamId };
@@ -1759,6 +1779,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
     watchSent.current.set(peerId, streamId);
   }, [socket]);
+  watchLiveRef.current = watchLive;
 
   const stopWatchingLive = useCallback((peerId: string) => {
     const streamId = watchIntent.current[peerId] ?? watchingRef.current[peerId];
@@ -1774,8 +1795,29 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // O pedido de parar é registrado como "já dito" para a reconciliação não
     // reabrir o que esta pessoa acabou de fechar.
     watchSent.current.delete(peerId);
+    watchPending.current.delete(peerId);
     if (streamId) socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: false });
   }, [socket]);
+
+  /**
+   * Pedir para assistir a live de alguém, mesmo que o anúncio ainda não tenha
+   * chegado.
+   *
+   * Se a transmissão já foi anunciada, a inscrição sai agora. Se não, o pedido
+   * fica guardado e vira inscrição no anúncio — o que acontece depois de o
+   * ingresso na call estar confirmado. Assinar antes disso seria assinar uma
+   * transmissão que esta cópia ainda não sabe qual é.
+   */
+  const requestWatchLive = useCallback((peerId: string, streamId?: string) => {
+    if (!peerId) return;
+    const oferta = streamId || liveOffersRef.current[peerId];
+    if (oferta) {
+      watchPending.current.delete(peerId);
+      watchLive(peerId, oferta);
+      return;
+    }
+    watchPending.current.add(peerId);
+  }, [watchLive]);
 
   /**
    * Reafirma as inscrições que o outro lado pode ter perdido.
@@ -2610,7 +2652,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     screenSource,
-    watching, watchLive, stopWatchingLive, liveOffers,
+    watching, watchLive, requestWatchLive, stopWatchingLive, liveOffers,
     quality, setQuality: changeQuality, join, leave, toggleMute, toggleDeafen, toggleCamera,
     requestScreenShare, desktopSources, showSourcePicker, setShowSourcePicker,
     showShareSetup, setShowShareSetup, shareBusy, prepareScreenShare, shareDesktopSource, screenAudioSupport,
