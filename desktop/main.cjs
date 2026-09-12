@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, Notification, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, MessageChannelMain, nativeImage, Notification, safeStorage, session, shell, Tray } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -74,7 +74,10 @@ const screenAudioRouter = createScreenAudioRouter({
 // Procura uma versão nova ao abrir e para por aí: baixar e aplicar são cliques
 // de quem está usando o aplicativo. Uma atualização que se aplica sozinha no
 // meio de uma call custaria a call.
-const updater = new Updater({ app, log: (details) => appendRuntimeEvent(runtimeLogFile, details) });
+// `safeStorage` é o chaveiro do sistema, e é onde a credencial de download
+// deste dispositivo fica. Sem ele — sessão Linux sem gerenciador de segredos —
+// a credencial vale só para a sessão, e o aplicativo diz isso.
+const updater = new Updater({ app, safeStorage, log: (details) => appendRuntimeEvent(runtimeLogFile, details) });
 updater.onChange((state) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tumacord:update-changed', state);
 });
@@ -555,6 +558,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:update-dismiss', (_event, version) => updater.dismiss(typeof version === 'string' ? version : ''));
   ipcMain.handle('tumacord:update-notes-seen', (_event, version) => updater.markNotesSeen(typeof version === 'string' ? version : ''));
   ipcMain.handle('tumacord:update-set-enabled', (_event, enabled) => updater.setEnabled(enabled !== false));
+  // Trocar o convite recebido do dono por uma credencial deste dispositivo.
+  // Quem chega aqui é a pessoa na frente do computador: nenhum caminho de rede
+  // inscreve dispositivo.
+  ipcMain.handle('tumacord:update-enroll', (_event, invite, label) => updater.enroll(
+    typeof invite === 'string' ? invite : '',
+    typeof label === 'string' ? label : '',
+  ));
   ipcMain.handle('tumacord:update-restart', () => restartForUpdate());
   ipcMain.handle('tumacord:update-open-page', () => {
     const page = updater.state().pageUrl;

@@ -39,13 +39,13 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 
 | | Base (`v0.9.9`, commit `271f460`) | Esta entrega |
 |---|---|---|
-| Testes | **663** aprovados | **855** aprovados |
+| Testes | **663** aprovados | **867** aprovados |
 | Typecheck | limpo | limpo |
 | `npm run build` | ok | ok (web, servidor e serviço de atualizações) |
 
 > A linha de base foi medida nesta máquina, na tag `v0.9.9` exata, antes de
 > qualquer alteração. Os 663 testes anteriores **não** cobriam os requisitos
-> desta revisão: os 192 casos novos existem porque cada um deles reprova no
+> desta revisão: os 204 casos novos existem porque cada um deles reprova no
 > código anterior.
 
 ### O que foi TESTADO
@@ -69,6 +69,13 @@ Os marcadores são fixos, e nenhum é usado sem o que ele afirma:
 | Serviço de atualizações, unidades: autorização, convites, Range, limites, estado | 31 casos | `tests/updateService.test.ts` |
 | Serviço de atualizações, **de pé, por HTTP** | 15 casos | `tests/updateService.integration.test.ts` |
 | **Cliente falando com o serviço privado, pela rede** | 15 casos | `tests/updateSource.integration.test.ts` |
+| **O `Updater` do aplicativo, ligado ao serviço privado** | 8 casos | `tests/updaterPrivate.integration.test.ts` |
+| ↳ procura, acha e baixa; inscrição por convite; sem credencial não procura | | idem |
+| ↳ a sequência do catálogo é guardada e sobrevive ao reinício | | idem |
+| ↳ versão retirada some da oferta e o motivo aparece | | idem |
+| ↳ credencial revogada some do disco e a tela pede convite novo | | idem |
+| ↳ sem chaveiro, a inscrição vale na sessão e isso é dito | | idem |
+| ↳ **nenhum arquivo do caminho de atualização aponta para o GitHub** | | idem |
 | ↳ catálogo, manifesto e pacote sem tocar no GitHub | | idem |
 | ↳ retomada real: cancela no meio, continua, e o SHA-256 remontado confere | | idem |
 | ↳ chave desconhecida, catálogo repetido, catálogo vencido no relógio do cliente | | idem |
@@ -141,19 +148,20 @@ executados, **o gate correspondente fica pendente**.
 | Ferramentas de publicação (`tools/publicador/`) | [Publicação privada](publicacao-privada.md) |
 | Painel do dono para atualizações | — |
 | Identidade P2P com claims verificáveis | — |
-| **Ligação** do `desktop/updater.cjs` ao serviço privado | os módulos existem e estão provados; o `updater.cjs` ainda usa o caminho do GitHub |
 | Runbook de migração de VPS | — |
 
-> **A consequência prática:** o aplicativo que você instala nesta revisão
-> **ainda busca atualização no GitHub**, porque `desktop/updater.cjs` continua
-> apontando para lá. O que já existe e está provado é tudo o que fica **em
-> volta** disso: os contratos assinados, o serviço na VPS, a autorização de
-> dispositivos, e os módulos do cliente que falam com ele — exercidos contra o
-> serviço de verdade, pela rede, em 15 casos.
+> **A consequência prática:** o caminho de atualização do aplicativo **não
+> passa mais pelo GitHub** — isso é verificado por teste, arquivo a arquivo, em
+> código que roda. O aplicativo consulta a origem configurada nele, verifica
+> assinatura e frescor, e baixa por identificador.
 >
-> O que falta é uma ligação: trocar, dentro do `updater.cjs`, a consulta às
-> Releases pela chamada a `update-source.cjs`. Até isso acontecer, a ponte
-> manual continua sendo o caminho para os aplicativos.
+> O que **ainda não existe** é o outro lado da operação: as ferramentas que
+> montam e assinam os documentos (`tools/publicador/`) e o executor que aplica
+> no servidor. Sem elas, uma release precisa ser montada à mão seguindo os
+> tipos de `shared/distribution.ts`, e o servidor é atualizado pelo
+> procedimento manual. A ponte manual continua sendo o caminho **para a
+> primeira** distribuição: um aplicativo 0.9.9 instalado hoje não tem como
+> receber a 0.9.9-1 pelo caminho novo, porque ele ainda é o aplicativo antigo.
 
 ### Observações da execução
 
@@ -169,7 +177,7 @@ executados, **o gate correspondente fica pendente**.
 Verificadas pela suíte existente, que continua inteira: login e identidade,
 chat e histórico, editar e excluir, anexos autorizados, sessões, voz, mute,
 deafen, câmera, tela e áudio de tela, convites, dono e papéis, persistência e
-handoff P2P. **855 aprovados, nenhuma falha.**
+handoff P2P. **867 aprovados, nenhuma falha.**
 
 ---
 

@@ -13,11 +13,10 @@ import test from 'node:test';
 // instalação que não abre mais.
 
 const require = createRequire(import.meta.url);
-const { Updater, isAllowedUrl, safeFileName, sanitizeState } = require('../desktop/updater.cjs') as {
+const { Updater, safeFileName, sanitizeState } = require('../desktop/updater.cjs') as {
   Updater: new (options: Record<string, unknown>) => any;
-  isAllowedUrl: (candidate: unknown) => boolean;
   safeFileName: (name: unknown) => string;
-  sanitizeState: (input: unknown) => { enabled: boolean; lastCheck: number; dismissed: string; notesSeen: string };
+  sanitizeState: (input: unknown) => { enabled: boolean; lastCheck: number; dismissed: string; notesSeen: string; catalogSequence: number };
 };
 
 // Trocar o atalho `current` é um `rename` de symlink, e o Windows recusa isso
@@ -40,17 +39,11 @@ function ambiente(t: { after: (fn: () => void) => void }, extra: Record<string, 
   return { raiz, app, updater };
 }
 
-// O endereço do arquivo vem de uma resposta da rede. Se ela mandasse baixar de
-// qualquer lugar, seria de qualquer lugar que viria o executável.
-test('só endereço https do GitHub é aceito para baixar', () => {
-  assert.equal(isAllowedUrl('https://api.github.com/repos/Moontariun/Tumacord/releases'), true);
-  assert.equal(isAllowedUrl('https://github.com/x/y/releases/download/v1/a.exe'), true);
-  assert.equal(isAllowedUrl('https://objects.githubusercontent.com/a/b'), true);
-  for (const ruim of [
-    'http://github.com/x/y', 'https://github.com.exemplo.com/x', 'https://exemplo.com/a.exe',
-    'file:///etc/passwd', 'https://githubusercontent.com.mau.site/a', '', null, 42,
-  ]) assert.equal(isAllowedUrl(ruim), false, `aceitou ${JSON.stringify(ruim)}`);
-});
+// A conferência de endereço saiu daqui na 0.9.9-1 junto com o GitHub: o
+// aplicativo não recebe mais URL nenhuma da rede. Ele fala com a origem que
+// está configurada nele, e pede pacote por identificador. Quem confere a
+// origem é `update-origin.cjs`, e os casos estão em
+// `tests/updateSource.integration.test.ts`.
 
 test('o nome do arquivo baixado não sai da pasta de downloads', () => {
   assert.equal(safeFileName('../../.bashrc'), '.bashrc');
@@ -62,9 +55,17 @@ test('o nome do arquivo baixado não sai da pasta de downloads', () => {
 });
 
 test('preferência corrompida no disco não impede o aplicativo de abrir', () => {
-  assert.deepEqual(sanitizeState(null), { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '' });
-  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [] }), { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '' });
-  assert.deepEqual(sanitizeState({ enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0' }), { enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0' });
+  const vazio = { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '', catalogSequence: 0 };
+  assert.deepEqual(sanitizeState(null), vazio);
+  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [], catalogSequence: -3 }), vazio);
+  assert.deepEqual(
+    sanitizeState({ enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 }),
+    { enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 },
+  );
+  // A sequência do catálogo é o anti-retrocesso, e um valor torto no disco não
+  // pode virar "aceito qualquer catálogo".
+  assert.equal(sanitizeState({ catalogSequence: 1.5 }).catalogSequence, 0);
+  assert.equal(sanitizeState({ catalogSequence: '9' }).catalogSequence, 0);
 });
 
 // "O que mudou" aparece uma vez por versão. A marca fica no disco da máquina,

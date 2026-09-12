@@ -54,6 +54,8 @@ export interface UpdateBridge {
   restart: () => void;
   dismiss: () => void;
   setEnabled: (enabled: boolean) => void;
+  /** Troca o convite do dono por uma credencial deste dispositivo. */
+  enroll: (invite: string, label?: string) => Promise<void>;
   openPage: () => void;
   markNotesSeen: (version: string) => void;
 }
@@ -100,6 +102,13 @@ export function useUpdates(): UpdateBridge {
     restart: () => void bridge?.restart().catch(() => undefined),
     dismiss: () => acao(bridge ? () => bridge.dismiss() : undefined),
     setEnabled: (enabled: boolean) => acao(bridge ? () => bridge.setEnabled(enabled) : undefined),
+    // Esta devolve a promessa: a tela de inscrição desabilita o botão enquanto
+    // o pedido corre, e precisa saber quando ele termina.
+    enroll: async (invite: string, label?: string) => {
+      if (!bridge) return;
+      const novo = await bridge.enroll(invite, label ?? '').catch(() => null);
+      if (novo) { avisado.current = true; setState(novo); }
+    },
     openPage: () => void bridge?.openPage().catch(() => undefined),
     markNotesSeen: (version: string) => acao(bridge ? () => bridge.markNotesSeen(version) : undefined),
   };
@@ -129,7 +138,54 @@ export function UpdateButton({ state, onOpen }: { state: TumacordUpdateState | n
 
 // As notas da versão em blocos legíveis.
 //
-// O que chega do GitHub é o Markdown do CHANGELOG. Mostrá-lo cru deixaria
+/**
+ * Trocar o convite do dono por uma credencial deste dispositivo.
+ *
+ * O convite vem por canal privado e vale uma vez. Ele não é um segredo global
+ * embutido no executável: aquele seria o mesmo para todo mundo, vazaria no
+ * primeiro `strings` e não poderia ser revogado sem trocar o executável de
+ * todos.
+ */
+function EnrollDevice({ message, onEnroll }: { message: string; onEnroll: (invite: string, label?: string) => Promise<unknown> }) {
+  const [convite, setConvite] = useState('');
+  const [enviando, setEnviando] = useState(false);
+
+  const enviar = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const limpo = convite.trim();
+    if (!limpo || enviando) return;
+    setEnviando(true);
+    try {
+      await onEnroll(limpo, '');
+      // O resultado — deu certo ou não — chega pelo estado do atualizador, que
+      // é a mesma fonte que o resto deste painel lê.
+      setConvite('');
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  return <form className="quality-note update-enroll" onSubmit={(event) => void enviar(event)}>
+    <strong>Este dispositivo ainda não pode baixar atualizações</strong>
+    <span>{message || 'Peça um convite ao dono do servidor e cole aqui. Ele vale uma vez.'}</span>
+    <label className="update-enroll-field">
+      <span>Convite</span>
+      <input
+        value={convite}
+        onChange={(event) => setConvite(event.target.value)}
+        placeholder="cole aqui o convite recebido"
+        autoComplete="off"
+        spellCheck={false}
+        disabled={enviando}
+      />
+    </label>
+    <button className="primary-button" type="submit" disabled={enviando || !convite.trim()}>
+      {enviando ? 'Autorizando…' : 'Autorizar este dispositivo'}
+    </button>
+  </form>;
+}
+
+// O que chega no manifesto assinado é o Markdown do CHANGELOG. Mostrá-lo cru deixaria
 // `**assim**` na tela; interpretá-lo como HTML seria confiar em texto que veio
 // da rede, e isso não. O meio-termo é ler os blocos e desenhá-los com os
 // elementos daqui — nada do que chega vira tag.
@@ -189,8 +245,20 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
       Esta versão foi retirada: {state.installedBroken}. Ela continua funcionando, mas não deveria ficar — atualize quando puder.
     </p>}
 
-    {state.phase === 'checking' && <p className="invite-status">Procurando uma versão nova no GitHub…</p>}
+    {state.phase === 'checking' && <p className="invite-status">Procurando uma versão nova…</p>}
     {state.phase === 'up-to-date' && <p className="invite-status">Você está na versão mais nova publicada.</p>}
+
+    {/* Sem origem configurada não há o que procurar — e tentar um endereço
+        adivinhado seria pior do que não tentar. */}
+    {state.phase === 'no-origin' && <div className="quality-note">
+      <strong>Este Tumacord não sabe onde procurar atualização</strong>
+      <span>{state.enrollmentMessage || 'Peça ao dono do servidor o endereço das atualizações e um convite para este dispositivo.'}</span>
+    </div>}
+
+    {state.phase === 'needs-enrollment' && <EnrollDevice
+      message={state.enrollmentMessage}
+      onEnroll={bridge.enroll}
+    />}
 
     {/* Pular versões é o normal: quem está muito atrás instala direto a mais
         nova. Quando não dá, a versão que exige passagem diz isso. */}
@@ -212,7 +280,7 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
     </>}
 
     {state.phase === 'no-asset' && <p className="invite-status">
-      A {state.version} não publicou arquivo para uma cópia {KIND_LABELS[state.kind]}, então não há o que aplicar por aqui. O caminho é o de sempre, logo abaixo.
+      A {state.version} não publicou pacote para uma cópia {KIND_LABELS[state.kind]}, então não há o que aplicar por aqui. O caminho é o de sempre, logo abaixo.
     </p>}
 
     {state.phase === 'downloading' && <div className="update-progress">
@@ -242,12 +310,11 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
           some enquanto algo está acontecendo, que é quando ele não teria o que
           fazer. */}
       {state.phase !== 'checking' && state.phase !== 'downloading' && state.phase !== 'applying' && state.phase !== 'applied' && <button className="ghost" onClick={bridge.check}><Icon name="refresh" /> Procurar de novo</button>}
-      {state.pageUrl && <button className="ghost" onClick={bridge.openPage}>Ver a versão no GitHub</button>}
     </div>
 
     <label className="sound-toggle update-toggle">
       <input type="checkbox" checked={state.enabled} onChange={(event) => bridge.setEnabled(event.target.checked)} />
-      <span><strong>Procurar uma versão nova ao abrir</strong><small>Uma consulta às Releases públicas do projeto no GitHub quando o aplicativo inicia. Nada seu é enviado, e desligar aqui deixa a procura só no botão acima.</small></span>
+      <span><strong>Procurar uma versão nova ao abrir</strong><small>Uma consulta ao servidor de atualizações do grupo quando o aplicativo inicia. Nada seu é enviado, e desligar aqui deixa a procura só no botão acima.</small></span>
     </label>
 
     <ManualPaths version={state.version} onNotice={onNotice} />
@@ -258,7 +325,7 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
 //
 // Ela aparece na primeira abertura depois de uma atualização — não importa se
 // a atualização veio pelo botão, pelo comando de instalação ou por alguém
-// trocando o arquivo à mão. O texto é o da página de Releases do GitHub, que é
+// trocando o arquivo à mão. O texto é o do manifesto assinado da versão, que é
 // onde o CHANGELOG desta versão foi publicado.
 export function WhatsNewModal({ release, onClose, onOpenPage }: { release: NonNullable<TumacordUpdateState['installedRelease']>; onClose: () => void; onOpenPage?: () => void }) {
   const publicada = describePublished(release.publishedAt);
@@ -270,7 +337,6 @@ export function WhatsNewModal({ release, onClose, onOpenPage }: { release: NonNu
     <ReleaseNotes markdown={release.notes} />
     <div className="update-actions">
       <button className="primary-button" onClick={onClose}>Entendi</button>
-      {release.pageUrl && onOpenPage && <button className="ghost" onClick={onOpenPage}><Icon name="popOut" /> Ver no GitHub</button>}
     </div>
   </div></div>;
 }

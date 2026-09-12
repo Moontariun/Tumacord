@@ -74,6 +74,32 @@ pare — algo no proxy está contornando a autorização.
 
 Nada foi promovido ainda. Veja [Publicação privada](publicacao-privada.md).
 
+### O aplicativo diz que este dispositivo não pode baixar atualizações
+
+Ele ainda não foi autorizado. Peça um convite ao dono:
+
+```bash
+node tools/tumacordctl/tumacordctl.mjs devices enroll --label "<a máquina>"
+```
+
+Cole o convite no campo que aparece no painel de atualizações. Ele vale uma vez.
+
+### O aplicativo diz que não sabe onde procurar atualização
+
+Não há origem configurada nesta cópia. Ela vem da build oficial, de um arquivo
+local, ou de `TUMACORD_UPDATE_ORIGIN` para homologação — e **nunca** de uma
+resposta da rede: se um servidor de chat pudesse anunciar "busque as
+atualizações aqui", entrar num servidor de alguém seria entregar a ele a
+capacidade de instalar código na sua máquina.
+
+### O aplicativo avisa que a credencial não foi gravada
+
+O sistema não ofereceu um lugar seguro para guardá-la — uma sessão Linux sem
+gerenciador de segredos é o caso comum. A inscrição **vale nesta sessão**; na
+próxima abertura será preciso um convite novo. Guardar o token em claro seria
+pior: o arquivo de configuração é lido por qualquer coisa que rode como aquele
+usuário.
+
 ### O aplicativo diz que a credencial venceu
 
 Ele tenta renovar sozinho. Se não conseguir, a credencial foi revogada ou o

@@ -391,6 +391,21 @@ svg { width: 20px; height: 20px; }
 .voice-member-watch.is-watching { background: rgba(255,77,79,.14); color: #ff9294; }
 .voice-member-watch.is-watching:hover { background: var(--tomato-deep); color: white; }
 
+/* Autorizar este dispositivo a baixar atualizações.
+   O convite vem por canal privado e vale uma vez — não é um segredo global
+   embutido no executável, que seria o mesmo para todo mundo e não poderia ser
+   revogado sem trocar o executável de todos. */
+.update-enroll { display: grid; gap: 10px; }
+.update-enroll-field { display: grid; gap: 5px; }
+.update-enroll-field span { color: #9698a8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.update-enroll-field input {
+  padding: 9px 11px; border-radius: 8px; border: 1px solid #33354a;
+  background: #1b1c26; color: white; font-size: 11px; font-family: ui-monospace, monospace;
+}
+.update-enroll-field input:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.update-enroll-field input:disabled { opacity: .6; }
+.update-enroll button[type="submit"]:disabled { opacity: .5; }
+
 /* Criar canal: um modal de verdade no lugar do `window.prompt`, que não tinha
    validação, progresso, erro do servidor nem foco que um leitor de tela siga. */
 .novo-canal { display: grid; gap: 12px; text-align: left; }

@@ -50,19 +50,31 @@ interface TumacordDirectReport {
 type TumacordInstallKind = 'linux-managed' | 'linux-appimage' | 'windows-installed' | 'windows-portable' | 'unknown';
 
 interface TumacordUpdateState {
-  phase: 'idle' | 'checking' | 'up-to-date' | 'available' | 'no-asset' | 'downloading' | 'ready' | 'applying' | 'applied' | 'error';
+  phase: 'idle' | 'checking' | 'up-to-date' | 'available' | 'no-asset' | 'downloading' | 'ready' | 'applying' | 'applied' | 'error'
+    /** Não há origem de atualizações configurada nesta cópia. */
+    | 'no-origin'
+    /** Há origem, e este dispositivo ainda não foi autorizado a baixar. */
+    | 'needs-enrollment';
   kind: TumacordInstallKind;
   installed: string;
   /** Motivo pelo qual a versão instalada não deveria estar em uso; vazio quando ela está de pé. */
   installedBroken: string;
-  /** As notas da versão instalada, como estão na página de Releases do GitHub. */
+  /** As notas da versão instalada, como estão no manifesto assinado dela. */
   installedRelease: { version: string; title: string; notes: string; pageUrl: string; publishedAt: string } | null;
   version: string;
   title: string;
   notes: string;
+  /** Vazio na distribuição privada: não há página pública de release. */
   pageUrl: string;
   publishedAt: string;
-  asset: { name: string; url: string; size: number; digest: string } | null;
+  /**
+   * O pacote desta versão para esta máquina.
+   *
+   * Sem URL de propósito: o download pede por identificador ao serviço
+   * configurado. Uma URL num documento assinado poderia mandar o aplicativo
+   * buscar binário noutro domínio.
+   */
+  asset: { name: string; size: number; releaseId: string; artifactId: string; sha256: string; installKind: string; arch: string; format: string } | null;
   progress: { received: number; total: number };
   error: string;
   applied: { restart: 'now' | 'quit' | 'manual'; message: string; folder?: string } | null;
@@ -77,6 +89,16 @@ interface TumacordUpdateState {
   dismissed: string;
   /** Versão cujo "o que mudou" já foi mostrado nesta instalação. */
   notesSeen: string;
+  /** De onde esta cópia aceita atualização. Vazio quando não há origem. */
+  origin: string;
+  /** Onde a origem foi encontrada: build, arquivo local ou ambiente. */
+  originSource: string;
+  /** O dispositivo autorizado a baixar, quando há um. */
+  deviceId: string;
+  /** Se falta trocar um convite por credencial antes de poder atualizar. */
+  needsEnrollment: boolean;
+  /** O que dizer sobre a autorização: o motivo, ou o aviso de que não foi gravada. */
+  enrollmentMessage: string;
 }
 
 interface DocumentPictureInPicture extends EventTarget {
@@ -126,6 +148,8 @@ interface Window {
       dismiss: (version?: string) => Promise<TumacordUpdateState>;
       markNotesSeen: (version?: string) => Promise<TumacordUpdateState>;
       setEnabled: (enabled: boolean) => Promise<TumacordUpdateState>;
+      /** Troca o convite recebido do dono por uma credencial deste dispositivo. */
+      enroll: (invite: string, label?: string) => Promise<TumacordUpdateState>;
       openPage: () => Promise<string>;
       onChanged: (listener: (state: TumacordUpdateState) => void) => () => void;
     };

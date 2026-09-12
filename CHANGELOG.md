@@ -10,6 +10,10 @@ Uma correção pequena deixou de exigir uma versão grande: `0.9.9-1` é a vers�
 - `alpha`, `beta`, `rc` e `+build` saíram da convenção de versão. Quem é ensaio passou a ser decidido pelo canal, que é um campo separado — misturar as duas coisas obrigava a ler o mesmo `-1` como "antes" num caso e "depois" no outro.
 - Uma versão malformada deixou de ser lida como "é a mesma versão". Ela era o suficiente para convencer um cliente de que ele já estava em dia.
 - O CI parou de marcar como ensaio toda etiqueta com hífen, e passou a recusar etiqueta fora da convenção antes de publicar.
+- **O aplicativo deixou de buscar atualização no GitHub.** Ele consulta a distribuição privada do grupo, na mesma VPS do servidor: catálogo assinado, manifesto assinado, e o pacote baixado por identificador — nunca por uma URL que veio pela rede. Um servidor de chat não muda essa origem nem a chave confiável.
+- Cada dispositivo é autorizado por um convite de uso único, que o dono cria e passa por canal privado. A credencial só baixa, é revogável na hora, e fica no chaveiro do sistema — sem chaveiro, ela vale para a sessão e o aplicativo diz isso.
+- A retirada de uma versão passou a morar só no catálogo assinado. Antes ela era um comentário de HTML nas notas da Release, e uma segunda autoridade sobre o que está retirado é sempre a que alguém consegue forjar.
+- O download retoma de onde parou, e o resumo conferido é o de tudo o que está no disco.
 
 ## 0.9.9 — a mensagem deixa de ser definitiva, e o aplicativo ganha ouvido
 

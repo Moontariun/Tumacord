@@ -1,246 +1,313 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { CONTRACT_VERSION, type Catalog, type CatalogEntry, type ReleaseManifest } from '../shared/distribution';
 
 // A decisão de qual versão oferecer é a parte que erra em silêncio quando erra:
-// oferecer uma versão quebrada, oferecer o arquivo do jeito errado de instalar,
+// oferecer uma versão retirada, oferecer o pacote do jeito errado de instalar,
 // ou oferecer uma versão mais velha do que a instalada. Nada disso apareceria
 // numa tela — apareceria na máquina de alguém. Por isso ela vive sem rede e sem
 // disco, e é testada inteira aqui.
+//
+// A fonte mudou na 0.9.9-1: o que entra é o catálogo assinado da distribuição
+// privada, e não mais uma lista de Releases do GitHub. As entradas e os
+// manifestos chegam aqui **já verificados**.
 
-const require = createRequire(import.meta.url);
-const { assetFor, brokenReason, chooseUpdate, compareVersions, installKind, parseVersion, releaseFor } = require('../desktop/update-check.cjs') as {
-  assetFor: (kind: string, assets: unknown, version?: string) => { name: string; url: string; size: number; digest: string } | null;
-  brokenReason: (version: string, body?: string) => string;
-  chooseUpdate: (input: Record<string, unknown>) => Record<string, any>;
+const require_ = createRequire(import.meta.url);
+const {
+  brokenReason,
+  chooseFromCatalog,
+  compareVersions,
+  installKind,
+  manifestsToFetch,
+  parseVersion,
+  releaseFor,
+} = require_('../desktop/update-check.cjs') as {
+  brokenReason: (version: string) => string;
+  chooseFromCatalog: (input: Record<string, unknown>) => Record<string, any>;
   compareVersions: (left: unknown, right: unknown) => number;
   installKind: (input: Record<string, unknown>) => string;
+  manifestsToFetch: (input: Record<string, unknown>) => { releaseId: string; version: string; manifestSha256: string }[];
   parseVersion: (text: unknown) => { text: string } | null;
-  releaseFor: (releases: unknown, version: string) => Record<string, string> | null;
+  releaseFor: (manifests: unknown, version: string) => Record<string, string> | null;
 };
 
-const release = (tag: string, extra: Record<string, unknown> = {}) => ({
-  tag_name: tag,
-  name: `Tumacord ${tag.replace(/^v/, '')} — alguma manchete`,
-  body: 'Uma coisa mudou.',
-  html_url: `https://github.com/Moontariun/Tumacord/releases/tag/${tag}`,
-  published_at: '2026-09-10T12:00:00Z',
-  assets: [
-    { name: `Tumacord-${tag.replace(/^v/, '')}-Setup.exe`, browser_download_url: 'https://github.com/x/y/releases/download/a/Setup.exe', size: 100, digest: 'sha256:' + 'a'.repeat(64), state: 'uploaded' },
-    { name: `Tumacord-${tag.replace(/^v/, '')}-portable.exe`, browser_download_url: 'https://github.com/x/y/releases/download/a/portable.exe', size: 90, state: 'uploaded' },
-    { name: `tumacord-${tag.replace(/^v/, '')}.tar.gz`, browser_download_url: 'https://github.com/x/y/releases/download/a/linux.tar.gz', size: 80, state: 'uploaded' },
-    { name: `Tumacord-${tag.replace(/^v/, '')}.AppImage`, browser_download_url: 'https://github.com/x/y/releases/download/a/linux.AppImage', size: 120, state: 'uploaded' },
-  ],
-  ...extra,
-});
+/** Um manifesto com um pacote por jeito de instalar. */
+function manifesto(version: string, extra: Partial<ReleaseManifest> = {}): ReleaseManifest {
+  const releaseId = `rel-${version.replace(/[^0-9a-z]/gi, '')}`;
+  const pacote = (installKind: string, format: string, fileName: string, sha: string) => ({
+    artifactId: `${installKind}-x64`, os: installKind.startsWith('windows') ? 'windows' as const : 'linux' as const,
+    arch: 'x64' as const, format, installKind: installKind as never, fileName,
+    size: 100_000, sha256: sha.repeat(64).slice(0, 64), signatureKeyId: 'k1',
+    storagePath: `releases/${version}/${fileName}`,
+  });
+  return {
+    contract: CONTRACT_VERSION, releaseId, version, channel: 'stable',
+    commit: '0'.repeat(40), createdAt: '2026-09-10T12:00:00.000Z',
+    title: `Tumacord ${version} — alguma manchete`, notes: 'Uma coisa mudou.',
+    artifacts: [
+      pacote('linux-managed', 'tar.gz', `tumacord-${version}.tar.gz`, 'a'),
+      pacote('linux-appimage', 'AppImage', `Tumacord-${version}.AppImage`, 'b'),
+      pacote('windows-installed', 'exe', `Tumacord-${version}-Setup.exe`, 'c'),
+      pacote('windows-portable', 'exe', `Tumacord-${version}-portable.exe`, 'd'),
+    ],
+    ...extra,
+  };
+}
 
+function entrada(version: string, extra: Partial<CatalogEntry> = {}): CatalogEntry {
+  return {
+    releaseId: `rel-${version.replace(/[^0-9a-z]/gi, '')}`, version, state: 'published',
+    publishedAt: '2026-09-10T12:00:00.000Z', manifestSha256: '', ...extra,
+  };
+}
+
+function catalogo(entries: CatalogEntry[]): Catalog {
+  return {
+    contract: CONTRACT_VERSION, sequence: 1,
+    createdAt: '2026-09-10T12:00:00.000Z', expiresAt: '2026-12-31T00:00:00.000Z',
+    channels: { stable: { entries }, test: { entries: [] } },
+  };
+}
+
+const escolher = (entries: CatalogEntry[], manifests: ReleaseManifest[], currentVersion: string, kind = 'windows-installed') =>
+  chooseFromCatalog({ catalog: catalogo(entries), manifests, currentVersion, kind, arch: 'x64' });
+
+// ── Ordem de versões ───────────────────────────────────────────────────────
+//
 // A numeração deste projeto já passou por 0.7.10 e 0.7.11. Comparar como texto
 // diria que a 0.8.9 é mais nova que a 0.8.10, e o aplicativo pararia de
 // oferecer atualização exatamente quando ela existisse.
+
 test('0.8.10 é mais nova que 0.8.9, e a revisão vem depois da versão', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1);
   assert.equal(compareVersions('v0.9.0', '0.8.10'), 1);
   assert.equal(compareVersions('0.9.0', '0.9.0'), 0);
   // A convenção da 0.9.9-1: o sufixo numérico é a revisão de manutenção e vem
   // *depois* da versão que ela corrige. `rc` saiu da convenção — quem é ensaio
-  // é decidido pelo canal, que é um campo separado da release.
+  // é decidido pelo canal, que é um campo separado do catálogo.
   assert.equal(compareVersions('0.9.0-1', '0.9.0'), 1);
   assert.equal(parseVersion('nada disso'), null);
   assert.equal(parseVersion('0.9.0-rc1'), null);
 });
 
-test('a 0.8.9 não é oferecida a ninguém, nem sendo a mais nova', () => {
-  const decisao = chooseUpdate({ releases: [release('v0.8.9')], currentVersion: '0.8.8', kind: 'windows-installed' });
-  assert.equal(decisao.status, 'up-to-date');
-  assert.deepEqual(decisao.skipped, [{ version: '0.8.9', reason: 'as resoluções e o FPS da transmissão saem errados' }]);
+// A regressão que dá nome à revisão: quem está na 0.9.9 precisa receber a
+// 0.9.9-1 como atualização, e não como um passo atrás.
+test('a revisão de manutenção é oferecida a quem está na versão que ela corrige', () => {
+  const decisao = escolher([entrada('0.9.9-1')], [manifesto('0.9.9-1')], '0.9.9');
+  assert.equal(decisao.status, 'available');
+  assert.equal(decisao.version, '0.9.9-1');
+  // E o contrário não vale: quem já está na revisão não recebe a 0.9.9 de volta.
+  assert.equal(escolher([entrada('0.9.9')], [manifesto('0.9.9')], '0.9.9-1').status, 'up-to-date');
 });
 
-// O marcador no corpo da Release é o que faz uma versão futura ser retirada
-// sem depender de uma lista embutida em cada cópia instalada.
-test('o marcador nas notas retira uma versão que esta cópia não conhecia', () => {
-  const quebrada = release('v0.9.5', { body: 'Notas.\n<!-- tumacord:versao-quebrada -->\n' });
-  const decisao = chooseUpdate({ releases: [quebrada, release('v0.9.1')], currentVersion: '0.9.0', kind: 'windows-installed' });
-  assert.equal(decisao.version, '0.9.1', 'a mais nova é pulada e a anterior boa é oferecida');
-  assert.equal(decisao.skipped[0].version, '0.9.5');
-  assert.match(brokenReason('9.9.9', '<!--tumacord:versao-quebrada-->'), /se declara quebrada/);
-  assert.equal(brokenReason('9.9.9', 'notas normais'), '');
+test('nunca se oferece uma versão mais antiga do que a instalada', () => {
+  const decisao = escolher([entrada('0.8.7'), entrada('0.8.8')], [manifesto('0.8.7'), manifesto('0.8.8')], '0.9.0');
+  assert.equal(decisao.status, 'up-to-date');
+  assert.equal(decisao.version, undefined);
+  // "Não é mais nova" é o caso comum e não vira linha na tela: a lista de
+  // puladas existe para explicar o que **deveria** aparecer e não aparece.
+  assert.deepEqual(decisao.skipped, []);
+});
+
+// ── Versões bloqueadas e retiradas ─────────────────────────────────────────
+
+test('a 0.8.9 não é oferecida a ninguém, nem sendo a mais nova', () => {
+  const decisao = escolher([entrada('0.8.9')], [manifesto('0.8.9')], '0.8.8');
+  assert.equal(decisao.status, 'up-to-date');
+  assert.deepEqual(decisao.skipped, [{ version: '0.8.9', reason: 'as resoluções e o FPS da transmissão saem errados' }]);
+  assert.match(brokenReason('0.8.9'), /resoluções/);
+  assert.equal(brokenReason('9.9.9'), '');
 });
 
 test('quem está na 0.8.9 é avisado de que a própria versão foi retirada', () => {
-  const decisao = chooseUpdate({ releases: [release('v0.9.0')], currentVersion: '0.8.9', kind: 'linux-managed' });
+  const decisao = escolher([entrada('0.9.0')], [manifesto('0.9.0')], '0.8.9');
   assert.match(decisao.installedBroken, /resoluções e o FPS/);
   assert.equal(decisao.status, 'available');
   assert.equal(decisao.version, '0.9.0');
 });
 
-test('nunca se oferece uma versão mais antiga do que a instalada', () => {
-  const decisao = chooseUpdate({ releases: [release('v0.8.7'), release('v0.8.8')], currentVersion: '0.9.0', kind: 'windows-installed' });
+// A retirada agora mora **só** no catálogo assinado. Até a 0.9.9 ela era
+// declarada por um comentário de HTML nas notas da Release — uma segunda
+// autoridade sobre o que está retirado, e a segunda é sempre a que alguém
+// consegue forjar.
+test('o catálogo retira uma versão que esta cópia não conhecia', () => {
+  const decisao = escolher(
+    [entrada('0.9.5', { state: 'withdrawn', withdrawn: { reason: 'o áudio sai errado', at: '' } }), entrada('0.9.1')],
+    [manifesto('0.9.5'), manifesto('0.9.1')],
+    '0.9.0',
+  );
+  assert.equal(decisao.version, '0.9.1', 'a mais nova é pulada e a anterior boa é oferecida');
+  assert.deepEqual(decisao.skipped, [{ version: '0.9.5', reason: 'o áudio sai errado' }]);
+});
+
+test('quem está numa versão retirada depois de instalada é avisado', () => {
+  const decisao = escolher(
+    [entrada('0.9.9-1', { state: 'withdrawn', withdrawn: { reason: 'trava ao entrar na call', at: '' } })],
+    [manifesto('0.9.9-1')],
+    '0.9.9-1',
+  );
+  assert.equal(decisao.installedBroken, 'trava ao entrar na call');
   assert.equal(decisao.status, 'up-to-date');
+});
+
+test('uma entrada que não está publicada não vira oferta', () => {
+  const decisao = escolher([entrada('0.9.5', { state: 'withdrawn' as never })], [manifesto('0.9.5')], '0.9.0');
+  assert.equal(decisao.status, 'up-to-date');
+});
+
+// ── Pacote por jeito de instalar ───────────────────────────────────────────
+
+test('cada tipo de instalação recebe o pacote que serve para ele', () => {
+  const manifests = [manifesto('0.9.1')];
+  const entries = [entrada('0.9.1')];
+  assert.match(escolher(entries, manifests, '0.9.0', 'windows-installed').asset.name, /-Setup\.exe$/);
+  assert.match(escolher(entries, manifests, '0.9.0', 'windows-portable').asset.name, /-portable\.exe$/);
+  assert.match(escolher(entries, manifests, '0.9.0', 'linux-managed').asset.name, /\.tar\.gz$/);
+  assert.match(escolher(entries, manifests, '0.9.0', 'linux-appimage').asset.name, /\.AppImage$/);
+});
+
+test('sem saber como esta cópia foi instalada, não há pacote a aplicar', () => {
+  const decisao = escolher([entrada('0.9.1')], [manifesto('0.9.1')], '0.9.0', 'unknown');
+  assert.equal(decisao.status, 'no-asset');
+  assert.equal(decisao.asset, null);
+});
+
+test('sem pacote para este jeito de instalar, a versão é anunciada sem botão de aplicar', () => {
+  const semWindows = manifesto('0.9.1');
+  semWindows.artifacts = semWindows.artifacts.filter((a) => !a.installKind.startsWith('windows'));
+  const decisao = escolher([entrada('0.9.1')], [semWindows], '0.9.0', 'windows-installed');
+  // A diferença é dita, em vez de virar "não há atualização" — que mandaria a
+  // pessoa procurar defeito no lugar errado.
+  assert.equal(decisao.status, 'no-asset');
+  assert.equal(decisao.version, '0.9.1', 'a versão aparece, com as notas');
+  assert.equal(decisao.asset, null, 'e sem pacote, não há botão de aplicar');
+  assert.match(decisao.skipped[0].reason, /windows-installed/);
+});
+
+test('o pacote carrega o que o download precisa, e nenhuma URL', () => {
+  const decisao = escolher([entrada('0.9.1')], [manifesto('0.9.1')], '0.9.0');
+  assert.equal(decisao.asset.releaseId, 'rel-091');
+  assert.equal(decisao.asset.artifactId, 'windows-installed-x64');
+  assert.match(decisao.asset.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(Number.isFinite(decisao.asset.size), true);
+  // Uma URL num documento assinado poderia mandar o aplicativo buscar binário
+  // noutro domínio. O download pede por identificador.
+  assert.equal('url' in decisao.asset, false);
+  assert.equal(decisao.pageUrl, '', 'numa distribuição privada não há página pública');
+});
+
+// ── Manifesto ausente ou incoerente ────────────────────────────────────────
+
+test('uma entrada sem manifesto verificado não vira oferta, e isso é dito', () => {
+  const decisao = escolher([entrada('0.9.1')], [], '0.9.0');
+  assert.equal(decisao.status, 'up-to-date');
+  assert.equal(decisao.skipped[0].version, '0.9.1');
+  assert.match(decisao.skipped[0].reason, /manifesto/);
+});
+
+test('um manifesto que declara outra versão é recusado', () => {
+  const trocado = manifesto('0.9.1');
+  trocado.version = '0.9.2';
+  const decisao = escolher([entrada('0.9.1')], [trocado], '0.9.0');
+  assert.equal(decisao.status, 'up-to-date');
+  assert.match(decisao.skipped[0].reason, /outra versão/);
+});
+
+// ── Parada obrigatória ─────────────────────────────────────────────────────
+
+test('uma parada obrigatória entra na frente da mais nova, e a mais nova é dita', () => {
+  const decisao = escolher(
+    [entrada('0.9.5', { requiredStop: { reason: 'ela converte os dados do formato anterior' } }), entrada('0.9.9')],
+    [manifesto('0.9.5'), manifesto('0.9.9')],
+    '0.9.0',
+  );
+  assert.equal(decisao.version, '0.9.5');
+  assert.equal(decisao.latest, '0.9.9', 'a mais nova continua sendo dita');
+  assert.deepEqual(decisao.mustStop, { version: '0.9.5', reason: 'ela converte os dados do formato anterior' });
+});
+
+test('uma parada obrigatória acima da mais nova não atrapalha', () => {
+  const decisao = escolher([entrada('0.9.9', { requiredStop: { reason: 'x' } })], [manifesto('0.9.9')], '0.9.0');
+  assert.equal(decisao.version, '0.9.9');
+  assert.equal(decisao.latest, '');
+  assert.equal(decisao.mustStop, null);
+});
+
+test('uma versão que exige atualizador mais novo é dita, e não some', () => {
+  const exigente = manifesto('1.0.0', { compatibility: { minUpdaterVersion: '0.9.9-1' } });
+  const decisao = escolher([entrada('1.0.0')], [exigente], '0.9.8');
+  assert.equal(decisao.status, 'up-to-date');
+  assert.match(decisao.skipped[0].reason, /0\.9\.9-1/);
+});
+
+// ── Notas da versão instalada ──────────────────────────────────────────────
+
+test('as notas da versão instalada saem do manifesto dela', () => {
+  const instalada = releaseFor([manifesto('0.9.1')], '0.9.1');
+  assert.equal(instalada?.version, '0.9.1');
+  assert.equal(instalada?.title, 'Tumacord 0.9.1 — alguma manchete');
+  assert.equal(instalada?.notes, 'Uma coisa mudou.');
+  assert.equal(instalada?.pageUrl, '', 'não há página pública para linkar');
+});
+
+test('sem manifesto da versão instalada, não há notas inventadas', () => {
+  assert.equal(releaseFor([manifesto('0.9.1')], '0.9.0'), null);
+  assert.equal(releaseFor([], '0.9.1'), null);
+  assert.equal(releaseFor([manifesto('0.9.1')], 'nada disso'), null);
+});
+
+// ── Estados de borda ───────────────────────────────────────────────────────
+
+test('sem catálogo, o estado é dito e nada é oferecido', () => {
+  const decisao = chooseFromCatalog({ catalog: null, manifests: [], currentVersion: '0.9.9', kind: 'linux-managed' });
+  assert.equal(decisao.status, 'no-catalog');
   assert.equal(decisao.version, undefined);
 });
 
-// Ensaio é um campo explícito da release, e não um sufixo na versão. A versão
-// de um ensaio é uma versão normal desta convenção — o que o marca como ensaio
-// é o canal em que ele foi publicado.
-test('pré-versão só entra quando alguém pede, e sua versão é normal', () => {
-  const releases = [release('v0.9.1', { prerelease: true })];
-  assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed' }).status, 'up-to-date');
-  assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed', allowPrerelease: true }).version, '0.9.1');
+test('uma versão instalada que não é versão é dita como tal', () => {
+  const decisao = chooseFromCatalog({ catalog: catalogo([]), manifests: [], currentVersion: 'sei-la', kind: 'linux-managed' });
+  assert.equal(decisao.status, 'unknown-version');
 });
 
-// A regressão que dá nome à revisão, no lado do aplicativo: quem está na 0.9.9
-// precisa receber a 0.9.9-1 como atualização, e não como um passo atrás.
-test('a revisão de manutenção é oferecida a quem está na versão que ela corrige', () => {
-  const decisao = chooseUpdate({ releases: [release('v0.9.9-1')], currentVersion: '0.9.9', kind: 'windows-installed' });
-  assert.equal(decisao.status, 'available');
-  assert.equal(decisao.version, '0.9.9-1');
-  // E o contrário não vale: quem já está na revisão não recebe a 0.9.9 de volta.
-  assert.equal(chooseUpdate({ releases: [release('v0.9.9')], currentVersion: '0.9.9-1', kind: 'windows-installed' }).status, 'up-to-date');
+test('um canal vazio não é erro: é estar em dia', () => {
+  assert.equal(escolher([], [], '0.9.9').status, 'up-to-date');
 });
 
-test('rascunho não existe para quem está esperando uma versão', () => {
-  const decisao = chooseUpdate({ releases: [release('v0.9.9', { draft: true })], currentVersion: '0.9.0', kind: 'windows-installed' });
-  assert.equal(decisao.status, 'up-to-date');
+// ── Quais manifestos buscar ────────────────────────────────────────────────
+//
+// O catálogo lista tudo; buscar o manifesto de cada entrada seria pedir dez
+// documentos para usar um.
+
+test('só a instalada e as acima dela têm manifesto buscado', () => {
+  const catalog = catalogo([entrada('0.8.9'), entrada('0.9.9'), entrada('0.9.9-1'), entrada('1.0.0')]);
+  const querer = manifestsToFetch({ catalog, currentVersion: '0.9.9' });
+  assert.deepEqual(querer.map((item) => item.version), ['1.0.0', '0.9.9-1', '0.9.9']);
 });
 
-// Cada jeito de instalar tem o próprio arquivo. Escolher errado aqui seria
-// entregar um instalador do Windows para uma cópia do Linux.
-test('cada tipo de instalação recebe o arquivo que serve para ele', () => {
-  const assets = release('v0.9.1').assets;
-  assert.match(assetFor('windows-installed', assets, '0.9.1')!.name, /-Setup\.exe$/);
-  assert.match(assetFor('windows-portable', assets, '0.9.1')!.name, /-portable\.exe$/);
-  assert.match(assetFor('linux-managed', assets, '0.9.1')!.name, /\.tar\.gz$/);
-  assert.match(assetFor('linux-appimage', assets, '0.9.1')!.name, /\.AppImage$/);
-  assert.equal(assetFor('unknown', assets, '0.9.1'), null, 'sem saber como esta cópia foi instalada, não há arquivo a aplicar');
+test('a lista de manifestos tem teto', () => {
+  const muitas = Array.from({ length: 30 }, (_, index) => entrada(`0.9.${index + 1}`));
+  assert.equal(manifestsToFetch({ catalog: catalogo(muitas), currentVersion: '0.9.0' }).length, 6);
+  assert.equal(manifestsToFetch({ catalog: catalogo(muitas), currentVersion: '0.9.0', limit: 2 }).length, 2);
 });
 
-// Um arquivo ainda subindo pelo CI aparece na API antes de existir por inteiro.
-test('arquivo que ainda está sendo enviado não é oferecido', () => {
-  const assets = [{ name: 'Tumacord-0.9.1-Setup.exe', browser_download_url: 'https://github.com/x', size: 10, state: 'uploading' }];
-  assert.equal(assetFor('windows-installed', assets, '0.9.1'), null);
+test('entrada retirada não tem manifesto buscado', () => {
+  const catalog = catalogo([entrada('0.9.9', { state: 'withdrawn' })]);
+  assert.deepEqual(manifestsToFetch({ catalog, currentVersion: '0.9.0' }), []);
 });
 
-test('sem arquivo para este jeito de instalar, a versão é anunciada sem botão de aplicar', () => {
-  const semArquivos = release('v0.9.1', { assets: [] });
-  const decisao = chooseUpdate({ releases: [semArquivos], currentVersion: '0.9.0', kind: 'linux-appimage' });
-  assert.equal(decisao.status, 'no-asset');
-  assert.equal(decisao.asset, null);
-  assert.match(decisao.pageUrl, /releases\/tag\/v0\.9\.1$/, 'a página da versão continua sendo oferecida');
-});
+// ── Como esta cópia foi instalada ──────────────────────────────────────────
 
-test('o jeito da instalação sai de onde a cópia mora, não de um palpite', () => {
+test('o jeito de instalar é reconhecido pelo lugar onde a cópia mora', () => {
   assert.equal(installKind({ platform: 'win32', env: {} }), 'windows-installed');
-  assert.equal(installKind({ platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'C:\\Tumacord.exe' } }), 'windows-portable');
-  assert.equal(installKind({ platform: 'linux', env: { APPIMAGE: '/home/eu/Tumacord.AppImage' } }), 'linux-appimage');
+  assert.equal(installKind({ platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'C:\\x.exe' } }), 'windows-portable');
+  assert.equal(installKind({ platform: 'linux', env: { APPIMAGE: '/home/x/T.AppImage' } }), 'linux-appimage');
   assert.equal(installKind({
-    platform: 'linux',
-    env: {},
-    home: '/home/eu',
-    resourcesPath: '/home/eu/.local/share/tumacord/versions/0.9.0-abc/resources',
+    platform: 'linux', env: {}, home: '/home/renan',
+    resourcesPath: '/home/renan/.local/share/tumacord/versions/0.9.9-1/resources',
   }), 'linux-managed');
-  assert.equal(installKind({ platform: 'linux', env: {}, home: '/home/eu', resourcesPath: '/opt/tumacord/resources' }), 'unknown');
+  // Uma cópia que não caiu em nenhum dos casos vira `unknown`, e `unknown` não
+  // escreve nada em lugar nenhum.
+  assert.equal(installKind({ platform: 'linux', env: {}, home: '/home/renan', resourcesPath: '/opt/outro/resources' }), 'unknown');
   assert.equal(installKind({ platform: 'darwin', env: {} }), 'unknown');
-});
-
-// O "o que mudou" mostrado depois de atualizar é o texto da própria página de
-// Releases. Ele é da versão instalada, não da que está sendo oferecida.
-test('as notas da versão instalada saem da Release dela', () => {
-  const releases = [release('v0.9.1'), release('v0.9.0', { body: 'O que mudou na 0.9.0.' })];
-  const notas = releaseFor(releases, '0.9.0');
-  assert.equal(notas?.version, '0.9.0');
-  assert.equal(notas?.notes, 'O que mudou na 0.9.0.');
-  assert.equal(releaseFor(releases, '0.7.0'), null, 'sem Release daquela versão, não há o que mostrar');
-  assert.equal(chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed' }).installedRelease.version, '0.9.0');
-});
-
-// O marcador de versão quebrada é um comentário de HTML: ele não aparece para
-// quem lê a página, e não pode aparecer para quem lê a tela.
-test('o comentário de marcação não vaza para o texto mostrado', () => {
-  const notas = releaseFor([release('v0.9.0', { body: 'Linha um.\n<!-- tumacord:versao-quebrada -->\nLinha dois.' })], '0.9.0');
-  assert.ok(!notas?.notes.includes('tumacord:versao-quebrada'));
-  assert.match(notas!.notes, /Linha um[\s\S]*Linha dois/);
-});
-
-test('uma resposta estranha da API não vira decisão', () => {
-  for (const releases of [null, 'texto', 42, [null, {}, { tag_name: 'sem versão' }]]) {
-    const decisao = chooseUpdate({ releases, currentVersion: '0.9.0', kind: 'windows-installed' });
-    assert.equal(decisao.status, 'up-to-date');
-  }
-  assert.equal(chooseUpdate({ releases: [release('v0.9.1')], currentVersion: 'sei lá', kind: 'windows-installed' }).status, 'unknown-version');
-});
-
-// Pular versões é o normal e é o que se quer: quem está na 0.9.1 e encontra a
-// 0.9.9 instala a 0.9.9 direto, sem sete instalações no caminho.
-test('quem está muito atrás recebe direto a versão mais nova', () => {
-  const decisao = chooseUpdate({
-    releases: [release('v0.9.2'), release('v0.9.5'), release('v0.9.9')],
-    currentVersion: '0.9.1',
-    kind: 'linux-managed',
-  });
-  assert.equal(decisao.version, '0.9.9');
-  assert.equal(decisao.mustStop, null);
-  assert.equal(decisao.latest, '');
-});
-
-// Às vezes não dá pular: uma versão que converte dados só a partir do formato
-// imediatamente anterior precisa ser instalada antes das seguintes.
-test('uma parada obrigatória no caminho é oferecida antes da mais nova', () => {
-  const parada = release('v0.9.5', { body: 'Muda o formato.\n<!-- tumacord:parada-obrigatoria -->' });
-  const decisao = chooseUpdate({
-    releases: [release('v0.9.2'), parada, release('v0.9.9')],
-    currentVersion: '0.9.1',
-    kind: 'linux-managed',
-  });
-  assert.equal(decisao.version, '0.9.5', 'passa pela parada primeiro');
-  assert.equal(decisao.latest, '0.9.9', 'e a mais nova continua sendo dita');
-  assert.match(decisao.mustStop?.reason ?? '', /antes das seguintes/);
-});
-
-test('a parada já passada não segura mais ninguém', () => {
-  const parada = release('v0.9.5', { body: '<!-- tumacord:parada-obrigatoria -->' });
-  const decisao = chooseUpdate({
-    releases: [parada, release('v0.9.9')],
-    currentVersion: '0.9.5',
-    kind: 'linux-managed',
-  });
-  assert.equal(decisao.version, '0.9.9');
-  assert.equal(decisao.mustStop, null);
-});
-
-test('entre duas paradas, a mais próxima vem primeiro', () => {
-  const decisao = chooseUpdate({
-    releases: [
-      release('v0.9.3', { body: '<!-- tumacord:parada-obrigatoria -->' }),
-      release('v0.9.7', { body: '<!-- tumacord:parada-obrigatoria -->' }),
-      release('v0.9.9'),
-    ],
-    currentVersion: '0.9.1',
-    kind: 'linux-managed',
-  });
-  assert.equal(decisao.version, '0.9.3');
-  assert.equal(decisao.latest, '0.9.9');
-});
-
-// Uma parada quebrada não pode prender ninguém num degrau que não deve ser
-// instalado: ela é pulada como qualquer versão quebrada.
-test('parada obrigatória que também está quebrada não prende ninguém', () => {
-  const decisao = chooseUpdate({
-    releases: [
-      release('v0.9.5', { body: '<!-- tumacord:parada-obrigatoria -->\n<!-- tumacord:versao-quebrada -->' }),
-      release('v0.9.9'),
-    ],
-    currentVersion: '0.9.1',
-    kind: 'linux-managed',
-  });
-  assert.equal(decisao.version, '0.9.9');
-  assert.equal(decisao.skipped[0]?.version, '0.9.5');
-});
-
-// O marcador do resumo precisa sobreviver até a interface: é por ele que o
-// aplicativo sabe qual pedaço mostrar. Os outros comentários somem.
-test('o resumo chega ao aplicativo, e os outros comentários não', () => {
-  const corpo = ['<!-- tumacord:resumo -->', 'Uma linha curta.', '<!-- /tumacord:resumo -->', '', '<!-- recado interno -->', 'Detalhe técnico.'].join('\n');
-  const decisao = chooseUpdate({ releases: [release('v0.9.9', { body: corpo })], currentVersion: '0.9.1', kind: 'linux-managed' });
-  assert.match(decisao.notes ?? '', /tumacord:resumo/);
-  assert.equal(/recado interno/.test(decisao.notes ?? ''), false);
 });

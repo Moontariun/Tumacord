@@ -4,99 +4,42 @@
 // clique, aplicar é outro. Uma atualização automática no meio de uma call
 // custaria a call, e é justamente durante uma call que o Tumacord é usado.
 //
-// A decisão de qual versão oferecer mora em `update-check.cjs`, sem rede e sem
-// disco. Aqui fica o que precisa dos dois — e o cuidado que isso exige:
+// **A origem mudou na 0.9.9-1: este arquivo não fala mais com o GitHub.** Quem
+// serve atualização é a distribuição privada do grupo, na mesma VPS do
+// servidor dedicado. O repositório continua privado e continua sendo onde o
+// código mora; o que deixou de existir é o caminho que levava o aplicativo de
+// qualquer pessoa até a API pública do GitHub.
 //
-//   - só https, e só para o GitHub. O endereço do arquivo vem de uma resposta
-//     da rede; se ela mandasse baixar de outro lugar, seria de outro lugar que
-//     viria o executável. Cada redirecionamento é conferido de novo;
-//   - tamanho e resumo conferidos antes de qualquer coisa ser executada;
-//   - no Linux gerenciado, a build nova vai para uma pasta imutável e só o
-//     atalho `current` é trocado — o mesmo que o instalador faz. Nenhum
-//     arquivo em uso é sobrescrito, e a sessão aberta continua inteira.
+// A divisão de trabalho:
+//
+//   · `update-origin.cjs` — de onde este aplicativo aceita atualização, e em
+//     quem ele confia. Configuração **do aplicativo**, nunca da rede;
+//   · `update-credentials.cjs` — a credencial deste dispositivo, no mecanismo
+//     seguro do sistema;
+//   · `update-source.cjs` — a rede: buscar, verificar assinatura e baixar;
+//   · `update-check.cjs` — a decisão, sem rede e sem disco;
+//   · este arquivo — o estado, o progresso e a aplicação.
+//
+// O cuidado que sobrou aqui é o de sempre: tamanho e resumo conferidos antes
+// de qualquer coisa ser executada, e no Linux gerenciado a build nova vai para
+// uma pasta imutável enquanto só o atalho `current` é trocado — nenhum arquivo
+// em uso é sobrescrito, e a sessão aberta continua inteira.
 
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { failureMessage, launchElevatedInstaller, verifyInstallerFile } = require('./windows-installer.cjs');
 const fs = require('node:fs');
-const https = require('node:https');
 const path = require('node:path');
-const { chooseUpdate, installKind } = require('./update-check.cjs');
+const { failureMessage, launchElevatedInstaller, verifyInstallerFile } = require('./windows-installer.cjs');
+const { chooseFromCatalog, installKind, manifestsToFetch } = require('./update-check.cjs');
+const { MESSAGES: CREDENTIAL_MESSAGES, clearDeviceCredential, readDeviceCredential, shouldRenew, writeDeviceCredential } = require('./update-credentials.cjs');
+const { updateOrigin } = require('./update-origin.cjs');
+const { downloadArtifact, enrollDevice, fetchCatalog, fetchManifest, renewDevice } = require('./update-source.cjs');
 
-const DEFAULT_REPOSITORY = 'Moontariun/Tumacord';
 // Um arquivo maior do que isso não é uma versão do Tumacord: o instalador do
-// Windows tem ~110 MB e o AppImage ~120 MB. O teto existe para que um servidor
+// Windows tem ~110 MB e o AppImage ~120 MB. O teto existe para que um serviço
 // que responda para sempre não encha o disco de quem está esperando.
 const MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024;
-const REQUEST_TIMEOUT = 20_000;
-const MAX_REDIRECTS = 5;
 
-// A lista de Releases vem de `api.github.com`; o arquivo em si é servido por um
-// redirecionamento para o armazenamento do GitHub. Nada além disso é aceito.
-function isAllowedUrl(candidate) {
-  let url;
-  try {
-    url = new URL(String(candidate));
-  } catch {
-    return false;
-  }
-  if (url.protocol !== 'https:') return false;
-  return url.hostname === 'api.github.com'
-    || url.hostname === 'github.com'
-    || url.hostname.endsWith('.githubusercontent.com');
-}
-
-function request(url, { headers = {}, redirectsLeft = MAX_REDIRECTS } = {}) {
-  return new Promise((resolve, reject) => {
-    if (!isAllowedUrl(url)) {
-      reject(new Error('O endereço da atualização não é do GitHub; nada foi baixado.'));
-      return;
-    }
-    const call = https.get(url, { headers }, (response) => {
-      const status = response.statusCode ?? 0;
-      if (status >= 300 && status < 400 && response.headers.location) {
-        response.resume();
-        if (redirectsLeft <= 0) {
-          reject(new Error('A atualização redirecionou vezes demais.'));
-          return;
-        }
-        const next = new URL(response.headers.location, url).toString();
-        resolve(request(next, { headers, redirectsLeft: redirectsLeft - 1 }));
-        return;
-      }
-      if (status !== 200) {
-        response.resume();
-        reject(new Error(status === 403
-          ? 'O GitHub recusou a consulta por excesso de pedidos; tente de novo mais tarde.'
-          : `O GitHub respondeu ${status || 'sem status'} à consulta de versões.`));
-        return;
-      }
-      resolve(response);
-    });
-    call.setTimeout(REQUEST_TIMEOUT, () => call.destroy(new Error('A consulta de versões demorou demais.')));
-    call.on('error', reject);
-  });
-}
-
-async function readJson(url, headers) {
-  const response = await request(url, { headers });
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response) {
-    size += chunk.length;
-    // Uma resposta de JSON do GitHub não passa de alguns megabytes. Acima
-    // disso não é a lista de Releases.
-    if (size > 8 * 1024 * 1024) {
-      response.destroy();
-      throw new Error('A lista de versões veio grande demais.');
-    }
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
-
-// O nome vem da resposta da rede e vira nome de arquivo em disco: separador de
-// caminho e nome relativo saem daqui.
 function safeFileName(name) {
   const base = path.basename(String(name ?? '')).replace(/[^A-Za-z0-9._-]/g, '_');
   return base && base !== '.' && base !== '..' ? base : 'tumacord-atualizacao';
@@ -112,6 +55,12 @@ function sanitizeState(input) {
     // navegador, porque a pergunta é sobre esta instalação da máquina: quem
     // apagar os dados do site não vai rever o changelog da versão de antes.
     notesSeen: typeof source.notesSeen === 'string' ? source.notesSeen : '',
+    // A maior sequência de catálogo que este aplicativo já aceitou.
+    //
+    // É o anti-retrocesso: um serviço que voltasse no tempo — por erro ou por
+    // alguém no meio do caminho — reoferecia uma versão que o grupo já deixou
+    // para trás, ou segurava a retirada de uma defeituosa. Ela só cresce.
+    catalogSequence: Number.isSafeInteger(source.catalogSequence) && source.catalogSequence >= 0 ? source.catalogSequence : 0,
   };
 }
 
@@ -119,15 +68,19 @@ class Updater {
   // `kind` existe para o teste poder exercitar cada caminho de aplicação sem
   // ter de forjar uma instalação de verdade. Em uso normal ele não é passado e
   // quem responde é a detecção.
-  constructor({ app, env = process.env, platform = process.platform, stateFile, repository, kind, log = () => {} } = {}) {
+  constructor({ app, env = process.env, platform = process.platform, stateFile, kind, safeStorage, userDataPath, log = () => {} } = {}) {
     this.app = app;
     this.env = env;
     this.platform = platform;
     this.log = log;
-    this.repository = repository || env.TUMACORD_UPDATE_REPO || DEFAULT_REPOSITORY;
     this.version = app?.getVersion?.() ?? '0.0.0';
-    this.stateFile = stateFile || (app ? path.join(app.getPath('userData'), 'update-state.json') : '');
-    this.downloadDirectory = app ? path.join(app.getPath('userData'), 'updates') : '';
+    this.userDataPath = userDataPath || (app ? app.getPath('userData') : '');
+    // O chaveiro do sistema, para a credencial do dispositivo. Injetável para
+    // o teste poder exercitar o caminho sem chaveiro, que é o caso comum numa
+    // sessão Linux sem gerenciador de segredos.
+    this.safeStorage = safeStorage ?? null;
+    this.stateFile = stateFile || (this.userDataPath ? path.join(this.userDataPath, 'update-state.json') : '');
+    this.downloadDirectory = this.userDataPath ? path.join(this.userDataPath, 'updates') : '';
     this.kind = kind || installKind({
       platform: this.platform,
       env: this.env,
@@ -136,7 +89,9 @@ class Updater {
     });
     this.preferences = this.readPreferences();
     this.listeners = new Set();
-    this.pending = null;
+    // Preenchida só quando o chaveiro do sistema não aceitou guardar a
+    // credencial. Ela morre com o processo, de propósito.
+    this.sessionCredential = null;
     this.cancelled = false;
     this.snapshot = {
       phase: 'idle',
@@ -161,7 +116,35 @@ class Updater {
       lastCheck: this.preferences.lastCheck,
       dismissed: this.preferences.dismissed,
       notesSeen: this.preferences.notesSeen,
+      // De onde este aplicativo aceita atualização, e se ele já foi autorizado
+      // a baixar. Os dois aparecem na tela: sem origem não há o que procurar,
+      // e sem credencial a pessoa precisa de um convite do dono.
+      origin: '',
+      originSource: 'none',
+      deviceId: '',
+      needsEnrollment: false,
+      enrollmentMessage: '',
     };
+  }
+
+  /**
+   * De onde buscar, em quem confiar, e com qual credencial.
+   *
+   * Lido a cada verificação, e não guardado no construtor: a pessoa pode
+   * inscrever o dispositivo com o aplicativo aberto, e a próxima procura
+   * precisa enxergar isso.
+   */
+  source() {
+    const origin = updateOrigin({ env: this.env, userDataPath: this.userDataPath });
+    const stored = this.userDataPath
+      ? readDeviceCredential({ userDataPath: this.userDataPath, safeStorage: this.safeStorage })
+      : { token: '', deviceId: '', reason: 'missing' };
+    // A credencial desta sessão entra quando o disco não pôde guardá-la —
+    // sessão sem chaveiro, que é o caso comum no Linux. Ela faz a inscrição
+    // valer **agora**, que é o que a mensagem promete; na próxima abertura
+    // será preciso um convite novo, e isso também é dito.
+    const credential = stored.token ? stored : (this.sessionCredential ?? stored);
+    return { ...origin, credential };
   }
 
   readPreferences() {
@@ -211,38 +194,94 @@ class Updater {
   // que mereça uma tela.
   async check({ manual = false } = {}) {
     if (this.snapshot.phase === 'checking' || this.snapshot.phase === 'downloading' || this.snapshot.phase === 'applying') return this.state();
-    this.update({ phase: 'checking', error: '' });
-    try {
-      const releases = await readJson(`https://api.github.com/repos/${this.repository}/releases?per_page=20`, {
-        'User-Agent': `Tumacord/${this.version}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
+
+    const { origin, source: originSource, trustedKeys, reason: originReason, credential } = this.source();
+
+    // Sem origem configurada não há o que procurar, e tentar um endereço
+    // adivinhado seria pior do que não tentar. Isso é dito, não escondido.
+    if (!origin) {
+      return this.update({ phase: 'no-origin', origin: '', originSource, error: manual ? originReason : '', needsEnrollment: false, enrollmentMessage: originReason });
+    }
+    // Sem chave confiável, nada do que chegar pode ser verificado — e aceitar
+    // sem verificar seria trocar a verificação por um endereço.
+    if (!trustedKeys.length) {
+      const semChave = 'Este aplicativo não tem nenhuma chave pública configurada para verificar as atualizações. Peça ao dono do servidor a configuração de origem.';
+      return this.update({ phase: 'no-origin', origin, originSource, error: manual ? semChave : '', needsEnrollment: false, enrollmentMessage: semChave });
+    }
+    if (!credential.token) {
+      const recado = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
+      this.log({ event: 'update-check-blocked', reason: credential.reason });
+      return this.update({
+        phase: 'needs-enrollment', origin, originSource, deviceId: credential.deviceId ?? '',
+        needsEnrollment: true, enrollmentMessage: recado, error: manual ? recado : '',
       });
-      const decision = chooseUpdate({ releases, currentVersion: this.version, kind: this.kind });
-      const preferences = this.writePreferences({ lastCheck: Date.now() });
+    }
+
+    this.update({ phase: 'checking', error: '', origin, originSource, deviceId: credential.deviceId ?? '', needsEnrollment: false, enrollmentMessage: '' });
+
+    try {
+      // Renovar cedo evita perder o prazo justamente quando não há rede. Uma
+      // falha aqui não impede a procura: a credencial atual ainda vale.
+      if (shouldRenew(credential.expiresAt)) await this.renew().catch(() => undefined);
+
+      const catalog = await fetchCatalog({
+        origin,
+        token: credential.token,
+        trustedKeys,
+        // O anti-retrocesso: um catálogo abaixo do maior já aceito é recusado
+        // antes de qualquer leitura de conteúdo.
+        acceptedSequence: this.preferences.catalogSequence,
+      });
+
+      // Só os manifestos que podem virar oferta, e o da versão instalada pelas
+      // notas de "o que mudou". Buscar todos seria pedir dez documentos para
+      // usar um.
+      const wanted = manifestsToFetch({ catalog, currentVersion: this.version });
+      const manifests = [];
+      for (const item of wanted) {
+        try {
+          manifests.push(await fetchManifest({
+            origin, token: credential.token, trustedKeys,
+            releaseId: item.releaseId, expectedDigest: item.manifestSha256,
+          }));
+        } catch (error) {
+          // Um manifesto que não verifica não derruba a procura: ele apenas
+          // não vira oferta, e a versão dele aparece como pulada.
+          this.log({ event: 'update-manifest-rejected', releaseId: item.releaseId, reason: String(error?.reason ?? error?.message ?? error) });
+        }
+      }
+
+      const decision = chooseFromCatalog({
+        catalog, manifests, currentVersion: this.version, kind: this.kind, arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      });
+
+      // A sequência aceita sobe junto, e só sobe.
+      const preferences = this.writePreferences({
+        lastCheck: Date.now(),
+        catalogSequence: Math.max(this.preferences.catalogSequence, Number(catalog.sequence) || 0),
+      });
+
       // Procurar de novo com uma versão já baixada não pode jogar o download
       // fora à toa: se a oferta continua sendo a mesma versão, o arquivo que
       // está no disco continua servindo. Só quando a oferta muda — porque
       // apareceu uma mais nova — é que ele deixa de valer.
       const mesmaOferta = Boolean(decision.version) && decision.version === this.snapshot.version;
       const baixadaSegueValendo = mesmaOferta && this.snapshot.phase === 'ready' && Boolean(this.snapshot.file);
-      this.log({ event: 'update-check', status: decision.status, version: decision.version ?? '', kind: this.kind, manual });
+
+      this.log({ event: 'update-check', status: decision.status, version: decision.version ?? '', kind: this.kind, manual, sequence: catalog.sequence });
       return this.update({
         phase: baixadaSegueValendo ? 'ready' : decision.status === 'available' ? 'available' : decision.status === 'no-asset' ? 'no-asset' : 'up-to-date',
         installedBroken: decision.installedBroken ?? '',
-        // As notas da versão instalada vêm na mesma consulta. É o que a tela
-        // de "o que mudou" mostra na primeira abertura depois de atualizar —
-        // inclusive quando a atualização foi feita por fora, pelo script de
-        // instalação ou trocando o arquivo à mão.
         installedRelease: decision.installedRelease ?? this.snapshot.installedRelease,
         version: decision.version ?? '',
         title: decision.title ?? '',
         notes: decision.notes ?? '',
-        pageUrl: decision.pageUrl ?? '',
+        // Não há página pública numa distribuição privada. O campo continua
+        // existindo para a interface, e continua vazio.
+        pageUrl: '',
         publishedAt: decision.publishedAt ?? '',
         asset: decision.asset ?? null,
         skipped: decision.skipped ?? [],
-        // A mais nova disponível quando não é a oferecida agora, e o porquê.
         latest: decision.latest ?? '',
         mustStop: decision.mustStop ?? null,
         progress: { received: 0, total: decision.asset?.size ?? 0 },
@@ -257,97 +296,146 @@ class Updater {
       });
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
-      this.log({ event: 'update-check-failed', message });
+      const reason = String(error?.reason ?? '');
+      this.log({ event: 'update-check-failed', message, reason });
+
+      // Credencial revogada não é falha de rede: ela não volta sozinha, e
+      // insistir a cada abertura só gastaria pedido. A credencial local sai, e
+      // a tela passa a pedir um convite novo.
+      if (reason === 'revoked' || reason === 'unknown') {
+        clearDeviceCredential({ userDataPath: this.userDataPath });
+        this.sessionCredential = null;
+        return this.update({
+          phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: message,
+          error: manual ? message : '', deviceId: '',
+        });
+      }
+      // Ficar sem internet não é um erro que mereça uma tela.
       return this.update({ phase: manual ? 'error' : 'idle', error: manual ? message : '' });
     }
   }
 
+  /**
+   * Trocar um convite por uma credencial deste dispositivo.
+   *
+   * O convite vem por canal privado e vale uma vez. Quem chega aqui é a pessoa
+   * na frente do computador — nenhum caminho de rede inscreve dispositivo.
+   */
+  async enroll(invite, label = '') {
+    const { origin, reason: originReason } = this.source();
+    if (!origin) return this.update({ phase: 'no-origin', error: originReason });
+    try {
+      const enrolled = await enrollDevice({ origin, invite: String(invite ?? ''), label: String(label || this.env.HOSTNAME || 'dispositivo') });
+      const saved = writeDeviceCredential(
+        { userDataPath: this.userDataPath, safeStorage: this.safeStorage },
+        { token: enrolled.token, deviceId: enrolled.deviceId, expiresAt: enrolled.expiresAt },
+      );
+      this.log({ event: 'update-device-enrolled', deviceId: enrolled.deviceId, saved: saved.saved });
+      // Sem chaveiro a credencial não vai para o disco — mas ela vale nesta
+      // sessão, e é isso que a mensagem promete. Guardá-la só em memória é o
+      // meio-termo honesto: escrever em claro seria pior, e descartar faria a
+      // inscrição que acabou de funcionar parecer que falhou.
+      this.sessionCredential = saved.saved
+        ? null
+        : { token: enrolled.token, deviceId: enrolled.deviceId, expiresAt: enrolled.expiresAt, reason: '' };
+      const aviso = saved.saved ? '' : saved.message;
+      this.update({ deviceId: enrolled.deviceId, needsEnrollment: false, enrollmentMessage: aviso, error: '' });
+      const depois = await this.check({ manual: true });
+      // A procura recarrega a origem e a credencial, e com isso apagaria o
+      // aviso de que a credencial não foi gravada. Ele volta aqui.
+      return aviso ? this.update({ enrollmentMessage: aviso }) : depois;
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error);
+      this.log({ event: 'update-device-enroll-failed', message });
+      return this.update({ phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: message, error: message });
+    }
+  }
+
+  /** Renova a credencial deste dispositivo, enquanto ela ainda vale. */
+  async renew() {
+    const { origin, credential } = this.source();
+    if (!origin || !credential.token) return this.state();
+    const renewed = await renewDevice({ origin, token: credential.token });
+    const saved = writeDeviceCredential(
+      { userDataPath: this.userDataPath, safeStorage: this.safeStorage },
+      { token: renewed.token, deviceId: renewed.deviceId ?? credential.deviceId, expiresAt: renewed.expiresAt },
+    );
+    this.sessionCredential = saved.saved
+      ? null
+      : { token: renewed.token, deviceId: renewed.deviceId ?? credential.deviceId, expiresAt: renewed.expiresAt, reason: '' };
+    this.log({ event: 'update-device-renewed', deviceId: renewed.deviceId ?? credential.deviceId });
+    return this.state();
+  }
+
   async download() {
     const asset = this.snapshot.asset;
-    if (!asset || !asset.url) return this.update({ phase: 'error', error: 'Não há arquivo desta versão para o jeito que o Tumacord foi instalado aqui.' });
+    if (!asset || !asset.releaseId || !asset.artifactId) {
+      return this.update({ phase: 'error', error: 'Não há pacote desta versão para o jeito que o Tumacord foi instalado aqui.' });
+    }
     if (this.snapshot.phase === 'downloading') return this.state();
+
+    const { origin, trustedKeys, credential } = this.source();
+    if (!origin || !credential.token) {
+      const recado = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
+      return this.update({ phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: recado, error: recado });
+    }
+    if (asset.size > MAX_DOWNLOAD_BYTES) {
+      return this.update({ phase: 'error', error: 'O pacote anunciado é maior do que qualquer versão do Tumacord; nada foi baixado.' });
+    }
 
     const destination = path.join(this.downloadDirectory, safeFileName(asset.name));
     this.cancelled = false;
     this.update({ phase: 'downloading', error: '', progress: { received: 0, total: asset.size || 0 } });
+
     try {
-      fs.mkdirSync(this.downloadDirectory, { recursive: true });
-      const digest = await this.fetchToFile(asset.url, destination, asset.size);
-      const expected = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? '')?.[1];
-      if (expected && expected.toLowerCase() !== digest) {
-        fs.rmSync(destination, { force: true });
-        throw new Error('O arquivo baixado não confere com o resumo publicado; ele foi descartado.');
-      }
+      // O manifesto é buscado de novo, e não reaproveitado do estado: entre a
+      // procura e o clique em baixar a versão pode ter sido retirada, e o
+      // documento que autoriza o download precisa ser o de agora.
+      const manifest = await fetchManifest({ origin, token: credential.token, trustedKeys, releaseId: asset.releaseId });
+      const artifact = (manifest.artifacts ?? []).find((candidate) => candidate.artifactId === asset.artifactId);
+      if (!artifact) throw new Error('O pacote desta versão não está mais no manifesto publicado.');
+
+      const downloaded = await downloadArtifact({
+        origin,
+        token: credential.token,
+        manifest,
+        artifact,
+        destination,
+        onProgress: (progress) => this.update({ progress }),
+        // O cancelamento é um clique, e ele é consultado a cada pedaço.
+        shouldCancel: () => this.cancelled,
+      });
+
       this.log({ event: 'update-downloaded', version: this.snapshot.version, file: path.basename(destination) });
       // O resumo do que foi baixado é guardado com o estado. Ele é conferido
       // de novo imediatamente antes de executar: entre baixar e aplicar há uma
       // janela em que o arquivo pode ser trocado, e essa janela é maior quando
-      // a pessoa adia a instalação. O resumo publicado pode faltar; este,
-      // calculado aqui, nunca falta.
-      return this.update({ phase: 'ready', file: destination, sha256: digest });
+      // a pessoa adia a instalação.
+      return this.update({ phase: 'ready', file: downloaded.file, sha256: downloaded.sha256 });
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
-      if (!this.cancelled) this.log({ event: 'update-download-failed', message });
-      try {
-        fs.rmSync(destination, { force: true });
-      } catch {
-        // O arquivo parcial some na próxima tentativa.
-      }
-      return this.update({ phase: 'available', error: this.cancelled ? '' : message, progress: { received: 0, total: asset.size || 0 } });
-    }
-  }
-
-  async fetchToFile(url, destination, expectedSize) {
-    const response = await request(url, { headers: { 'User-Agent': `Tumacord/${this.version}`, Accept: 'application/octet-stream' } });
-    this.pending = response;
-    const total = Number(response.headers['content-length']) || expectedSize || 0;
-    const hash = createHash('sha256');
-    const partial = `${destination}.parcial`;
-    const file = fs.createWriteStream(partial);
-    let received = 0;
-    let lastReport = 0;
-    try {
-      for await (const chunk of response) {
-        received += chunk.length;
-        if (received > MAX_DOWNLOAD_BYTES) throw new Error('O arquivo da atualização passou do tamanho aceitável.');
-        hash.update(chunk);
-        if (!file.write(chunk)) {
-          // Sem o `error` aqui, um disco cheio deixaria esta espera pendurada
-          // para sempre — download parado, sem barra andando e sem erro.
-          await new Promise((resolve, reject) => {
-            file.once('drain', resolve);
-            file.once('error', reject);
-          });
-        }
-        // Cem avisos por segundo à interface durante um download de cem
-        // megabytes seria trabalho de IPC gasto para desenhar a mesma barra.
-        const now = Date.now();
-        if (now - lastReport > 250) {
-          lastReport = now;
-          this.update({ progress: { received, total } });
-        }
-      }
-      await new Promise((resolve, reject) => file.end((error) => (error ? reject(error) : resolve())));
-      if (expectedSize && received !== expectedSize) throw new Error('O arquivo baixado veio incompleto.');
-      fs.renameSync(partial, destination);
-      this.update({ progress: { received, total: total || received } });
-      return hash.digest('hex');
-    } catch (error) {
-      file.destroy();
-      fs.rmSync(partial, { force: true });
-      throw error;
+      if (!this.cancelled) this.log({ event: 'update-download-failed', message, reason: String(error?.reason ?? '') });
+      return this.update({
+        phase: 'available',
+        error: this.cancelled ? '' : message,
+        progress: { received: 0, total: asset.size || 0 },
+      });
     } finally {
-      this.pending = null;
+      this.cancelled = false;
     }
   }
 
+  /**
+   * Cancelar o download em andamento.
+   *
+   * A marca é consultada a cada pedaço recebido. O arquivo parcial **fica** no
+   * disco de propósito: a próxima tentativa continua de onde parou, e num
+   * pacote de cem megabytes numa conexão ruim isso é a diferença entre
+   * conseguir e não conseguir.
+   */
   cancel() {
-    if (!this.pending) return this.state();
-    // O erro que sobe do fluxo interrompido é consequência do clique, não
-    // defeito. `download()` consulta esta marca para não anunciar falha.
+    if (this.snapshot.phase !== 'downloading') return this.state();
     this.cancelled = true;
-    this.pending.destroy(new Error('Download cancelado.'));
-    this.pending = null;
     return this.update({ phase: 'available', error: '' });
   }
 
@@ -593,4 +681,4 @@ class Updater {
   }
 }
 
-module.exports = { DEFAULT_REPOSITORY, MAX_DOWNLOAD_BYTES, Updater, isAllowedUrl, safeFileName, sanitizeState };
+module.exports = { MAX_DOWNLOAD_BYTES, Updater, safeFileName, sanitizeState };
