@@ -30,9 +30,9 @@ import { emptyCatalog, validateNext, withRelease, withWithdrawal } from './lib/c
 const require_ = createRequire(import.meta.url);
 const { CONTRACT_VERSION } = require_('../../desktop/distribution.generated.cjs');
 const { documentDigest, generateSigningKey, signDocument } = require_('../../desktop/distribution-crypto.generated.cjs');
-const { requireVersion } = require_('../../desktop/version.generated.cjs');
+const { parseVersion, requireVersion } = require_('../../desktop/version.generated.cjs');
 
-const TOOL_VERSION = '0.9.9-1';
+const TOOL_VERSION = '0.10.0';
 
 /** Quanto tempo um catálogo vale. Curto o bastante para uma retirada alcançar. */
 const CATALOG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -57,8 +57,19 @@ COMANDOS
            [--channel stable|test] [--changelog CHANGELOG.md] [--out <arquivo>]
         Lê a pasta de build, confere cada pacote e assina o manifesto.
 
+  manifest --recibo <arquivo> --dir <pasta> [--channel stable|test] [--out <arquivo>]
+        O mesmo, a partir do recibo que a VPS escreveu com
+        tumacordctl releases fetch: os bytes já estão lá e já foram
+        conferidos, e aqui só se assina. Os resumos vêm do recibo — se você
+        quiser assinar apenas o que esta máquina conferiu, baixe os pacotes e
+        use --packages.
+
   catalog --manifest <arquivo> --dir <pasta> [--channel stable|test] [--out <arquivo>]
-        Publica a versão daquele manifesto no catálogo e o assina.
+          [--aceitar-pre-versao]
+        Publica a versão daquele manifesto no catálogo e o assina. Uma
+        pré-versão (1.0.0-rc.1) no canal estável é recusada sem
+        --aceitar-pre-versao: quem é ensaio é decidido pelo canal, e promover
+        um ensaio ao estável por engano é fácil demais para não avisar.
 
   withdraw --release <releaseId> --reason "<motivo>" --dir <pasta>
            [--channel stable|test] [--out <arquivo>]
@@ -197,7 +208,11 @@ async function manifestCommand(options) {
   const directory = publishDir(options);
   const channel = options.channel === 'test' ? 'test' : 'stable';
 
-  if (typeof options.version !== 'string') { console.error('Informe --version <x.y.z[-n]>.'); return 1; }
+  // O caminho do recibo: os bytes já estão na VPS, que os buscou no GitHub
+  // privado e conferiu tamanho e resumo. Aqui só se assina.
+  if (typeof options.recibo === 'string') return await manifestFromReceipt(options, directory, channel);
+
+  if (typeof options.version !== 'string') { console.error('Informe --version <x.y.z[-n]>, ou --recibo <arquivo> se a VPS já buscou os pacotes.'); return 1; }
   if (typeof options.commit !== 'string' || !/^[0-9a-f]{7,40}$/i.test(options.commit)) {
     console.error('Informe --commit <sha>: é o commit exato de onde esta release saiu, e ele é conferido depois no `/api/health` do servidor.');
     return 1;
@@ -265,6 +280,119 @@ async function manifestCommand(options) {
   return 0;
 }
 
+/**
+ * Assina o manifesto a partir do recibo que a VPS escreveu.
+ *
+ * O fluxo que este caminho fecha: o CI compila e publica no GitHub privado; a
+ * VPS busca com `tumacordctl releases fetch`, confere e guarda; e a assinatura
+ * — a única coisa que nenhuma máquina pode fazer sozinha — acontece aqui.
+ *
+ * **O que se está assinando.** Os resumos vêm do recibo, e não de bytes lidos
+ * nesta máquina. Isso é uma troca declarada: evita baixar cem megabytes duas
+ * vezes, e em troca confia na VPS para relatar fielmente o que ela baixou. A
+ * proteção que continua de pé é a que importa mais — uma VPS comprometida não
+ * consegue **publicar** nada, porque o catálogo e o manifesto são assinados
+ * fora dela. O que ela conseguiria é induzir alguém a assinar o resumo errado,
+ * e quem quiser fechar essa fresta baixa os pacotes aqui e usa `--packages`.
+ */
+async function manifestFromReceipt(options, directory, channel) {
+  const recibo = await readJson(path.resolve(options.recibo));
+  if (recibo?.recibo !== 'tumacord-release' || !Array.isArray(recibo.arquivos)) {
+    console.error('Esse arquivo não é um recibo de `tumacordctl releases fetch`.');
+    return 1;
+  }
+  if (!recibo.arquivos.length) {
+    console.error('O recibo não lista pacote nenhum.');
+    return 1;
+  }
+
+  let version;
+  try {
+    version = requireVersion(recibo.version).text;
+  } catch (error) {
+    console.error(String(error?.message ?? error));
+    console.error('A convenção está em docs/versionamento.md.');
+    return 1;
+  }
+  const commit = String(recibo.commit ?? '').toLowerCase();
+  if (!/^[0-9a-f]{7,40}$/.test(commit)) {
+    console.error(`O recibo não traz um commit utilizável (${recibo.commit ?? 'ausente'}).`);
+    return 1;
+  }
+
+  // Cada entrada é conferida antes de virar assinatura. Um recibo com um campo
+  // faltando produziria um manifesto que o cliente recusa depois de baixar.
+  const artifacts = [];
+  for (const [indice, arquivo] of recibo.arquivos.entries()) {
+    for (const campo of ['fileName', 'artifactId', 'installKind', 'os', 'arch', 'format', 'sha256', 'storagePath']) {
+      if (typeof arquivo?.[campo] !== 'string' || !arquivo[campo]) {
+        console.error(`Pacote #${indice + 1} do recibo: falta ${campo}.`);
+        return 1;
+      }
+    }
+    if (!/^[0-9a-f]{64}$/.test(arquivo.sha256)) {
+      console.error(`Pacote #${indice + 1} do recibo: sha256 não tem a forma de um resumo.`);
+      return 1;
+    }
+    if (!Number.isSafeInteger(arquivo.size) || arquivo.size <= 0) {
+      console.error(`Pacote #${indice + 1} do recibo: tamanho inválido.`);
+      return 1;
+    }
+    // O caminho é relativo ao armazenamento, e nunca uma URL: guardar URL num
+    // documento assinado deixaria um manifesto mandar o aplicativo buscar
+    // binário em outro domínio.
+    if (arquivo.storagePath.includes('://') || arquivo.storagePath.startsWith('/') || arquivo.storagePath.includes('..')) {
+      console.error(`Pacote #${indice + 1} do recibo: storagePath precisa ser relativo ao armazenamento.`);
+      return 1;
+    }
+    artifacts.push({
+      artifactId: arquivo.artifactId,
+      os: arquivo.os,
+      arch: arquivo.arch,
+      format: arquivo.format,
+      installKind: arquivo.installKind,
+      fileName: arquivo.fileName,
+      size: arquivo.size,
+      sha256: arquivo.sha256,
+      storagePath: arquivo.storagePath,
+    });
+  }
+
+  const keys = await loadKeys(directory);
+  const { title, notes } = await notesFromChangelog(
+    path.resolve(typeof options.changelog === 'string' ? options.changelog : 'CHANGELOG.md'),
+    version,
+  );
+  const manifest = buildManifest({
+    version, commit, channel, artifacts, title, notes,
+    keyId: keys.manifest.keyId, contract: CONTRACT_VERSION,
+  });
+  const signed = signDocument(manifest, [keys.manifest]);
+  const out = path.resolve(typeof options.out === 'string' ? options.out : path.join(directory, `manifest-${version}.json`));
+  await writeJson(out, signed, 0o644);
+
+  console.log(`Manifesto da ${version} assinado em ${out}\n`);
+  console.log(`  release   ${manifest.releaseId}`);
+  console.log(`  commit    ${manifest.commit}`);
+  console.log(`  canal     ${channel}`);
+  console.log(`  origem    recibo de ${recibo.repo ?? 'repositório não dito'} (${recibo.tag ?? 'etiqueta não dita'})`);
+  for (const artifact of manifest.artifacts) {
+    console.log(`  pacote    ${artifact.installKind.padEnd(18)} ${artifact.fileName} (${artifact.size} B)`);
+  }
+  if (Array.isArray(recibo.faltando) && recibo.faltando.length) {
+    console.log(`\n  SEM PACOTE para: ${recibo.faltando.join(', ')}`);
+    console.log('  Quem estiver nesses formatos verá a versão anunciada e sem botão de aplicar.');
+  }
+  if (!notes) {
+    // As notas saem do CHANGELOG desta máquina. Sem a seção da versão, a tela
+    // de "o que mudou" fica vazia — e isso é dito agora, não descoberto depois.
+    console.log(`\n  ATENÇÃO: o CHANGELOG não tem seção para a ${version}. A release sai sem notas.`);
+  }
+  console.log('\nOs bytes já estão na VPS. O próximo passo é o catálogo:');
+  console.log(`  node tools/publisher/publish.mjs catalog --manifest ${out}`);
+  return 0;
+}
+
 async function catalogCommand(options) {
   const directory = publishDir(options);
   const channel = options.channel === 'test' ? 'test' : 'stable';
@@ -274,6 +402,22 @@ async function catalogCommand(options) {
   const signedManifest = await readJson(path.resolve(options.manifest));
   const manifest = signedManifest.payload;
   if (!manifest?.releaseId) { console.error('Esse arquivo não parece um manifesto assinado.'); return 1; }
+
+  // Sob SemVer, `1.0.0-rc.1` é uma versão legítima — e é justamente por isso
+  // que ela pode ser promovida ao canal estável por engano. O canal é quem
+  // decide quem é ensaio; publicar um ensaio no estável é possível, é quase
+  // sempre um descuido, e por isso precisa ser dito em voz alta.
+  //
+  // Não é só estética: uma pré-versão não tem número de Windows que ordene
+  // contra a final de mesmo número, então quem a instalasse no Windows ficaria
+  // sem caminho para a 1.0.0 — o instalador a trataria como a mesma coisa que
+  // já está lá.
+  const lida = parseVersion(manifest.version);
+  if (lida?.isPrerelease && channel === 'stable' && !options['aceitar-pre-versao']) {
+    console.error(`${manifest.version} é uma pré-versão e o canal é o estável.`);
+    console.error('Use `--channel test`, ou `--aceitar-pre-versao` se for mesmo isso que você quer.');
+    return 1;
+  }
 
   const current = await loadCatalogState(directory);
   let next;

@@ -49,34 +49,54 @@ var VersionError = class extends Error {
   input;
 };
 var VERSION_LIMIT = 65535;
-var TAG_PATTERN = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[1-9]\d*)?$/;
+var NUMERIC_ID = "0|[1-9]\\d*";
+var ALPHANUM_ID = "\\d*[A-Za-z-][0-9A-Za-z-]*";
+var PRE_ID = `(?:${NUMERIC_ID}|${ALPHANUM_ID})`;
+var PRERELEASE = `(?:${PRE_ID})(?:\\.(?:${PRE_ID}))*`;
+var BUILD = "[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*";
 var FIELD = "(?:0|[1-9]\\d*)";
-var FULL_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
-var SHORT_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
+var TAG_PATTERN = new RegExp(`^v${FIELD}\\.${FIELD}\\.${FIELD}(?:-${PRERELEASE})?(?:\\+${BUILD})?$`);
+var FULL_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})\\.(${FIELD})(?:-(${PRERELEASE}))?(?:\\+(${BUILD}))?$`);
+var SHORT_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})(?:-(${PRERELEASE}))?(?:\\+(${BUILD}))?$`);
 function rejectionReason(raw) {
   if (!raw) return "vazia";
-  if (/[+]/.test(raw)) return "metadado de build n\xE3o faz parte desta conven\xE7\xE3o";
-  if (/-(?:0\d*|\d*[A-Za-z])/.test(raw)) {
-    return "o sufixo \xE9 a revis\xE3o de manuten\xE7\xE3o, um inteiro positivo \u2014 alpha, beta e rc n\xE3o entram: quem \xE9 ensaio \xE9 decidido pelo canal";
-  }
+  if (/-(?:0\d)/.test(raw)) return "zero \xE0 esquerda num identificador de pr\xE9-vers\xE3o";
+  if (/^\d+\.\d+\.\d+-$/.test(raw)) return "pr\xE9-vers\xE3o vazia depois do h\xEDfen";
+  if (/\+$/.test(raw)) return "metadado de build vazio depois do `+`";
   if (/\b0\d/.test(raw)) return "zero \xE0 esquerda";
   return "formato";
+}
+function readIdentifiers(raw) {
+  if (!raw) return [];
+  return raw.split(".").map((part) => /^\d+$/.test(part) ? Number(part) : part);
 }
 function parseVersion(input) {
   if (typeof input !== "string") return null;
   const raw = input.trim().replace(/^v/i, "");
   const found = FULL_FORM.exec(raw) ?? SHORT_FORM.exec(raw);
   if (!found) return null;
-  const short = found.length === 4;
+  const short = found.length === 5;
   const major = Number(found[1]);
   const minor = Number(found[2]);
   const patch = short ? 0 : Number(found[3]);
-  const revision = Number((short ? found[3] : found[4]) ?? 0);
-  for (const value of [major, minor, patch, revision]) {
+  const prerelease = readIdentifiers(short ? found[3] : found[4]);
+  const build = (short ? found[4] : found[5]) ?? "";
+  for (const value of [major, minor, patch]) {
     if (!Number.isSafeInteger(value) || value < 0 || value > VERSION_LIMIT) return null;
   }
-  const text = revision ? `${major}.${minor}.${patch}-${revision}` : `${major}.${minor}.${patch}`;
-  return { major, minor, patch, revision, text, tag: `v${text}`, tuple: [major, minor, patch, revision] };
+  const core = `${major}.${minor}.${patch}`;
+  const text = `${core}${prerelease.length ? `-${prerelease.join(".")}` : ""}${build ? `+${build}` : ""}`;
+  return {
+    major,
+    minor,
+    patch,
+    prerelease,
+    build,
+    isPrerelease: prerelease.length > 0,
+    text,
+    tag: `v${text}`,
+    tuple: [major, minor, patch]
+  };
 }
 function requireVersion(input) {
   const version = parseVersion(input);
@@ -88,19 +108,37 @@ function isVersion(input) {
 }
 function asVersion(input) {
   if (typeof input === "object" && input !== null) {
-    const tuple = input.tuple;
-    if (Array.isArray(tuple) && tuple.length === 4 && tuple.every((field) => Number.isSafeInteger(field))) {
-      return input;
+    const candidate = input;
+    const tuple = candidate.tuple;
+    if (Array.isArray(tuple) && tuple.length === 3 && tuple.every((field) => Number.isSafeInteger(field)) && Array.isArray(candidate.prerelease)) {
+      return candidate;
     }
     throw new VersionError(input, "objeto que n\xE3o \xE9 uma vers\xE3o lida");
   }
   return requireVersion(input);
 }
+function compareIdentifiers(left, right) {
+  const leftNumeric = typeof left === "number";
+  const rightNumeric = typeof right === "number";
+  if (leftNumeric && rightNumeric) return left === right ? 0 : left > right ? 1 : -1;
+  if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+  return left === right ? 0 : String(left) > String(right) ? 1 : -1;
+}
 function compareVersions(left, right) {
   const a = asVersion(left);
   const b = asVersion(right);
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     if (a.tuple[index] !== b.tuple[index]) return a.tuple[index] > b.tuple[index] ? 1 : -1;
+  }
+  if (!a.prerelease.length && !b.prerelease.length) return 0;
+  if (!a.prerelease.length) return 1;
+  if (!b.prerelease.length) return -1;
+  const limit = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < limit; index += 1) {
+    if (index >= a.prerelease.length) return -1;
+    if (index >= b.prerelease.length) return 1;
+    const ordem = compareIdentifiers(a.prerelease[index], b.prerelease[index]);
+    if (ordem !== 0) return ordem;
   }
   return 0;
 }
@@ -108,8 +146,11 @@ function formatVersion(version) {
   return version.text;
 }
 function windowsVersion(input) {
-  const { major, minor, patch, revision } = requireVersion(input);
-  return `${major}.${minor}.${patch}.${revision}`;
+  const { major, minor, patch, isPrerelease, text } = requireVersion(input);
+  if (isPrerelease) {
+    throw new VersionError(input, `uma pr\xE9-vers\xE3o n\xE3o tem n\xFAmero de Windows: ${text} n\xE3o pode ser ordenada contra ${major}.${minor}.${patch} em quatro campos`);
+  }
+  return `${major}.${minor}.${patch}.0`;
 }
 function sortDescending(versions) {
   const parsed = [];

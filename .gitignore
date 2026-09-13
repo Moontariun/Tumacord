@@ -12,3 +12,7 @@ work/
 # O componente nativo do Windows é compilado, não versionado.
 native/windows/audio-helper/build/
 dist-updates/
+
+# A origem e as chaves de UMA build. Descrevem a máquina que empacotou, não o
+# projeto — o repositório não traz o domínio de ninguém.
+desktop/update-origin.generated.cjs

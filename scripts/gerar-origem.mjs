@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // Grava na build a origem das atualizações e as chaves em que ela confia.
 //
-// `desktop/update-origin.cjs` nasce com as duas constantes vazias, e é assim
-// que o repositório é publicado: ele não traz o domínio de ninguém. Quem
-// empacota é que decide de onde aquela build vai buscar atualização, e este é
-// o comando que grava a decisão — o mesmo que os comentários daquele arquivo
-// já citavam.
+// `desktop/update-origin.cjs` nasce sem origem e sem chave, e é assim que o
+// repositório é publicado: ele não traz o domínio de ninguém. Quem empacota é
+// que decide de onde aquela build vai buscar atualização, e este é o comando
+// que grava a decisão.
+//
+// Ele escreve um arquivo à parte — `desktop/update-origin.generated.cjs`, que
+// não é versionado — em vez de editar o fonte. Editar o fonte faria a árvore de
+// quem empacota divergir do repositório, e um teste que pergunta "e quando não
+// há origem configurada?" passaria a depender de qual foi a última build feita
+// na máquina.
 //
 // **Por que embutir, e não configurar depois.** A origem e as chaves são a
 // resposta para "em quem este executável confia para instalar código nesta
@@ -29,19 +34,30 @@
 // e rodar com valores diferentes substitui os anteriores por inteiro. Ele
 // nunca acumula chave — uma chave que saiu da lista sai da build.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
-const ARQUIVO = path.join(AQUI, '..', 'desktop', 'update-origin.cjs');
+/**
+ * O arquivo que este comando escreve.
+ *
+ * Ele é gerado e **não é versionado**: descreve a build, não o projeto. O
+ * `desktop/update-origin.cjs` o lê num `try`, e a ausência dele é o caso normal
+ * de um clone — nesse caso o aplicativo diz que não tem de onde atualizar.
+ *
+ * Editar o fonte em vez de escrever aqui faria a árvore de trabalho de quem
+ * empacota divergir do repositório, e os testes passariam a depender de qual
+ * foi a última build feita na máquina.
+ */
+const ARQUIVO = path.join(AQUI, '..', 'desktop', 'update-origin.generated.cjs');
 
-// Os dois pontos exatos do arquivo que este comando reescreve. Casar a
-// declaração inteira — e exigir que ela apareça uma vez só — é o que impede
-// que uma mudança no arquivo faça a gravação cair no lugar errado em silêncio.
-const ALVO_ORIGEM = /^const BUILT_IN_ORIGIN = .*;$/m;
-const ALVO_CHAVES = /^const BUILT_IN_KEYS = [\s\S]*?^\];$|^const BUILT_IN_KEYS = \[\];$/m;
+const AVISO = `// GERADO por scripts/gerar-origem.mjs — não edite, e não versione.
+//
+// A origem das atualizações desta build e as chaves públicas em que ela confia.
+// Regerar: node scripts/gerar-origem.mjs --origin <url> --keys <arquivo>
+`;
 
 /** Palavras que denunciam material privado num documento de chaves. */
 const MARCAS_DE_PRIVADO = /"?(privateKey|private_key|secretKey|secret|seed)"?\s*:/i;
@@ -135,42 +151,37 @@ async function lerChaves(caminho) {
   return chaves.map(conferirChave);
 }
 
-function gravar(fonte, origem, chaves) {
-  if ((fonte.match(ALVO_ORIGEM) ?? []).length !== 1) {
-    erro('Não encontrei a declaração de BUILT_IN_ORIGIN em desktop/update-origin.cjs.');
-  }
-  if (!ALVO_CHAVES.test(fonte)) {
-    erro('Não encontrei a declaração de BUILT_IN_KEYS em desktop/update-origin.cjs.');
-  }
-  const chavesEscritas = chaves.length
-    ? `const BUILT_IN_KEYS = ${JSON.stringify(chaves, null, 2).replace(/\n/g, '\n')};`
-    : 'const BUILT_IN_KEYS = [];';
-  return fonte
-    .replace(ALVO_ORIGEM, `const BUILT_IN_ORIGIN = ${JSON.stringify(origem)};`)
-    .replace(ALVO_CHAVES, chavesEscritas);
+function modulo(origem, chaves) {
+  return `${AVISO}
+module.exports = ${JSON.stringify({ origin: origem, keys: chaves }, null, 2)};
+`;
 }
 
-function mostrar(fonte) {
-  const origem = ALVO_ORIGEM.exec(fonte)?.[0] ?? '(não encontrada)';
-  const chaves = ALVO_CHAVES.exec(fonte)?.[0] ?? '(não encontradas)';
-  console.log(origem);
-  console.log(chaves);
+async function mostrar() {
+  let atual;
+  try {
+    atual = JSON.parse(JSON.stringify((await import(`file://${ARQUIVO}`)).default));
+  } catch {
+    console.log('Nenhuma origem gravada: esta árvore produz uma build sem de onde atualizar.');
+    return;
+  }
+  console.log(`origem: ${atual.origin || '(vazia)'}`);
+  for (const chave of atual.keys ?? []) console.log(`  confia em ${chave.keyId}  [${chave.scope.join(', ')}]`);
 }
 
 async function principal() {
   const opcoes = lerArgumentos(process.argv.slice(2));
-  const fonte = await readFile(ARQUIVO, 'utf8');
 
   if (opcoes.ajuda) {
     console.log(await readFile(fileURLToPath(import.meta.url), 'utf8').then((texto) => texto.split('\n').slice(1, 30).join('\n')));
     return;
   }
   if (opcoes.mostrar) {
-    mostrar(fonte);
+    await mostrar();
     return;
   }
   if (opcoes.limpar) {
-    await writeFile(ARQUIVO, gravar(fonte, '', []), 'utf8');
+    await rm(ARQUIVO, { force: true });
     console.log('Origem e chaves apagadas: a build volta a não ter de onde atualizar.');
     return;
   }
@@ -184,7 +195,7 @@ async function principal() {
   if (!opcoes.keys) erro('Falta --keys: o documento de chaves públicas que esta build vai confiar.');
   const chaves = await lerChaves(opcoes.keys);
 
-  await writeFile(ARQUIVO, gravar(fonte, origem, chaves), 'utf8');
+  await writeFile(ARQUIVO, modulo(origem, chaves), 'utf8');
   console.log(`Origem gravada na build: ${origem}`);
   for (const chave of chaves) console.log(`  confia em ${chave.keyId}  [${chave.scope.join(', ')}]`);
   console.log('\nEsta build passa a buscar atualização só nesse endereço, e só aceita');

@@ -211,12 +211,156 @@ test('uma versão fora da convenção não vira release', { timeout: 30_000 }, a
   const original = console.error;
   console.error = (...args) => errors.push(args.join(' '));
   try {
-    // `rc` saiu da convenção: quem é ensaio é decidido pelo canal.
-    assert.equal(await cycle.publish('manifest', '--version', '0.9.10-rc1', '--commit', 'a'.repeat(40), '--packages', cycle.packagesDir), 1);
+    // Desde a 0.10.0 `rc` é versão válida. O que continua fora da convenção é
+    // um quarto campo: SemVer tem três, e `0.9.10.1` não tem como ser ordenada.
+    assert.equal(await cycle.publish('manifest', '--version', '0.9.10.1', '--commit', 'a'.repeat(40), '--packages', cycle.packagesDir), 1);
   } finally {
     console.error = original;
   }
-  assert.match(errors.join('\n'), /canal/);
+  // O motivo é dito, e aponta para onde a convenção está escrita: quem publica
+  // precisa saber o que corrigir, não só que falhou.
+  assert.match(errors.join('\n'), /versão inválida/);
+  assert.match(errors.join('\n'), /versionamento\.md/);
+});
+
+// O buraco que o SemVer abre, e o guarda que o fecha. `1.0.0-rc.1` é uma versão
+// legítima agora, então nada na forma dela impede que ela seja promovida ao
+// canal estável — só o canal separa ensaio de público, e é fácil demais errar.
+test('uma pré-versão não vai ao canal estável sem alguém dizer que quer', { timeout: 30_000 }, async (context) => {
+  const cycle = await assemble();
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
+  const manifesto = path.join(cycle.rootDir, 'manifest-rc.json');
+  // A mesma pasta de build, com os nomes da pré-versão: o publicador acha os
+  // pacotes pelo nome do arquivo.
+  for (const [nome, bytes] of Object.entries(CONTENT)) {
+    await writeFile(path.join(cycle.packagesDir, nome.replace('0.9.10', '1.0.0-rc.1')), bytes);
+    await rm(path.join(cycle.packagesDir, nome), { force: true });
+  }
+  assert.equal(await cycle.publish(
+    'manifest', '--version', '1.0.0-rc.1', '--commit', 'a'.repeat(40),
+    '--packages', cycle.packagesDir, '--out', manifesto,
+  ), 0, 'assinar o manifesto de uma pré-versão é legítimo');
+
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  let recusa = 0;
+  try {
+    recusa = await cycle.publish('catalog', '--manifest', manifesto);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(recusa, 1, 'o canal estável recusa a pré-versão');
+  assert.match(errors.join('\n'), /pré-versão/);
+  assert.match(errors.join('\n'), /--aceitar-pre-versao/);
+
+  // E os dois caminhos de saída funcionam: o canal de teste, e o consentimento
+  // explícito de quem sabe o que está fazendo.
+  assert.equal(await cycle.publish('catalog', '--manifest', manifesto, '--channel', 'test'), 0);
+});
+
+// ── O caminho do recibo ──────────────────────────────────────────────────────
+//
+// O CI compila e publica no GitHub privado; a VPS busca com
+// `tumacordctl releases fetch`, confere e guarda; e a assinatura acontece aqui,
+// a partir do recibo. É o único passo que nenhuma máquina faz sozinha.
+
+function recibo(overrides: Record<string, unknown> = {}) {
+  return {
+    recibo: 'tumacord-release',
+    repo: 'Moontariun/Tumacord',
+    tag: 'v0.9.10',
+    version: '0.9.10',
+    commit: 'b'.repeat(40),
+    buscadoEm: '2026-09-13T00:00:00.000Z',
+    armazenamento: 'releases/0.9.10',
+    arquivos: [{
+      fileName: 'tumacord-0.9.10.tar.gz',
+      artifactId: 'linux-managed-x64',
+      installKind: 'linux-managed',
+      os: 'linux', arch: 'x64', format: 'tar.gz',
+      size: 200 * 1024,
+      sha256: 'c'.repeat(64),
+      storagePath: 'releases/0.9.10/tumacord-0.9.10.tar.gz',
+    }],
+    faltando: ['windows-installed', 'windows-portable'],
+    ...overrides,
+  };
+}
+
+test('o manifesto pode ser assinado a partir do recibo da VPS', { timeout: 30_000 }, async (context) => {
+  const cycle = await assemble();
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
+
+  const arquivo = path.join(cycle.rootDir, 'recibo.json');
+  await writeFile(arquivo, JSON.stringify(recibo()));
+  const saida = path.join(cycle.rootDir, 'manifest-do-recibo.json');
+  assert.equal(await cycle.publish('manifest', '--recibo', arquivo, '--out', saida), 0);
+
+  const assinado = JSON.parse(await readFile(saida, 'utf8'));
+  assert.equal(assinado.payload.version, '0.9.10');
+  assert.equal(assinado.payload.commit, 'b'.repeat(40), 'o commit vem do recibo, não da branch');
+  assert.equal(assinado.payload.artifacts.length, 1);
+  assert.equal(assinado.payload.artifacts[0].storagePath, 'releases/0.9.10/tumacord-0.9.10.tar.gz');
+  assert.equal(assinado.signatures.length, 1, 'assinado pela chave de manifesto desta máquina');
+  // As notas continuam saindo do CHANGELOG local, e não do recibo: o texto que
+  // aparece na tela de quem atualiza é escrito por quem publica.
+  assert.match(assinado.payload.notes, /Uma coisa mudou/);
+});
+
+test('um recibo malformado não vira manifesto assinado', { timeout: 30_000 }, async (context) => {
+  const cycle = await assemble();
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
+
+  const casos: [string, Record<string, unknown>][] = [
+    ['não é recibo', { recibo: 'outra-coisa' }],
+    ['sem pacote nenhum', { arquivos: [] }],
+    ['versão fora da convenção', { version: '0.9.10.1' }],
+    ['sem commit utilizável', { commit: 'nao-e-sha' }],
+  ];
+  for (const [nome, override] of casos) {
+    const arquivo = path.join(cycle.rootDir, `recibo-${nome.replace(/\W+/g, '-')}.json`);
+    await writeFile(arquivo, JSON.stringify(recibo(override)));
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    let codigo = 0;
+    try {
+      codigo = await cycle.publish('manifest', '--recibo', arquivo);
+    } finally {
+      console.error = original;
+    }
+    assert.equal(codigo, 1, nome);
+    assert.ok(errors.join('\n').length > 0, `${nome}: o motivo precisa ser dito`);
+  }
+});
+
+// Guardar URL num documento assinado deixaria um manifesto mandar o aplicativo
+// buscar binário em outro domínio. O caminho é relativo ao armazenamento, e o
+// recibo vem de outra máquina — então ele é conferido, e não confiado.
+test('um caminho de pacote que escapa do armazenamento é recusado', { timeout: 30_000 }, async (context) => {
+  const cycle = await assemble();
+  context.after(() => cycle.close());
+  await cycle.publish('keys', 'generate');
+
+  for (const caminho of ['https://outro.dominio/pacote.tar.gz', '/etc/passwd', 'releases/../../fora.tar.gz']) {
+    const base = recibo();
+    base.arquivos[0].storagePath = caminho;
+    const arquivo = path.join(cycle.rootDir, 'recibo-caminho.json');
+    await writeFile(arquivo, JSON.stringify(base));
+    const original = console.error;
+    console.error = () => {};
+    let codigo = 0;
+    try {
+      codigo = await cycle.publish('manifest', '--recibo', arquivo);
+    } finally {
+      console.error = original;
+    }
+    assert.equal(codigo, 1, caminho);
+  }
 });
 
 test('dois pacotes para o mesmo alvo param a publicação', { timeout: 30_000 }, async (context) => {

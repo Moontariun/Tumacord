@@ -1,5 +1,31 @@
 # Histórico de versões
 
+## 0.10.0 — SemVer, e a VPS busca a release no GitHub privado
+
+<!-- tumacord:resumo -->
+A convenção de versão passou a ser SemVer 2.0.0, e a VPS ganhou um comando que busca os pacotes de uma etiqueta no repositório privado do GitHub — sem que nenhum aplicativo instalado carregue credencial do GitHub dentro de si.
+
+**A versão agora é SemVer**
+
+- `MAJOR.MINOR.PATCH`, com pré-versão depois de `-` e metadado de build depois de `+`, sem dialeto. Quem chega ao projeto já sabe ler, e qualquer ferramenta de fora concorda com a ordem.
+- **O sufixo inverteu de sentido.** Até a 0.9.9-2, `-N` era a revisão de manutenção e vinha *depois* da versão que corrigia. Sob SemVer é pré-versão, e vem antes. Uma correção da 0.9.9 agora se chama **0.9.10**.
+- **A troca não deixa ninguém para trás**, por aritmética: `0.10.0` é maior que `0.9.9-1` nas duas leituras. As cópias em campo leem pela regra antiga e recebem esta versão do mesmo jeito. `tests/version.test.ts` fixa esse requisito para que a próxima pessoa a mexer na ordenação o encontre antes de quebrá-lo.
+- No Windows, o quarto campo passou a ser sempre zero: sob SemVer duas versões publicáveis nunca compartilham `major.minor.patch`, então não há o que desempatar. Uma **pré-versão é recusada** ali — ela teria de virar um número menor que `x.y.z.0`, que não existe, e o instalador trataria a rc e a final como a mesma coisa.
+- O publicador recusa promover uma pré-versão ao canal estável sem `--aceitar-pre-versao`. Agora que `1.0.0-rc.1` é um número legítimo, nada na forma dele impede o engano — só o canal separa ensaio de público.
+
+**A VPS busca no GitHub; a assinatura continua sendo sua**
+
+- `tumacordctl releases fetch v0.10.0` baixa os pacotes daquela etiqueta do repositório **privado**, confere tamanho e SHA-256 contra o que a API anunciou, guarda no armazenamento da VPS e escreve um **recibo**. Ele não assina nada.
+- `publish.mjs manifest --recibo <arquivo>` monta e assina o manifesto a partir desse recibo, no ambiente de publicação. A chave privada continua fora da VPS: invadi-la não dá a ninguém a capacidade de entregar um binário como oficial.
+- **O token do GitHub vive só na VPS**, em `/etc/tumacord/github-token` ou em `TUMACORD_GITHUB_TOKEN`. É o que permite o repositório continuar privado sem embutir uma credencial do GitHub em cada executável distribuído — que vazaria no primeiro `strings` e não poderia ser revogada sem trocar o aplicativo de todo mundo.
+- O `Authorization` **não** acompanha o redirecionamento do download. Em repositório privado o asset é servido por um 302 para o armazenamento, e mandar o cabeçalho junto entregaria o token a outro host. O salto é seguido à mão para que essa decisão fique escrita.
+- O serviço `tumacord-updates` continua sem falar com o GitHub. Quem busca é o `tumacordctl`, no host: dar saída para a internet e um token ao serviço que guarda e serve os pacotes trocaria uma propriedade de segurança por conveniência.
+
+**Empacotar deixou de sujar a árvore de trabalho**
+
+- `scripts/gerar-origem.mjs` passou a escrever `desktop/update-origin.generated.cjs`, que não é versionado, em vez de editar o fonte. `scripts/empacotar.mjs` grava esse arquivo antes de empacotar e o apaga depois — inclusive quando o empacotamento falha.
+- Sem isso, a máquina que empacota ficava com a origem gravada no fonte, e o teste que pergunta "e quando não há origem configurada?" passava a depender de qual foi a última build feita ali.
+
 ## 0.9.9-2 — o "Assistir" sai de cima da lista
 
 <!-- tumacord:resumo -->

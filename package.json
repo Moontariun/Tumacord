@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.9.9-2",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -18,12 +18,12 @@
     "start": "node dist-server/server-bundle.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "node --test --import tsx tests/**/*.test.ts",
-    "package:dir": "npm run build && electron-builder --linux dir --publish never",
-    "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --publish never",
+    "package:dir": "npm run build && node scripts/empacotar.mjs --dir",
+    "package:linux": "npm run build && node scripts/empacotar.mjs --linux",
     "preview": "vite preview --host 0.0.0.0",
     "build:native:win": "powershell -NoProfile -ExecutionPolicy Bypass -File native/windows/audio-helper/build.ps1",
     "build:icon:win": "node scripts/build-windows-icon.cjs",
-    "package:windows": "npm run build && npm run build:native:win && electron-builder --win nsis portable --publish never",
+    "package:windows": "npm run build && npm run build:native:win && node scripts/empacotar.mjs --windows",
     "build:updates": "esbuild services/updates/src/index.ts --bundle --platform=node --format=cjs --outfile=dist-updates/service.cjs"
   },
   "dependencies": {
@@ -128,8 +128,8 @@
     "portable": {
       "artifactName": "Tumacord-${version}-portable.${ext}"
     },
-    "buildNumber": "2",
-    "buildVersion": "0.9.9-2"
+    "buildNumber": "0",
+    "buildVersion": "0.10.0"
   },
   "allowScripts": {
     "electron@41.10.7": true,

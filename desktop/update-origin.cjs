@@ -26,24 +26,37 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 /**
- * A origem embutida na build.
+ * A origem e as chaves gravadas nesta build.
  *
- * Vazia neste repositório de propósito. O empacotamento oficial a define por
- * `TUMACORD_UPDATE_ORIGIN` no ambiente de build, e o valor fica gravado aqui
- * pelo `scripts/gerar-origem.mjs` quando ele existir.
+ * Vêm de `desktop/update-origin.generated.cjs`, que o `scripts/gerar-origem.mjs`
+ * escreve na hora de empacotar. Esse arquivo **não é versionado**: ele descreve
+ * uma build, não o projeto, e este repositório não traz o domínio de ninguém.
+ *
+ * A ausência dele é o caso normal de um clone, e não é erro — é por isso que o
+ * `require` fica dentro de um `try`. Sem ele o aplicativo diz que não tem de
+ * onde atualizar, em vez de tentar um endereço adivinhado.
+ *
+ * **O gerador escreve um arquivo à parte, e não edita este.** Editar o fonte
+ * faria a árvore de trabalho de quem empacota divergir do repositório, e os
+ * testes passariam a depender de qual foi a última build feita na máquina.
  */
-const BUILT_IN_ORIGIN = '';
+let gravado = {};
+try {
+  gravado = require('./update-origin.generated.cjs');
+} catch {
+  // Build sem origem gravada: um clone recém-feito, ou os testes.
+}
+
+/** A origem embutida na build. Vazia quando o gerador não rodou. */
+const BUILT_IN_ORIGIN = typeof gravado.origin === 'string' ? gravado.origin : '';
 
 /**
  * As chaves públicas em que esta build confia.
  *
  * Elas viajam **dentro do aplicativo**. Buscá-las na rede junto com o que elas
  * verificam seria pedir a chave a quem quer ser verificado.
- *
- * Vazia neste repositório, pelo mesmo motivo da origem: a build oficial embute
- * as dela.
  */
-const BUILT_IN_KEYS = [];
+const BUILT_IN_KEYS = Array.isArray(gravado.keys) ? gravado.keys : [];
 
 /** Nome do arquivo local de configuração, dentro do `userData`. */
 const ORIGIN_FILE = 'update-origin.json';

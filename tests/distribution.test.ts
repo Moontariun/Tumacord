@@ -35,26 +35,26 @@ const trusted: TrustedKey[] = [
 const windowsArtifact: Artifact = {
   artifactId: 'win-x64-nsis',
   os: 'windows', arch: 'x64', format: 'exe', installKind: 'windows-installed',
-  fileName: 'Tumacord-0.9.9-1-Setup.exe',
+  fileName: 'Tumacord-0.9.10-Setup.exe',
   size: 120_000_000,
   sha256: 'a'.repeat(64),
   signatureKeyId: manifestKey.keyId,
-  storagePath: 'releases/0.9.9-1/Tumacord-0.9.9-1-Setup.exe',
+  storagePath: 'releases/0.9.10/Tumacord-0.9.10-Setup.exe',
 };
 
 const linuxArtifact: Artifact = {
   ...windowsArtifact,
   artifactId: 'linux-x64-tar',
   os: 'linux', format: 'tar.gz', installKind: 'linux-managed',
-  fileName: 'tumacord-0.9.9-1.tar.gz',
+  fileName: 'tumacord-0.9.10.tar.gz',
   sha256: 'b'.repeat(64),
-  storagePath: 'releases/0.9.9-1/tumacord-0.9.9-1.tar.gz',
+  storagePath: 'releases/0.9.10/tumacord-0.9.10.tar.gz',
 };
 
 const manifest: ReleaseManifest = {
   contract: CONTRACT_VERSION,
-  releaseId: 'rel-0991',
-  version: '0.9.9-1',
+  releaseId: 'rel-0910',
+  version: '0.9.10',
   channel: 'stable',
   commit: '0'.repeat(40),
   createdAt: '2026-09-12T10:00:00.000Z',
@@ -63,7 +63,7 @@ const manifest: ReleaseManifest = {
 
 function entry(extra: Partial<CatalogEntry> = {}): CatalogEntry {
   return {
-    releaseId: 'rel-0991', version: '0.9.9-1', state: 'published',
+    releaseId: 'rel-0910', version: '0.9.10', state: 'published',
     publishedAt: '2026-09-12T10:00:00.000Z',
     manifestSha256: documentDigest(manifest),
     ...extra,
@@ -205,7 +205,7 @@ test('aumentar a sequência para retirar uma versão não oferece downgrade', ()
   assert.equal(catalogFreshness(withdrawn, 7, now), 'ok');
   const reason = ineligibleReason({
     entry: withdrawn.channels.stable.entries[0], manifest: manifest,
-    currentVersion: requireVersion('0.9.9-1'), installKind: 'windows-installed', arch: 'x64',
+    currentVersion: requireVersion('0.9.10'), installKind: 'windows-installed', arch: 'x64',
   });
   assert.equal(reason?.reason, 'withdrawn');
 });
@@ -240,7 +240,7 @@ test('pacote sem resumo, sem tamanho ou com caminho torto é tratado como inexis
 });
 
 test('o caminho de armazenamento não escapa nem vira URL', () => {
-  assert.equal(isSafeStoragePath('releases/0.9.9-1/arquivo.exe'), true);
+  assert.equal(isSafeStoragePath('releases/0.9.10/arquivo.exe'), true);
   assert.equal(isSafeStoragePath('../fora.exe'), false);
   assert.equal(isSafeStoragePath('releases/../../fora.exe'), false);
   assert.equal(isSafeStoragePath('/etc/passwd'), false);
@@ -256,7 +256,7 @@ test('o caminho de armazenamento não escapa nem vira URL', () => {
 // ── Manifesto e pacote precisam concordar ──────────────────────────────────
 
 test('conferir só o resumo não basta: versão, arquitetura e formato também', () => {
-  assert.equal(artifactMatches(manifest, windowsArtifact, { sha256: 'a'.repeat(64), size: 120_000_000, version: '0.9.9-1', releaseId: 'rel-0991', arch: 'x64', format: 'exe' }), null);
+  assert.equal(artifactMatches(manifest, windowsArtifact, { sha256: 'a'.repeat(64), size: 120_000_000, version: '0.9.10', releaseId: 'rel-0910', arch: 'x64', format: 'exe' }), null);
   assert.equal(artifactMatches(manifest, windowsArtifact, { version: '0.9.9' }), 'version-mismatch');
   assert.equal(artifactMatches(manifest, windowsArtifact, { releaseId: 'outra' }), 'release-mismatch');
   assert.equal(artifactMatches(manifest, windowsArtifact, { arch: 'arm64' }), 'arch-mismatch');
@@ -265,23 +265,26 @@ test('conferir só o resumo não basta: versão, arquitetura e formato também',
   assert.equal(artifactMatches(manifest, windowsArtifact, { sha256: 'd'.repeat(64) }), 'digest-mismatch');
   // Maiúscula no hexadecimal é o mesmo resumo.
   assert.equal(artifactMatches(manifest, windowsArtifact, { sha256: 'A'.repeat(64) }), null);
-  // `0.9.9-1` e `v0.9.9-1` são a mesma versão.
-  assert.equal(artifactMatches(manifest, windowsArtifact, { version: 'v0.9.9-1' }), null);
+  // `0.9.10` e `v0.9.10` são a mesma versão.
+  assert.equal(artifactMatches(manifest, windowsArtifact, { version: 'v0.9.10' }), null);
 });
 
 // ── Elegibilidade ──────────────────────────────────────────────────────────
 
 const base = { manifest: manifest, installKind: 'windows-installed' as const, arch: 'x64' as const };
 
-test('a revisão é oferecida a quem está na versão que ela corrige', () => {
+test('a correção é oferecida a quem está na versão que ela corrige', () => {
   assert.equal(ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.9') }), null);
 });
 
 test('downgrade automático é bloqueado, e dito', () => {
-  const reason = ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.10') });
+  const reason = ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.11') });
   assert.equal(reason?.reason, 'not-newer');
   // E estar na mesma versão também não é atualização.
-  assert.equal(ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.9-1') })?.reason, 'not-newer');
+  assert.equal(ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.10') })?.reason, 'not-newer');
+  // Sob SemVer, uma pré-versão do mesmo número está ABAIXO da final: quem já
+  // está na 0.9.10 não recebe a 0.9.10-rc.1 como se fosse novidade.
+  assert.equal(ineligibleReason({ ...base, entry: entry(), currentVersion: requireVersion('0.9.10') })?.reason, 'not-newer');
 });
 
 test('a 0.8.9 retirada continua bloqueada por esta cópia', () => {
@@ -308,10 +311,10 @@ test('uma versão que exige atualizador mais novo é dita, e não some', () => {
     ...base,
     entry: entry({ releaseId: 'rel-1', version: '1.0.0' }),
     currentVersion: requireVersion('0.9.8'),
-    manifest: { ...manifest, releaseId: 'rel-1', version: '1.0.0', compatibility: { minUpdaterVersion: '0.9.9-1' } },
+    manifest: { ...manifest, releaseId: 'rel-1', version: '1.0.0', compatibility: { minUpdaterVersion: '0.9.10' } },
   });
   assert.equal(reason?.reason, 'needs-updater');
-  assert.match(reason?.detail ?? '', /0\.9\.9-1/);
+  assert.match(reason?.detail ?? '', /0\.9\.10/);
 });
 
 test('sem pacote para este jeito de instalar, a diferença é dita', () => {

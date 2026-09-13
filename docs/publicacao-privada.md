@@ -84,6 +84,94 @@ erro possível.
 
 ---
 
+## O caminho curto: a VPS busca no GitHub privado
+
+Desde a 0.10.0 os bytes não precisam sair da sua máquina. O CI compila e
+publica uma Release **privada**; a VPS busca aquela etiqueta, confere e guarda;
+e você assina. A assinatura é o único passo que nenhuma máquina faz sozinha, e
+é ela que impede que invadir a VPS vire a capacidade de entregar binário como
+oficial.
+
+```
+ GitHub privado          VPS                        ambiente de publicação
+ ──────────────          ───                        ──────────────────────
+ Release com os      releases fetch v0.10.0
+ binários      ──────►  baixa, confere tamanho
+                        e SHA-256, guarda em
+                        /pacotes, escreve o
+                        recibo            ──────►  manifest --recibo
+                                                   (assina com a sua chave)
+                                          ◄──────
+                        releases import
+                        releases publish
+```
+
+### O token, uma vez só
+
+Ele vive **na VPS**, e só nela:
+
+```bash
+ssh vps "install -d -m 700 /etc/tumacord && install -m 600 /dev/null /etc/tumacord/github-token"
+# e escreva o token nesse arquivo
+```
+
+Use um PAT *fine-grained* limitado a este repositório e a `Contents: read`.
+Não use token de conta inteira: quem ler o disco da VPS lê o token, e o estrago
+deve caber no que ele alcança.
+
+> **Por que o token não pode ir no aplicativo.** Se cada cópia instalada
+> buscasse direto no GitHub, ela teria de carregar uma credencial dentro do
+> executável — a mesma para todo mundo, visível num `strings`, e impossível de
+> revogar sem trocar o aplicativo de todos. É por isso que quem fala com o
+> GitHub é a VPS.
+
+### Buscar
+
+```bash
+ssh vps "cd /home/Tumacord && node tools/tumacordctl/tumacordctl.mjs releases fetch v0.10.0 --out /tmp/recibo.json"
+```
+
+Ele baixa só os arquivos com os nomes daquela versão, confere o tamanho e o
+SHA-256 contra o que a API do GitHub anunciou, guarda em `releases/<versão>/` e
+escreve o recibo. **Ele não assina nada.**
+
+Formato que faltar é dito, não escondido: uma release só de Linux é legítima, e
+quem estiver no Windows verá a versão anunciada e sem botão de aplicar.
+
+### Assinar, na sua máquina
+
+```bash
+scp vps:/tmp/recibo.json /tmp/
+node tools/publisher/publish.mjs manifest --recibo /tmp/recibo.json --out /tmp/manifest.json
+node tools/publisher/publish.mjs catalog  --manifest /tmp/manifest.json --out /tmp/catalog.json
+```
+
+As notas continuam saindo do **seu** `CHANGELOG.md`: o texto que aparece na
+tela de quem atualiza é escrito por quem publica, e não vem do recibo.
+
+### Importar e promover
+
+```bash
+scp /tmp/manifest.json /tmp/catalog.json vps:/tmp/
+ssh vps "cd /home/Tumacord && node tools/tumacordctl/tumacordctl.mjs releases import  --manifest /tmp/manifest.json"
+ssh vps "cd /home/Tumacord && node tools/tumacordctl/tumacordctl.mjs releases publish --catalog  /tmp/catalog.json"
+```
+
+### O que este caminho troca
+
+Os resumos que você assina vêm do recibo, e não de bytes lidos na sua máquina.
+Isso evita baixar os pacotes duas vezes, e em troca confia na VPS para relatar
+fielmente o que baixou.
+
+A proteção que continua de pé é a que importa mais: **uma VPS comprometida não
+consegue publicar nada**, porque o manifesto e o catálogo são assinados fora
+dela. O que ela conseguiria é induzir você a assinar o resumo de um pacote
+trocado. Para fechar essa fresta, baixe os pacotes também no ambiente de
+publicação e monte o manifesto pela pasta, com `--packages` — o caminho antigo
+continua valendo e está descrito abaixo.
+
+---
+
 ## Publicar uma versão
 
 ### 1. Produzir os binários

@@ -40,9 +40,15 @@ module.exports = __toCommonJS(distributionCrypto_exports);
 var import_node_crypto = require("node:crypto");
 
 // shared/version.ts
+var NUMERIC_ID = "0|[1-9]\\d*";
+var ALPHANUM_ID = "\\d*[A-Za-z-][0-9A-Za-z-]*";
+var PRE_ID = `(?:${NUMERIC_ID}|${ALPHANUM_ID})`;
+var PRERELEASE = `(?:${PRE_ID})(?:\\.(?:${PRE_ID}))*`;
+var BUILD = "[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*";
 var FIELD = "(?:0|[1-9]\\d*)";
-var FULL_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
-var SHORT_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})(?:-([1-9]\\d*))?$`);
+var TAG_PATTERN = new RegExp(`^v${FIELD}\\.${FIELD}\\.${FIELD}(?:-${PRERELEASE})?(?:\\+${BUILD})?$`);
+var FULL_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})\\.(${FIELD})(?:-(${PRERELEASE}))?(?:\\+(${BUILD}))?$`);
+var SHORT_FORM = new RegExp(`^(${FIELD})\\.(${FIELD})(?:-(${PRERELEASE}))?(?:\\+(${BUILD}))?$`);
 
 // shared/distribution.ts
 var SIGNATURE_ALGORITHM = "ed25519";

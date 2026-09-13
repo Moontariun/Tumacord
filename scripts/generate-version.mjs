@@ -89,16 +89,27 @@ export function generate() {
 /**
  * Os campos do `package.json` que precisam acompanhar a versão do produto.
  *
- * `buildNumber` é a revisão de manutenção. Ele é o quarto campo da versão
- * numérica do Windows, e sem ele `0.9.9-1` e `0.9.9` viram o mesmo número.
- * `buildVersion` é fixado para o electron-builder não montar `0.9.9-1.1`
- * concatenando os dois.
+ * `buildNumber` é o quarto campo da versão numérica do Windows, e sob SemVer
+ * ele é sempre zero: duas versões publicáveis nunca compartilham o mesmo
+ * `major.minor.patch`, então o quarto campo não precisa desempatar nada. Ele
+ * continua sendo escrito em vez de omitido porque o electron-builder preenche
+ * o campo ausente com um número que varia entre máquinas, e duas builds da
+ * mesma versão sairiam com números diferentes.
+ *
+ * `buildVersion` é fixado para o electron-builder não concatenar os dois.
+ *
+ * **Uma pré-versão é recusada aqui.** `windowsVersion` explica por quê: ela
+ * não tem número de Windows que ordene certo, e descobrir isso depois de os
+ * binários prontos é tarde.
  */
 export { MODULES as MODULOS };
 
 export function packageFields(version) {
-  const { revision, text } = readVersion(version);
-  return { buildNumber: String(revision), buildVersion: text };
+  const { text, isPrerelease } = readVersion(version);
+  if (isPrerelease) {
+    throw new Error(`${text} é uma pré-versão e não tem número de Windows. Publique-a no canal de teste sem instalador de Windows, ou use uma versão final.`);
+  }
+  return { buildNumber: '0', buildVersion: text };
 }
 
 // A leitura da versão pela implementação única, sem depender de bundler: o

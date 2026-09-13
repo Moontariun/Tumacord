@@ -28,12 +28,12 @@ const catalog = {
         entries: [
           entry('0.9.9'),
           entry('0.9.8'),
-          // Uma revisão de manutenção: a correção da 0.9.8, que vem *depois* dela.
-          entry('0.9.8-1'),
+          // Uma pré-versão: sob SemVer ela vem *antes* da final de mesmo número.
+          entry('0.9.8-rc.1'),
           entry('0.8.10'),
           entry('0.8.9', { state: 'withdrawn', withdrawn: { reason: 'as resoluções e o FPS da transmissão saem errados' } }),
-          // `rc` deixou de fazer parte da convenção de versão na 0.9.9-1: quem é
-          // ensaio passou a ser decidido pelo canal, que é um campo separado.
+          // Desde a 0.10.0 `rc` é versão válida — o que decide quem é ensaio
+          // continua sendo o canal, e este catálogo é o estável.
           { releaseId: 'rel_stable_rc', version: '0.9.0-rc1', state: 'published' },
           { releaseId: 'rel_nao_versao', version: 'nao-e-versao', state: 'published' },
           // Sem identificador o executor não teria o que aplicar.
@@ -48,26 +48,27 @@ const catalog = {
 test('0.8.10 é maior que 0.8.9, e a lista vem da mais nova para a mais antiga', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1, 'a comparação textual diria o contrário');
   assert.deepEqual(offeredReleases(catalog, '0.9.8').map((item) => item.tag),
-    ['v0.9.9', 'v0.9.8-1', 'v0.9.8', 'v0.8.10', 'v0.8.9']);
+    ['v0.9.9', 'v0.9.8', 'v0.9.8-rc.1', 'v0.9.0-rc1', 'v0.8.10', 'v0.8.9']);
 });
 
-test('pré-versão, o que não é versão e o que não tem identificador ficam de fora', () => {
+test('o que não é versão e o que não tem identificador ficam de fora', () => {
   const offers = offeredReleases(catalog, '0.9.8');
-  assert.equal(offers.some((item) => item.version.includes('rc1')), false, 'rc não é versão desta convenção');
   assert.equal(offers.some((item) => item.releaseId === 'rel_nao_versao'), false);
   assert.equal(offers.some((item) => item.version === '0.9.7'), false, 'sem releaseId não há o que aplicar');
 });
 
 test('cada oferta carrega o identificador exato com que o executor a aplica', () => {
   const offers = offeredReleases(catalog, '0.9.8');
-  assert.equal(offers.find((item) => item.tag === 'v0.9.8-1')?.releaseId, 'rel_stable_0-9-8-1');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.8-rc.1')?.releaseId, 'rel_stable_0-9-8-rc-1');
 });
 
-// A regressão que dá nome à 0.9.9-1: o painel precisa oferecer a revisão de
-// manutenção como o passo *seguinte*, e não como um passo atrás.
-test('a revisão de manutenção é oferecida acima da versão que ela corrige', () => {
+// O sentido do sufixo mudou na 0.10.0, e o painel precisa mostrar isso: uma
+// pré-versão do mesmo número NÃO é um passo à frente. Quem está na 0.9.8 não
+// pode ver a 0.9.8-rc.1 marcada como novidade.
+test('uma pré-versão fica abaixo da versão final de mesmo número', () => {
   const offers = offeredReleases(catalog, '0.9.8');
-  assert.equal(offers.find((item) => item.tag === 'v0.9.8-1')?.newer, true, '0.9.8-1 é mais nova que 0.9.8');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.8-rc.1')?.newer, false, '0.9.8-rc.1 vem antes da 0.9.8');
+  assert.equal(offers.find((item) => item.tag === 'v0.9.9')?.newer, true);
   assert.equal(offers.find((item) => item.tag === 'v0.9.8')?.current, true);
 });
 

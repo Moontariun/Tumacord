@@ -1,186 +1,129 @@
 # Versionamento
 
-A convenção de versão do Tumacord, por escrito, porque ela **não é SemVer** e
-a diferença muda quem recebe qual atualização.
+A convenção de versão do Tumacord é **SemVer 2.0.0**, desde a 0.10.0. Este
+documento diz o que isso significa aqui, o que mudou em relação à convenção
+própria que existia até a 0.9.9-2, e por que a troca não deixou ninguém para
+trás.
 
 ---
 
 ## A regra
 
 ```text
-0.9.9 < 0.9.9-1 < 0.9.9-2 < 0.9.9-10 < 0.9.10 < 1.0.0 < 1.0.0-1
+0.9.9 < 0.9.10 < 0.10.0 < 1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-beta < 1.0.0-rc.1 < 1.0.0 < 1.0.1
 ```
 
-Uma versão é a tupla `(major, minor, patch, revision)`:
+`MAJOR.MINOR.PATCH`, com pré-versão opcional depois de `-` e metadado de build
+opcional depois de `+`. É a especificação pública, sem dialeto.
 
-| Campo | Onde aparece | Sem ele |
+| Parte | Exemplo | O que é |
 |---|---|---|
-| `major` | `**0**.9.9-1` | obrigatório |
-| `minor` | `0.**9**.9-1` | obrigatório |
-| `patch` | `0.9.**9**-1` | obrigatório na forma canônica |
-| `revision` | `0.9.9-**1**` | é zero |
+| `major` | **1**.2.3 | quebra compatibilidade |
+| `minor` | 1.**2**.3 | funcionalidade nova, compatível |
+| `patch` | 1.2.**3** | correção, compatível |
+| pré-versão | 1.2.3-**rc.1** | vem **antes** da 1.2.3 |
+| build | 1.2.3+**abc** | não participa da ordem |
 
-O sufixo `-N` é a **revisão de manutenção**: um inteiro positivo que vem
-*depois* da versão que ele corrige. `0.9.9-1` é a correção da 0.9.9, não um
-ensaio para ela.
-
----
-
-## Por que não é SemVer
-
-No SemVer, `0.9.9-1` é uma **pré-versão** e vem *antes* de `0.9.9` —
-exatamente o contrário do que este projeto precisa. Se a ordenação de SemVer
-valesse aqui, quem estivesse na 0.9.9 nunca receberia a 0.9.9-1: o aplicativo
-concluiria que já está numa versão mais nova.
-
-Foi o que aconteceu. Até a 0.9.9 a regra de ordenação estava escrita quatro
-vezes — no aplicativo, no servidor e em dois scripts — e as cópias divergiram.
-
-**Por isso:**
-
-- nenhum comparador de SemVer decide nada neste projeto;
-- nenhuma ordenação alfabética, tampouco — ela diria que `0.8.9` é maior que
-  `0.8.10`, e esta numeração já passou por `0.7.10` e `0.7.11`;
-- a implementação é **uma só**: [`shared/version.ts`](../shared/version.ts).
-  A adaptação CJS que o Electron precisa é gerada por
-  `scripts/generate-version.mjs`, e `tests/version.test.ts` falha se as duas
-  divergirem.
-
-> Uma biblioteca de atualização que ordene por SemVer precisa de adaptação
-> explícita antes de ser adotada — e a adaptação precisa ser testada com os
-> vetores desta página.
+**Uma correção da 0.9.9 chama-se 0.9.10.** Não `0.9.9-1`.
 
 ---
 
-## O que não faz parte
+## O que mudou, e o que custou
 
-`alpha`, `beta`, `rc` e `+build` **não são versões deste projeto**. Uma
-etiqueta como `v0.9.9-rc1` é recusada na leitura, no CI e na publicação.
+Até a 0.9.9-2 o sufixo `-N` era a **revisão de manutenção** e vinha *depois* da
+versão que corrigia: `0.9.9-1` era a correção da 0.9.9. Sob SemVer isso se
+inverte — `0.9.9-1` passa a ser uma pré-versão da 0.9.9, e portanto anterior a
+ela.
 
-O motivo é a ambiguidade: misturar as duas convenções obrigaria a ler o mesmo
-`-1` como "antes" num caso e "depois" no outro, e a leitura certa dependeria de
-adivinhar a intenção de quem marcou a etiqueta.
+A inversão é real e é o preço declarado da troca. O que ela **não** faz é
+deixar alguém sem atualização, por um motivo aritmético:
 
-**Quem é ensaio é decidido pelo canal**, que é um campo separado e explícito do
-catálogo: `stable` ou `test`. Uma versão de ensaio tem um número normal e mora
-no canal de ensaio.
+```text
+0.10.0 > 0.9.9-1     pela regra antiga   ✓
+0.10.0 > 0.9.9-1     pela regra nova     ✓
+```
 
----
+As cópias instaladas em campo estão na 0.9.9-1 e leem pela regra antiga; as
+novas leem por esta. Como `0.10.0` é maior nas duas, a 0.10.0 alcança todo
+mundo. `tests/version.test.ts` fixa exatamente isso, para que a próxima pessoa
+que mexer na ordenação descubra o requisito antes de quebrá-lo.
 
-## Forma canônica
-
-| Escrita | Aceita como entrada? | Forma canônica |
-|---|---|---|
-| `0.9.9-1` | sim | `0.9.9-1` |
-| `v0.9.9-1` | sim | `0.9.9-1` |
-| `V0.9.9-1` | sim | `0.9.9-1` |
-| ` 0.9.9-1 ` | sim | `0.9.9-1` |
-| `1.0` | sim, **só como entrada** | `1.0.0` |
-| `01.0.0` | **não** | — |
-| `0.9.9-01` | **não** | — |
-| `0.9.9-0` | **não** | — |
-| `0.9.9-rc1` | **não** | — |
-| `1.0.0+build7` | **não** | — |
-
-Zeros à esquerda são recusados porque duas escritas para a mesma versão
-seriam duas etiquetas apontando para o mesmo lugar — e é assim que se publica
-conteúdo diferente sob o mesmo número sem ninguém notar.
-
-**Limites:** cada campo vai até **65535**. O limite não é estético: a versão
-numérica do Windows tem quatro campos de 16 bits, e recusar na leitura é melhor
-do que descobrir no empacotamento que a etiqueta publicada não tem
-representação no instalador — quando os binários já foram feitos.
+A inversão só voltaria a machucar se uma versão nova usasse `-N` para dizer
+"depois". Não use. Use o `patch`.
 
 ---
 
-## Entrada malformada é erro
+## Pré-versão e canal são coisas diferentes
 
-Comparar um texto que não é uma versão **lança**. Ele não é "igual" a coisa
-nenhuma.
+Uma pré-versão diz o que o **número** é. O canal (`stable`, `test`) diz para
+**quem** ele é oferecido. São perguntas separadas e ficam em campos separados.
 
-A versão anterior devolvia `0` para lixo, e `0` quer dizer "são a mesma
-versão": uma entrada corrompida do catálogo fazia o cliente concluir que já
-estava em dia.
+Publicar `1.0.0-rc.1` no canal estável é possível, é quase sempre um engano, e
+por isso o publicador **recusa** sem `--aceitar-pre-versao`:
 
----
+```bash
+node tools/publisher/publish.mjs catalog --manifest /tmp/manifest.json --channel test
+```
 
-## A versão numérica do Windows
-
-`0.9.9` vira `0.9.9.0` e `0.9.9-1` vira `0.9.9.1`.
-
-**Isto precisa ser configurado, e não acontece sozinho.** Com `version` =
-`0.9.9-1`, o electron-builder produz `0.9.9.0` — o **mesmo número** da 0.9.9 —
-porque ele lê `parseInt("9-1")` como 9 e preenche o quarto campo com o número
-de build, que é zero por padrão. Duas versões diferentes com o mesmo número
-fazem o Windows tratar a atualização como reinstalação da mesma coisa.
-
-O `scripts/generate-version.mjs` deriva `build.buildNumber` e `build.buildVersion`
-do `package.json` a partir da versão do produto. `tests/version.test.ts`
-verifica isso **contra o electron-builder de verdade**, e não contra uma
-suposição sobre o que ele faz.
-
-O componente nativo de áudio segue a mesma regra, em
-`native/windows/audio-helper/build.ps1`.
+O motivo não é só higiene. Veja a seção do Windows.
 
 ---
 
-## Etiquetas e publicação
+## O quarto campo, e o Windows
 
-A etiqueta publicada é `v` + forma canônica: `v0.9.9`, `v0.9.9-1`, `v1.0.0`.
+A versão numérica do Windows tem quatro campos de 16 bits. Sob SemVer o quarto
+é sempre **zero**: duas versões publicáveis nunca compartilham o mesmo
+`major.minor.patch`, então não há o que desempatar.
 
-O CI recusa etiqueta fora da convenção **antes** de publicar. E ele não infere
-canal pelo formato: até a 0.9.9, toda etiqueta com hífen era marcada como
-prerelease, o que rebaixaria justamente a correção mais estável que existe no
-momento em que sai. O canal vem de `TUMACORD_CANAL`, que é explícito.
+**Uma pré-versão não tem número de Windows.** `1.2.3-rc.1` teria de virar um
+número *menor* que `1.2.3.0`, e não existe número menor com quatro campos não
+negativos terminando em zero. Se as duas saíssem como `1.2.3.0`, o Windows
+trataria a troca da rc pela final como reinstalação da mesma coisa — e quem
+instalou a rc ficaria preso nela.
 
-**Um número já publicado não volta a ser usado para conteúdo diferente.**
-Reaproveitar `0.9.9-1` para outra release faria metade do grupo estar numa
-0.9.9-1 e a outra metade noutra, com o mesmo nome, e sem jeito de saber qual é
-qual olhando a versão. O serviço de distribuição recusa isso na publicação.
+Por isso `windowsVersion()` **lança** para pré-versão, e
+`scripts/generate-version.mjs` recusa gerar os campos do electron-builder para
+uma. O erro aparece antes de qualquer binário existir, e não na máquina de quem
+instalou.
 
----
-
-## Downgrade
-
-O aplicativo **nunca** oferece uma versão mais antiga do que a instalada, e
-nunca aplica uma sozinho. Voltar atrás é uma operação legítima — mas é uma
-decisão de quem opera, com autorização, e não algo que um catálogo possa
-provocar.
-
-Retirar uma versão aumenta a sequência do catálogo sem oferecer nada novo. A
-sequência do catálogo e a ordem da versão do produto respondem perguntas
-diferentes: uma diz "este catálogo é mais recente", a outra diz "esta build é
-mais nova".
+Pré-versão de Windows se distribui como portátil, ou não se distribui.
 
 ---
 
-## Versões bloqueadas
+## Onde a regra mora
 
-| Versão | Motivo | Desde |
-|---|---|---|
-| `0.8.9` | as resoluções e o FPS da transmissão saem errados | embutido no aplicativo |
+`shared/version.ts` é a **única** implementação. O aplicativo, o servidor, o
+publicador, os scripts e os testes leem daqui.
 
-A lista embutida resolve o passado: uma versão que já estava quebrada quando a
-cópia foi compilada. O futuro é resolvido pelo **catálogo assinado**, que essa
-lista, por definição, não conhece.
+O processo principal do Electron carrega `desktop/*.cjs` sem bundler e não
+consegue importar TypeScript, então existe uma segunda cópia em CJS — mas ela é
+**gerada** por `scripts/generate-version.mjs`, e `tests/version.test.ts` falha
+se as duas divergirem. Antes da 0.9.9-1 a regra estava escrita quatro vezes à
+mão, e as cópias divergiram: é o defeito que a geração existe para impedir.
 
-Retiradas novas moram só no catálogo. Até a 0.9.9 elas eram declaradas por um
-marcador em comentário de HTML nas notas da Release — uma segunda autoridade
-sobre o que está retirado, e a segunda autoridade é sempre a que alguém
-consegue forjar.
+```bash
+node scripts/generate-version.mjs           # escreve
+node scripts/generate-version.mjs --check   # só confere (CI)
+```
 
 ---
 
-## Onde a regra é exercida
+## O que é recusado, e por quê
 
-| Consumidor | Como |
+| Recusa | Motivo |
 |---|---|
-| aplicativo (Electron) | `desktop/version.generated.cjs`, gerado da fonte |
-| servidor dedicado | `shared/serverUpdate.ts`, que importa a fonte |
-| serviço de distribuição | `shared/distribution.ts`, que importa a fonte |
-| empacotamento Windows | `scripts/generate-version.mjs` → `package.json` |
-| componente nativo | `native/windows/audio-helper/build.ps1` |
-| CI | `desktop/version.generated.cjs`, no passo de publicar |
+| `01.0.0`, `1.0.0-rc.01` | zero à esquerda: duas escritas para a mesma versão são duas etiquetas para o mesmo lugar |
+| `1.2.3.4` | SemVer tem três campos; um quarto não tem como ser ordenado |
+| `1.0.0-`, `1.0.0+` | sufixo anunciado e vazio |
+| acima de 65535 em qualquer campo | não cabe no campo de 16 bits do Windows |
+| texto que não é versão | comparar lixo **lança**; devolver `0` diria "são a mesma versão", e foi assim que uma entrada corrompida do catálogo já convenceu um cliente de que estava em dia |
 
-Os vetores desta página são exercidos em `tests/version.test.ts`, e os mesmos
-vetores passam pela fonte **e** pela adaptação gerada.
+`1.0` é aceito **como entrada** e normalizado para `1.0.0`, porque gente
+escreve `1.0`. Ele nunca sai assim.
+
+---
+
+## A etiqueta publicada
+
+`v` seguido da forma canônica: `v0.10.0`, `v1.0.0-rc.1`. O `v` é aceito na
+entrada em qualquer lugar que leia versão, e nunca aparece na forma canônica.

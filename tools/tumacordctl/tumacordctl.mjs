@@ -13,7 +13,7 @@
 // momento em que o comando roda.
 
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { chooseInstallation, dataMount, discoverInstallations } from './lib/discovery.mjs';
@@ -22,10 +22,15 @@ import {
   dropVolume, installationIdOf, planBackup, rehearsalVolumeName, restoreToNewVolume, sha256OfFile,
 } from './lib/backup.mjs';
 import { JobStore } from './lib/jobs.mjs';
+import { commitForTag, downloadAsset, readToken, releaseByTag, uploadedAssets } from './lib/github.mjs';
+// Os nomes de arquivo de cada alvo têm uma definição só, no publicador. Duas
+// listas de padrões divergiriam, e a divergência apareceria como "faltou o
+// pacote de Windows" numa release que tem o pacote de Windows.
+import { patternsFor } from '../publisher/lib/packages.mjs';
 import { planApply, planRollback, releaseIsApproved, validateRef } from './lib/deploy.mjs';
 import { previousDeployment, runApply, runBackup, runRollback } from './lib/operations.mjs';
 
-const TOOL_VERSION = '0.9.9-1';
+const TOOL_VERSION = '0.10.0';
 
 const HELP = `tumacordctl ${TOOL_VERSION} — operação da distribuição do Tumacord
 
@@ -38,6 +43,9 @@ COMANDOS
                             numa VPS nova ou antes de qualquer operação.
   install show              Mostra a instalação descoberta: projeto, serviços, mounts
                             reais, portas e nomes das variáveis (sem os valores).
+  releases fetch            Busca no GitHub privado os pacotes de uma etiqueta e os
+                            guarda no armazenamento desta VPS. Não assina nada: ele
+                            escreve um recibo, que o ambiente de publicação assina.
   releases import           Importa uma release já assinada para o serviço.
   releases publish          Promove o catálogo assinado. Só depois de todas as
                             verificações.
@@ -398,6 +406,8 @@ async function devicesCommand(positionals, options) {
 async function releasesCommand(positionals, options) {
   const sub = positionals[0] ?? '';
 
+  if (sub === 'fetch') return await releasesFetch(positionals, options);
+
   if (sub === 'import') {
     const file = typeof options.manifest === 'string' ? options.manifest : '';
     if (!file) {
@@ -449,8 +459,178 @@ async function releasesCommand(positionals, options) {
     return 1;
   }
 
-  console.error(`Subcomando desconhecido: ${sub || '(nenhum)'}. Use import, publish ou withdraw.`);
+  console.error(`Subcomando desconhecido: ${sub || '(nenhum)'}. Use fetch, import, publish ou withdraw.`);
   return 1;
+}
+
+/**
+ * Busca no GitHub privado os pacotes de uma etiqueta.
+ *
+ * O que este comando faz: baixa, confere tamanho e SHA-256, guarda no
+ * armazenamento privado desta VPS e escreve um **recibo**.
+ *
+ * O que ele **não** faz: assinar. A chave privada não vive aqui, e é isso que
+ * faz invadir esta máquina não dar a ninguém a capacidade de entregar um
+ * binário como oficial. O recibo é levado ao ambiente de publicação, que monta
+ * e assina o manifesto a partir dele.
+ *
+ * **O recibo é a palavra desta máquina.** Quem assina a partir dele está
+ * assinando resumos que não calculou. É uma troca deliberada — sem ela, os
+ * bytes teriam de ser baixados duas vezes —, e ela não é gratuita: um servidor
+ * comprometido não consegue publicar nada (o catálogo é assinado fora dele),
+ * mas consegue induzir alguém a assinar o resumo errado. Quem quiser fechar
+ * essa fresta baixa os pacotes também no ambiente de publicação e monta o
+ * manifesto pela pasta, como sempre se pôde fazer.
+ */
+async function releasesFetch(positionals, options) {
+  const tag = positionals[1] ?? (typeof options.tag === 'string' ? options.tag : '');
+  if (!tag) {
+    console.error('Uso: tumacordctl releases fetch v0.10.0 [--repo dono/nome] [--out recibo.json]');
+    console.error('A etiqueta é exata, e nunca uma branch: "a mais recente" muda de significado entre ler e rodar.');
+    return 1;
+  }
+  const repo = typeof options.repo === 'string' ? options.repo : (process.env.TUMACORD_REPO || 'Moontariun/Tumacord');
+  const token = await readToken({ tokenFile: typeof options['token-file'] === 'string' ? options['token-file'] : '' });
+  if (!token) {
+    console.error('Sem token do GitHub. Ponha-o em /etc/tumacord/github-token (modo 600) ou em TUMACORD_GITHUB_TOKEN.');
+    console.error('Um PAT fine-grained com Contents: read neste repositório basta — não use token de conta inteira.');
+    return 1;
+  }
+
+  // O armazenamento é descoberto pelo mount real, e não por nome de volume
+  // presumido: o nome quem escolhe é o operador, o destino é o que o serviço
+  // realmente usa.
+  const discovery = await discoverInstallations();
+  const choice = chooseInstallation(discovery.installations, typeof options.project === 'string' ? options.project : '');
+  if (!choice.ok) { console.error(choice.error); return 1; }
+  const services = choice.installation.services ?? {};
+  // Pelo nome do serviço no Compose, com uma busca de reserva para quem
+  // renomeou: o que identifica o serviço é ele ter o `/pacotes` montado.
+  const updates = services['tumacord-updates']
+    ?? Object.values(services).find((service) => (service.mounts ?? []).some((mount) => mount.destination === '/pacotes'));
+  const packages = updates ? dataMount(updates, '/pacotes') : null;
+  if (!packages?.source) {
+    console.error('Não achei o armazenamento de pacotes (/pacotes) do serviço de atualizações.');
+    return 1;
+  }
+
+  let release;
+  let commit;
+  try {
+    release = await releaseByTag({ repo, tag, token });
+    commit = await commitForTag({ repo, tag, token });
+  } catch (failure) {
+    console.error(String(failure?.message ?? failure));
+    return 1;
+  }
+  if (release.draft) {
+    console.error(`${tag} ainda é rascunho no GitHub. Publique a Release antes de buscá-la.`);
+    return 1;
+  }
+
+  const version = String(tag).replace(/^v/i, '');
+  const specs = patternsFor(version);
+  const disponiveis = uploadedAssets(release);
+  const escolhidos = [];
+  const faltando = [];
+  for (const spec of specs) {
+    const encontrados = disponiveis.filter((asset) => spec.pattern.test(asset.name));
+    if (!encontrados.length) { faltando.push(spec.installKind); continue; }
+    if (encontrados.length > 1) {
+      // Escolher entre dois seria adivinhar, e o erro apareceria na máquina de
+      // quem instalou.
+      console.error(`Dois arquivos para ${spec.installKind}: ${encontrados.map((a) => a.name).join(', ')}.`);
+      return 1;
+    }
+    escolhidos.push({ spec, asset: encontrados[0] });
+  }
+  if (!escolhidos.length) {
+    console.error(`A release ${tag} não traz nenhum pacote com os nomes desta versão (${version}).`);
+    console.error(`Arquivos na release: ${disponiveis.map((a) => a.name).join(', ') || 'nenhum'}.`);
+    return 1;
+  }
+
+  const relativo = `releases/${version}`;
+  const destinoBase = path.join(packages.source, relativo);
+  const arquivos = [];
+  for (const { spec, asset } of escolhidos) {
+    const destination = path.join(destinoBase, asset.name);
+    process.stdout.write(`  baixando ${asset.name} (${(asset.size / 1048576).toFixed(1)} MB)… `);
+    let resultado;
+    try {
+      resultado = await downloadAsset({ repo, asset, token, destination });
+    } catch (failure) {
+      console.log('falhou');
+      console.error(String(failure?.message ?? failure));
+      return 1;
+    }
+    console.log('ok');
+    arquivos.push({
+      fileName: asset.name,
+      artifactId: `${spec.installKind}-${spec.arch}`,
+      installKind: spec.installKind,
+      os: spec.os,
+      arch: spec.arch,
+      format: spec.format,
+      size: resultado.size,
+      sha256: resultado.sha256,
+      digestAnunciado: resultado.digestAnunciado,
+      storagePath: `${relativo}/${asset.name}`,
+    });
+  }
+
+  // O serviço roda sem privilégio; os arquivos precisam ser legíveis por ele.
+  await chownParaOServico(destinoBase);
+
+  const recibo = {
+    recibo: 'tumacord-release',
+    repo,
+    tag,
+    version,
+    commit,
+    buscadoEm: new Date().toISOString(),
+    armazenamento: relativo,
+    arquivos,
+    faltando,
+  };
+  const saida = typeof options.out === 'string' ? options.out : '';
+  if (saida) {
+    await writeFile(path.resolve(saida), `${JSON.stringify(recibo, null, 2)}\n`);
+    console.log(`\nRecibo em ${path.resolve(saida)}`);
+  } else {
+    console.log(`\n${JSON.stringify(recibo, null, 2)}`);
+  }
+  console.log(`\n${arquivos.length} pacote(s) de ${version} guardados em ${relativo}, commit ${commit.slice(0, 8)}.`);
+  if (faltando.length) {
+    console.log(`SEM PACOTE para: ${faltando.join(', ')}.`);
+    console.log('Quem estiver nesses formatos verá a versão anunciada e sem botão de aplicar.');
+  }
+  console.log('\nNada foi assinado nem publicado. Leve o recibo ao ambiente de publicação:');
+  console.log('  node tools/publisher/publish.mjs manifest --recibo <recibo.json> --out /tmp/manifest.json');
+  return 0;
+}
+
+/**
+ * Deixa os pacotes legíveis pelo serviço.
+ *
+ * O contêiner roda como uid 1000 e o `tumacordctl` roda como root: um arquivo
+ * escrito aqui nasce de root, e a pasta nasce sem permissão de travessia para
+ * o serviço. Sem isto, o download termina "com sucesso" e o cliente recebe 404
+ * na hora de baixar — que é o tipo de falha que se descobre tarde.
+ */
+async function chownParaOServico(directory) {
+  const { chown, readdir, stat } = await import('node:fs/promises');
+  try {
+    await chown(directory, 1000, 1000);
+    for (const entry of await readdir(directory)) {
+      const alvo = path.join(directory, entry);
+      if ((await stat(alvo)).isFile()) await chown(alvo, 1000, 1000);
+    }
+  } catch (failure) {
+    // Num teste, ou fora do root, isto não vale — e não é motivo para descartar
+    // um download que deu certo. O aviso basta.
+    console.warn(`  (não consegui ajustar o dono de ${directory}: ${failure?.message ?? failure})`);
+  }
 }
 
 // ── Backup ──────────────────────────────────────────────────────────────────

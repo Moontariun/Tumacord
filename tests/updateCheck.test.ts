@@ -79,26 +79,28 @@ const choose = (entries: CatalogEntry[], manifests: ReleaseManifest[], currentVe
 // diria que a 0.8.9 é mais nova que a 0.8.10, e o aplicativo pararia de
 // oferecer atualização exatamente quando ela existisse.
 
-test('0.8.10 é mais nova que 0.8.9, e a revisão vem depois da versão', () => {
+test('0.8.10 é mais nova que 0.8.9, e a pré-versão vem antes da final', () => {
   assert.equal(compareVersions('0.8.10', '0.8.9'), 1);
   assert.equal(compareVersions('v0.9.0', '0.8.10'), 1);
   assert.equal(compareVersions('0.9.0', '0.9.0'), 0);
-  // A convenção da 0.9.9-1: o sufixo numérico é a revisão de manutenção e vem
-  // *depois* da versão que ela corrige. `rc` saiu da convenção — quem é ensaio
-  // é decidido pelo canal, que é um campo separado do catálogo.
-  assert.equal(compareVersions('0.9.0-1', '0.9.0'), 1);
+  // Desde a 0.10.0 a convenção é SemVer: o sufixo é pré-versão e vem *antes*
+  // da versão que ele antecede. Uma correção da 0.9.0 chama-se 0.9.1.
+  assert.equal(compareVersions('0.9.0-1', '0.9.0'), -1);
+  assert.equal(compareVersions('0.9.1', '0.9.0'), 1);
   assert.equal(parseVersion('nada disso'), null);
-  assert.equal(parseVersion('0.9.0-rc1'), null);
+  assert.equal(parseVersion('0.9.0-rc1')?.isPrerelease, true);
 });
 
-// A regressão que dá nome à revisão: quem está na 0.9.9 precisa receber a
-// 0.9.9-1 como atualização, e não como um passo atrás.
-test('a revisão de manutenção é oferecida a quem está na versão que ela corrige', () => {
-  const decision = choose([entry('0.9.9-1')], [manifestFor('0.9.9-1')], '0.9.9');
+// Quem está na 0.9.9 precisa receber a correção dela — que sob SemVer se chama
+// 0.9.10 — e não pode receber uma pré-versão como se fosse um passo à frente.
+test('a correção é oferecida a quem está na versão que ela corrige', () => {
+  const decision = choose([entry('0.9.10')], [manifestFor('0.9.10')], '0.9.9');
   assert.equal(decision.status, 'available');
-  assert.equal(decision.version, '0.9.9-1');
-  // E o contrário não vale: quem já está na revisão não recebe a 0.9.9 de volta.
-  assert.equal(choose([entry('0.9.9')], [manifestFor('0.9.9')], '0.9.9-1').status, 'up-to-date');
+  assert.equal(decision.version, '0.9.10');
+  // E o contrário não vale: quem já está na correção não recebe a 0.9.9 de volta.
+  assert.equal(choose([entry('0.9.9')], [manifestFor('0.9.9')], '0.9.10').status, 'up-to-date');
+  // Nem uma pré-versão do número que a pessoa já tem.
+  assert.equal(choose([entry('0.9.10-rc.1')], [manifestFor('0.9.10-rc.1')], '0.9.10').status, 'up-to-date');
 });
 
 test('nunca se oferece uma versão mais antiga do que a instalada', () => {
@@ -280,9 +282,9 @@ test('um canal vazio não é erro: é estar em dia', () => {
 // documentos para usar um.
 
 test('só a instalada e as acima dela têm manifesto buscado', () => {
-  const catalog = catalogWith([entry('0.8.9'), entry('0.9.9'), entry('0.9.9-1'), entry('1.0.0')]);
+  const catalog = catalogWith([entry('0.8.9'), entry('0.9.9'), entry('0.9.10'), entry('1.0.0')]);
   const wanted = manifestsToFetch({ catalog, currentVersion: '0.9.9' });
-  assert.deepEqual(wanted.map((item) => item.version), ['1.0.0', '0.9.9-1', '0.9.9']);
+  assert.deepEqual(wanted.map((item) => item.version), ['1.0.0', '0.9.10', '0.9.9']);
 });
 
 test('a lista de manifestos tem teto', () => {

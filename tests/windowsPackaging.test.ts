@@ -127,7 +127,12 @@ test('a build do Linux não foi tocada pela do Windows', () => {
   assert.deepEqual(manifest.build.linux.target, ['AppImage', 'tar.gz']);
   assert.equal(manifest.build.linux.icon, 'assets/tumacord-logo.png');
   assert.equal(manifest.build.linux.executableName, 'tumacord');
-  assert.match(manifest.scripts['package:linux'], /electron-builder --linux AppImage tar\.gz/);
+  // O empacotamento passa por `scripts/empacotar.mjs`, que grava a origem das
+  // atualizações antes e a apaga depois. Os alvos continuam sendo os mesmos, e
+  // é lá que eles estão escritos — conferir a tabela é conferir o que roda.
+  assert.match(manifest.scripts['package:linux'], /empacotar\.mjs --linux/);
+  const empacotar = readFileSync(path.join(projectRoot, 'scripts', 'empacotar.mjs'), 'utf8');
+  assert.match(empacotar, /'--linux': \['--linux', 'AppImage', 'tar\.gz'/);
   assert.equal(/build:native:win/.test(manifest.scripts['package:linux']), false, 'o componente do Windows não entra na build do Linux');
 });
 
