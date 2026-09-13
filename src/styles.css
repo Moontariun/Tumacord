@@ -364,6 +364,59 @@ svg { width: 20px; height: 20px; }
   font-size: 8px; font-style: normal; font-weight: 900;
 }
 .stream-viewers-faces i:first-child { margin-left: 0; }
+
+/* O cartão de "já volto", sobre a transmissão de quem saiu um instante.
+   Ele cobre a imagem de propósito: uma tarja discreta num canto seria lida como
+   enfeite, e quem chegasse depois continuaria esperando a pessoa responder. */
+.away-card {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px;
+  padding: 20px; text-align: center;
+  background: var(--away-fundo); backdrop-filter: blur(10px);
+  animation: away-entra .18s ease-out;
+}
+.away-card svg { width: 28px; height: 28px; color: var(--away-tinta); opacity: .9; }
+/* O recado quebra em até três linhas em vez de virar reticências.
+   Com uma linha só, um quadro estreito — quatro pessoas na grade — cortava
+   "Fui buscar café" no meio, e um recado pela metade não é um recado. O teto de
+   48 caracteres é o que garante que três linhas bastam. */
+.away-card strong {
+  max-width: 94%;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  color: var(--away-tinta); font-size: 17px; font-weight: 800; line-height: 1.2; letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+/* Ampliado ou em tela cheia sobra espaço: o recado cresce junto. */
+.video-tile.is-theater .away-card strong,
+.video-tile.is-fullscreen .away-card strong { font-size: 26px; -webkit-line-clamp: 2; }
+.away-card small { color: var(--away-tinta); font-size: 10px; font-weight: 700; opacity: .62; }
+@keyframes away-entra { from { opacity: 0; } to { opacity: 1; } }
+
+/* Os temas. Um conjunto fechado, e é por isso que nenhuma cor precisa
+   atravessar a rede: o que viaja é o NOME, e a cor mora aqui. */
+.tema-violeta { --away-fundo: linear-gradient(150deg, rgba(48,32,104,.93), rgba(20,16,40,.95)); --away-tinta: #d9cfff; }
+.tema-verde   { --away-fundo: linear-gradient(150deg, rgba(22,74,52,.93), rgba(12,30,24,.95)); --away-tinta: #b6f0d0; }
+.tema-ambar   { --away-fundo: linear-gradient(150deg, rgba(94,66,16,.93), rgba(34,26,12,.95)); --away-tinta: #f7dfa8; }
+.tema-tomate  { --away-fundo: linear-gradient(150deg, rgba(96,30,34,.93), rgba(34,14,16,.95)); --away-tinta: #ffc4c2; }
+.tema-grafite { --away-fundo: linear-gradient(150deg, rgba(38,40,50,.94), rgba(16,17,22,.96)); --away-tinta: #d5d8e2; }
+
+/* A configuração do aviso. */
+.away-settings { display: grid; gap: 10px; margin-top: 14px; }
+.away-field { display: grid; grid-template-columns: 62px minmax(0,1fr) auto; align-items: center; gap: 9px; }
+.away-field > span { color: #9698a8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.away-field input { padding: 9px 11px; border: 1px solid #33354a; border-radius: 8px; background: #1b1c26; color: white; font-size: 12px; }
+.away-field input:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.away-field small { color: #6f7280; font-size: 9px; font-variant-numeric: tabular-nums; }
+.away-themes { display: flex; flex-wrap: wrap; gap: 7px; }
+.away-swatch {
+  padding: 7px 11px; border: 1px solid transparent; border-radius: 9px;
+  background: var(--away-fundo); color: var(--away-tinta);
+  font-size: 10px; font-weight: 800;
+}
+.away-swatch.is-chosen { border-color: currentColor; box-shadow: 0 0 0 2px rgba(255,255,255,.09); }
+/* A prévia é do tamanho real do cartão: escolher cor olhando uma bolinha não
+   responde "como isto vai ficar sobre a minha transmissão". */
+.away-preview { position: relative; min-height: 130px; border-radius: 12px; overflow: hidden; background: linear-gradient(145deg, #242633, #1b1c26); }
 .video-tile:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; }
 .video-tile:fullscreen video { object-fit: contain; }
 .video-actions { position: absolute; right: 9px; top: 9px; z-index: 4; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }

@@ -87,7 +87,7 @@ O instalador atende **Fedora, CachyOS/Arch, Debian/Ubuntu e openSUSE**: ele reco
 Para instalar ou atualizar compilando o código mais recente:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/espectadores-e-som-v0.11.0/scripts/install-v0.11.0.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/ja-volto-v0.12.0/scripts/install-v0.12.0.sh | bash
 ```
 
 Este comando instala a v0.9.9-1 a partir da branch separada `0.9.9-1`. As versões anteriores permanecem isoladas em suas próprias branches e não devem mais ser usadas.
@@ -99,7 +99,7 @@ O script baixa primeiro um bootstrap temporário e então clona/compila exatamen
 Para instalar outra branch, use o instalador genérico e passe o ref depois de `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/espectadores-e-som-v0.11.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
+curl -fsSL https://raw.githubusercontent.com/Moontariun/Tumacord/release/ja-volto-v0.12.0/scripts/install-from-github.sh | bash -s -- nome-da-branch
 ```
 
 ### Atualização pelo próprio aplicativo

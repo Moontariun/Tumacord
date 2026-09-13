@@ -106,6 +106,22 @@ export interface VoiceState extends PublicUser {
    * por isso não custa nem um evento novo nem uma consulta.
    */
   watching: string;
+  /**
+   * O recado de "já volto" desta pessoa, ou vazio quando ela está presente.
+   *
+   * Vazio é o estado normal, e é o que faz o cartão sumir: um campo separado
+   * de "está ausente" poderia discordar do texto, e duas verdades sobre a mesma
+   * coisa acabam divergindo.
+   */
+  away: string;
+  /**
+   * O nome do tema do cartão. Um nome, e nunca uma cor.
+   *
+   * Cor vinda da rede terminaria num atributo `style`. Aqui viaja uma etiqueta
+   * que o receptor procura numa lista fechada; o que não estiver na lista cai
+   * no padrão em vez de virar CSS.
+   */
+  awayTheme: string;
 }
 
 export interface ServerSnapshot {

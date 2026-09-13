@@ -1,5 +1,27 @@
 # Histórico de versões
 
+## 0.12.0 — "já volto" sobre a transmissão, e o silêncio que não se perde
+
+<!-- tumacord:resumo -->
+Um cartão de "já volto" que aparece sobre a sua transmissão quando você precisa sair um instante, com texto e cor que você escolhe. E o silêncio de uma pessoa passou a sobreviver a ela sair e voltar da call.
+
+**O aviso de "já volto"**
+
+- Um botão na barra da call põe um cartão sobre a **sua** transmissão. Quem está assistindo vê o recado no lugar da tela, e sabe que você saiu — em vez de continuar esperando uma resposta que não vem.
+- O texto é seu, configurável em Voz e vídeo, com teto de 48 caracteres. Ele quebra em até três linhas em vez de virar reticências: com uma linha só, um quadro estreito cortava "Fui buscar café" no meio, e um recado pela metade não é um recado.
+- Cinco temas de cor, com prévia do tamanho real do cartão. Escolher cor olhando uma bolinha não responde "como isto vai ficar sobre a minha transmissão".
+- **Só o texto e o NOME do tema atravessam a rede — nunca uma cor.** Cor vinda de fora terminaria num atributo `style`, que é onde não se coloca entrada de terceiro. O receptor procura o nome numa lista fechada, e o que não estiver nela cai no padrão em vez de virar CSS. O texto é limitado pelo servidor também, e não só pelo cliente.
+- O cartão cobre a imagem de propósito. Uma tarja discreta num canto seria lida como enfeite.
+
+**Silenciar uma pessoa passou a sobreviver a ela sair e voltar**
+
+Dois furos, e nenhum deles estava na preferência — ela sempre foi guardada certo. O problema era aplicá-la:
+
+- **A faixa de áudio era reaberta na saída do elemento de mídia.** Ela é um objeto compartilhado, e reabri-la sempre devolvia o som de alguém que continua mudo: o próximo elemento montado sobre a mesma faixa a herdava ligada. Agora ela só volta a tocar se a pessoa não estiver silenciada.
+- **O silêncio dependia de o peer já estar completo.** Existe um instante, logo depois de alguém entrar, em que o dono da mídia ainda não chegou — e nesse instante o silêncio não encontrava a quem se aplicar. Agora a sala serve de rede de segurança: o `socketId` sempre existe, e o dono é encontrado por ele.
+
+O comportamento continua o mesmo em quem ele afeta: **vale só para você**. A preferência vive nesta máquina, e nada é enviado ao servidor nem à outra pessoa.
+
 ## 0.11.0 — a live diz quem está vendo, e atualizar deixou de pedir convite
 
 <!-- tumacord:resumo -->

@@ -20,6 +20,7 @@ import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSende
 import { intentAfterAnnouncement, intentAfterBroadcasters, mediaBelongsToPeer, pendingWatchRequests } from '../lib/liveSubscription';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
+import { sanitizeAwayMessage, sanitizeAwayTheme } from '../lib/away';
 import { discardPendingScreenAudioPort, openScreenAudioStream, primeScreenAudioBridge, type ScreenAudioStream } from '../lib/screenAudioBridge';
 
 // O sistema desta cópia não muda no meio da sessão, e é ele que decide se
@@ -583,7 +584,22 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   // O servidor valida cada chave de novo, então o tipo aqui é só conveniência
   // de quem escreve a chamada.
-  const publishState = useCallback((patch: Record<string, boolean | number>) => socket?.emit('voice:state', patch), [socket]);
+  const publishState = useCallback((patch: Record<string, boolean | number | string>) => socket?.emit('voice:state', patch), [socket]);
+
+  /**
+   * O aviso de "já volto" desta pessoa.
+   *
+   * Vazio quer dizer presente. O texto e o tema são personalização de quem
+   * avisa — vêm da configuração dela — e por isso viajam junto: o cartão que
+   * os outros veem é o cartão que ela escreveu, e não uma versão reconstruída
+   * em cada máquina.
+   */
+  const [away, setAwayState] = useState('');
+  const setAway = useCallback((message: string, theme: string) => {
+    const recado = sanitizeAwayMessage(message);
+    setAwayState(recado);
+    publishState({ away: recado, awayTheme: sanitizeAwayTheme(theme) });
+  }, [publishState]);
 
   const stopSpeakingMonitor = useCallback(() => {
     const monitor = speakingMonitor.current;
@@ -2676,6 +2692,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // estão assistindo à MINHA transmissão — a pergunta que decide o som de
     // alguém entrando e saindo da sua live.
     selfSocketId: selfId.current,
+    away, setAway,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     screenSource,

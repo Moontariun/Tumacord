@@ -1677,6 +1677,13 @@ io.on('connection', (socket) => {
       // vazio; o teto existe porque o valor vem do cliente e vira estado que
       // todo mundo na sala recebe.
       watching: z.string().max(64).optional(),
+      // O recado aparece na tela de todo mundo na sala, então o teto é do
+      // servidor e não só do cliente: um cliente alterado mandaria um texto de
+      // qualquer tamanho, e o desenho é de uma linha.
+      away: z.string().max(48).optional(),
+      // Um nome de tema, não uma cor. O cliente ainda o procura numa lista
+      // fechada antes de usar — este teto é a primeira barreira, não a única.
+      awayTheme: z.string().max(16).optional(),
     }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
