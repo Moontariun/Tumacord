@@ -1,5 +1,22 @@
 # Histórico de versões
 
+## 0.13.3 — o enlace para de esperar atrás do instantâneo do servidor
+
+<!-- tumacord:resumo -->
+O ping ficava "medindo" e a live demorava a abrir porque a sinalização do WebRTC disputava o socket com um instantâneo completo do servidor, mandado várias vezes por segundo. E o painel de volume deixou de cortar em tela menor e de empurrar a lista.
+
+**Por que o ping demorava, e a live junto**
+
+- `broadcastSnapshot()` monta canais, usuários online e **todas** as salas de voz, e manda para todo mundo conectado — inclusive quem não está em call. Ele é disparado por `voice:state`, e `voice:state` carrega `speaking`: enquanto alguém fala, são vários instantâneos completos por segundo.
+- O custo não é o processador — é a fila. O mesmo socket carrega ofertas, respostas e **candidatos ICE**, que chegam em rajada justamente quando um enlace está subindo. Instantâneo na frente de candidato é enlace que demora a conectar; e enquanto ele não conecta, não há RTT para medir — daí o ping preso em "medindo", e a live que só abre depois.
+- Agora ele sai no máximo uma vez a cada 250 ms. O primeiro pedido depois de um período parado continua saindo **na hora** — entrar num canal não espera —, e o disparo atrasado usa o estado do momento em que roda, então o último estado sempre chega.
+
+**O painel de volume**
+
+- Ele **flutua** sobre a lista em vez de ocupar espaço nela. Abrir o painel de alguém empurrava todo mundo abaixo para baixo, levando embora o que a pessoa estava olhando.
+- E ele deixou de sair cortado em barra estreita. A causa era `flex-basis: 100%` com margens: a base é 100% da caixa do pai e as margens somam por fora. Ancorado por `left`/`right`, a largura passa a ser o que sobra, em qualquer tamanho de tela.
+- Ao abrir perto do fim da lista, ele se traz para a parte visível em vez de nascer fora dela.
+
 ## 0.13.2 — a live parou de dar tela preta
 
 <!-- tumacord:resumo -->

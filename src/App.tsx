@@ -2101,6 +2101,10 @@ function VoiceMemberVolume({ member, volume, muted, onVolume, onMuted, onProfile
   useEffect(() => {
     // O botão que abre o painel fica no mesmo bloco: tratar o bloco inteiro
     // como "dentro" evita fechar e reabrir no mesmo clique.
+    // Flutuando, ele pode nascer fora da parte visível da barra — perto do fim
+    // da lista, ou com a janela baixa. Trazê-lo para dentro é o que evita um
+    // painel que abriu e que ninguém vê.
+    root.current?.scrollIntoView({ block: 'nearest' });
     const entry = root.current?.closest('.voice-member-entry') ?? root.current;
     const onPointerDown = (event: PointerEvent) => {
       if (entry?.contains(event.target as Node)) return;

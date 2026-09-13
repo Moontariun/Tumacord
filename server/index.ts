@@ -1461,8 +1461,53 @@ function snapshot(): ServerSnapshot {
   return { serverName, channels: availableChannels(), onlineUsers: uniqueUsers, voiceRooms: rooms.snapshot() };
 }
 
+/**
+ * O instantâneo do servidor, no máximo uma vez a cada `SNAPSHOT_MIN_MS`.
+ *
+ * ## Por que isto precisa ser contido
+ *
+ * `snapshot()` monta canais, usuários online e **todas** as salas de voz, e o
+ * `io.emit` manda isso para todo mundo conectado — inclusive quem não está em
+ * call nenhuma. Ele é disparado por `voice:state`, e `voice:state` carrega
+ * `speaking`: enquanto alguém fala, são vários instantâneos completos por
+ * segundo para o servidor inteiro.
+ *
+ * O custo não é o CPU — é a fila. Esse mesmo socket carrega a **sinalização
+ * WebRTC**: ofertas, respostas e candidatos ICE, que chegam em rajada
+ * justamente quando um enlace está subindo. Instantâneo na frente de candidato
+ * é enlace que demora a conectar, ping que fica "medindo" e live que demora a
+ * abrir — e piora exatamente no momento em que alguém entra numa transmissão,
+ * porque aí há negociação e mudança de estado ao mesmo tempo.
+ *
+ * ## O que a contenção preserva
+ *
+ * O primeiro pedido depois de um período parado sai **na hora**: quem entra num
+ * canal não espera um quarto de segundo para ver a tela montar. O que é
+ * contido é a rajada — e ela sempre termina com o estado final entregue, porque
+ * o disparo atrasado usa o instantâneo do momento em que ele roda, e não o de
+ * quando foi pedido.
+ */
+const SNAPSHOT_MIN_MS = 250;
+let snapshotTimer: NodeJS.Timeout | null = null;
+let snapshotSentAt = 0;
+
 function broadcastSnapshot(): void {
-  io.emit('server:snapshot', snapshot());
+  // Já há um disparo agendado: ele vai levar o estado mais recente, incluindo
+  // esta mudança. Agendar outro só duplicaria o trabalho.
+  if (snapshotTimer) return;
+  const desde = Date.now() - snapshotSentAt;
+  if (desde >= SNAPSHOT_MIN_MS) {
+    snapshotSentAt = Date.now();
+    io.emit('server:snapshot', snapshot());
+    return;
+  }
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = null;
+    snapshotSentAt = Date.now();
+    io.emit('server:snapshot', snapshot());
+  }, SNAPSHOT_MIN_MS - desde);
+  // Um temporizador pendente não pode segurar o processo no encerramento.
+  snapshotTimer.unref?.();
 }
 
 function refreshProfilePresence(normalizedUsernames: ReadonlySet<string>): void {

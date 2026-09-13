@@ -1014,7 +1014,26 @@ body { background: var(--bg); }
 .voice-member-entry { position: relative; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; }
 .voice-member-mini { flex: 1 1 0; min-width: 0; width: auto; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .voice-member-mini:focus-visible { outline: 2px solid rgba(139,114,255,.65); outline-offset: 1px; }
-.voice-volume-popover { flex: 1 0 100%; position: relative; z-index: 20; display: grid; gap: 9px; margin: 4px 5px 10px 24px; padding: 11px; border: 1px solid rgba(139,114,255,.24); border-radius: 12px; background: #0f1118; box-shadow: 0 14px 32px rgba(0,0,0,.34); }
+/* O painel de volume FLUTUA sobre a lista, e não dentro dela.
+   Duas coisas se resolvem juntas aqui.
+   Abrir o painel empurrava todo mundo abaixo para baixo: a pessoa clicava num
+   nome e a lista inteira pulava, levando embora o que ela estava olhando. Fora
+   do fluxo, nada se mexe.
+   E ele saía cortado numa barra estreita. A causa era `flex-basis: 100%` com
+   margens: a base é 100% da caixa do pai e as margens somam POR FORA dela.
+   Ancorado por `left`/`right`, a largura passa a ser o que sobra — e sobra
+   certo em qualquer largura, sem conta nenhuma para envelhecer. */
+.voice-volume-popover {
+  position: absolute; top: calc(100% + 2px); left: 24px; right: 5px; z-index: 20;
+  box-sizing: border-box; min-width: 0;
+  display: grid; gap: 9px;
+  margin: 0 0 10px; padding: 11px;
+  border: 1px solid rgba(139,114,255,.24); border-radius: 12px;
+  background: #0f1118; box-shadow: 0 14px 32px rgba(0,0,0,.34);
+}
+/* O conteúdo precisa poder encolher: sem isto, um filho de grade recusa ficar
+   menor que o próprio conteúdo e estufa o painel de volta para fora. */
+.voice-volume-popover > * { min-width: 0; }
 .voice-volume-popover > header { display: flex; align-items: center; gap: 8px; cursor: default; }
 .voice-volume-popover > header > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .voice-volume-popover > header strong { overflow: hidden; color: #eef0f5; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1022,7 +1041,7 @@ body { background: var(--bg); }
 .voice-volume-popover > header button { width: 25px; height: 25px; display: grid; place-items: center; padding: 0; border-radius: 7px; background: rgba(255,255,255,.045); color: #858b9b; }
 .voice-volume-popover > header button:hover { background: rgba(255,255,255,.09); color: white; }
 .voice-volume-popover > header svg { width: 13px; height: 13px; }
-.voice-volume-popover label { display: grid; grid-template-columns: minmax(0,1fr) 35px; align-items: center; gap: 6px; color: #aeb3c0; }
+.voice-volume-popover label { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) 35px; align-items: center; gap: 6px; color: #aeb3c0; }
 .voice-volume-popover label > span { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 750; }
 .voice-volume-popover label svg { width: 13px; height: 13px; color: #a99aff; }
 .voice-volume-popover label output { color: #aeb3bf; font-size: 10px; text-align: right; }

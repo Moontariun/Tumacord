@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-branch="release/live-estavel-v0.13.2"
+branch="release/sinalizacao-e-responsivo-v0.13.3"
 installer_url="https://raw.githubusercontent.com/Moontariun/Tumacord/${branch}/scripts/install-from-github.sh"
 bootstrap_file="$(mktemp "${TMPDIR:-/tmp}/tumacord-bootstrap.XXXXXX.sh")"
 trap 'rm -f -- "$bootstrap_file"' EXIT
