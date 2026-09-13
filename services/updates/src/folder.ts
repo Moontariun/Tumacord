@@ -263,12 +263,28 @@ export function catalogFrom(manifests: ReleaseManifest[], digestOf: (manifest: R
  *
  * Republicar um catálogo idêntico a cada minuto faria a sequência crescer sem
  * parar e obrigaria todo cliente a rebaixar o que já tinha aceitado. A
- * comparação é sobre o conteúdo — versão, arquivos e resumos —, e não sobre a
- * hora em que a varredura rodou.
+ * comparação é sobre o conteúdo, e não sobre a hora em que a varredura rodou.
+ *
+ * **O caminho entra na conta.** Ele não entrava, e isso quebrou uma instalação
+ * de verdade: os pacotes foram movidos de `releases/<versão>/` para `linux/`
+ * com o mesmo resumo, a comparação disse "nada mudou", e o catálogo continuou
+ * apontando para caminhos que não existiam mais. O download passou a responder
+ * 404 sem nenhum log de erro — porque, do ponto de vista do serviço, nada tinha
+ * acontecido.
+ *
+ * A lição, escrita aqui para não se perder: o que o catálogo PROMETE faz parte
+ * do conteúdo. Se um campo aparece no documento assinado, ele precisa aparecer
+ * na comparação que decide se o documento mudou.
  */
 export function sameContent(left: ReleaseManifest[], right: ReleaseManifest[]): boolean {
   const resumo = (manifests: ReleaseManifest[]) => manifests
-    .map((manifest) => `${manifest.version}:${manifest.artifacts.map((artifact) => `${artifact.artifactId}=${artifact.sha256}`).sort().join(',')}`)
+    .map((manifest) => {
+      const artefatos = manifest.artifacts
+        .map((artifact) => `${artifact.artifactId}=${artifact.sha256}@${artifact.storagePath}:${artifact.fileName}:${artifact.size}`)
+        .sort()
+        .join(',');
+      return `${manifest.version}:${artefatos}`;
+    })
     .sort()
     .join('|');
   return resumo(left) === resumo(right);

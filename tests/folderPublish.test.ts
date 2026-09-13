@@ -244,9 +244,25 @@ test('as chaves são lidas no mesmo formato que o publicador gera', async (conte
 });
 
 test('a comparação de conteúdo ignora a hora e olha os resumos', () => {
-  const base = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x' }] } as never;
-  const outroHorario = { version: '1.0.0', createdAt: 'outro', artifacts: [{ artifactId: 'a', sha256: 'x' }] } as never;
-  const outroResumo = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'y' }] } as never;
+  const base = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'linux/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
+  const outroHorario = { version: '1.0.0', createdAt: 'outro', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'linux/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
+  const outroResumo = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'y', storagePath: 'linux/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
   assert.equal(sameContent([base], [outroHorario]), true);
   assert.equal(sameContent([base], [outroResumo]), false);
+});
+
+// A regressão que quebrou uma instalação de verdade: os pacotes mudaram de
+// `releases/<versão>/` para `linux/` com o MESMO resumo. A comparação disse
+// "nada mudou", o catálogo continuou prometendo o caminho antigo, e o download
+// passou a responder 404 sem nenhum log de erro.
+test('mover o arquivo de pasta é mudança, mesmo com o resumo igual', () => {
+  const antes = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'releases/1.0.0/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
+  const depois = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'linux/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
+  assert.equal(sameContent([antes], [depois]), false, 'o caminho faz parte do que o catálogo promete');
+});
+
+test('renomear o arquivo mantendo o conteúdo também é mudança', () => {
+  const antes = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'linux/a.tar.gz', fileName: 'a.tar.gz', size: 1 }] } as never;
+  const depois = { version: '1.0.0', artifacts: [{ artifactId: 'a', sha256: 'x', storagePath: 'linux/b.tar.gz', fileName: 'b.tar.gz', size: 1 }] } as never;
+  assert.equal(sameContent([antes], [depois]), false);
 });

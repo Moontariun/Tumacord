@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## 0.13.1 — mover um pacote de pasta voltou a contar como mudança
+
+<!-- tumacord:resumo -->
+A comparação que decide se o catálogo mudou não olhava o caminho do arquivo. Mover os pacotes de pasta com o mesmo conteúdo deixava o catálogo apontando para onde eles não estavam mais.
+
+- Foi o que aconteceu ao migrar uma instalação real para a publicação por pasta: os pacotes saíram de `releases/<versão>/` para `linux/`, o resumo continuou o mesmo, e a comparação concluiu "nada mudou". O catálogo seguiu prometendo o caminho antigo e **o download passou a responder 404 sem nenhum log de erro** — do ponto de vista do serviço, nada tinha acontecido.
+- Caminho, nome e tamanho entraram na comparação. A regra que ficou escrita no código: o que o catálogo **promete** faz parte do conteúdo, e todo campo que aparece no documento assinado precisa aparecer na comparação que decide se ele mudou.
+
 ## 0.13.0 — publicar virou largar o arquivo numa pasta
 
 <!-- tumacord:resumo -->
