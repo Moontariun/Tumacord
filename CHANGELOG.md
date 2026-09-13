@@ -1,5 +1,18 @@
 # Histórico de versões
 
+## 0.9.9-2 — o "Assistir" sai de cima da lista
+
+<!-- tumacord:resumo -->
+O botão de assistir a uma live deixou de ocupar uma linha própria embaixo do nome e passou a ficar à direita dele, na mesma linha — como no Discord.
+
+- Cada transmissão que começava acrescentava uma linha à lista de quem está na call, e empurrava todo mundo abaixo para baixo. Com três pessoas transmitindo, a lista crescia três linhas e quem você procurava saía da tela. Agora a lista tem uma linha por pessoa, transmitindo ou não.
+- O rótulo visível encurtou para caber ao lado do nome: "Entrar e assistir" virou "Entrar". A frase inteira continua sendo dita por `title` e passou a ser dita também por `aria-label` — encurtar o que um leitor de tela anuncia teria sido trocar informação por espaço, e não é a mesma economia.
+- Um nome comprido encolhe com reticências em vez de empurrar o botão para a linha de baixo. Isso exigiu `flex-basis: 0` no botão do nome: com a base automática, o navegador prefere quebrar a linha a comprimir o conteúdo, que era exatamente o defeito que esta versão veio desfazer.
+- O painel de volume de cada pessoa continua ocupando uma linha inteira quando é aberto. Ele é o único item da linha que precisa disso, e é por isso que a linha admite quebra.
+- `scripts/gerar-origem.mjs` passou a existir. O `desktop/update-origin.cjs` já o citava em comentário, mas o arquivo não estava no repositório: é ele que grava na build a origem das atualizações e as chaves públicas em que aquela build confia. Sem ele um pacote sai sem saber de onde atualizar, e nenhuma tela do aplicativo configura isso depois.
+
+Nada mudou no que a live faz: o anúncio continua não abrindo nada sozinho na área principal, e quem decide o que ocupa a tela continua sendo quem assiste.
+
 ## 0.9.9-1 — a revisão de manutenção passa a existir, e a ordem para de mentir
 
 <!-- tumacord:resumo -->

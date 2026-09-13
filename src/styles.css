@@ -377,14 +377,16 @@ svg { width: 20px; height: 20px; }
 .stage-fullscreen svg { width: 15px; height: 15px; }
 .stage-grid.is-stage-fullscreen { background: #05060a; border-radius: 0; padding: 12px; }
 
-/* "Assistir", junto da pessoa que está transmitindo.
+/* "Assistir", à direita do nome de quem está transmitindo — na mesma linha,
+   como no Discord. Em linha própria ele empurrava o resto da lista para baixo a
+   cada transmissão que começava, e a lista é por onde se acha gente.
    A live se anuncia aqui e não no meio da tela: a área principal é de quem já
    escolheu o que ver. */
 .voice-member-watch {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; margin: 2px 0 4px; padding: 6px 9px 6px 30px;
+  flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  margin: 0 8px 0 0; padding: 5px 8px;
   border-radius: 7px; background: rgba(125,92,255,.16); color: #c9c0ff;
-  font-size: 9px; font-weight: 800; text-align: left;
+  font-size: 9px; font-weight: 800; white-space: nowrap;
 }
 .voice-member-watch:hover { background: var(--violet); color: white; }
 .voice-member-watch svg { width: 13px; height: 13px; }
@@ -877,10 +879,18 @@ body { background: var(--bg); }
 }
 
 /* Navegação de voz: volume individual aparece sob demanda na barra esquerda. */
-.voice-member-entry { position: relative; min-width: 0; }
-.voice-member-mini { width: calc(100% - 24px); border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+/* A linha de cada pessoa. O botão do nome ocupa o que sobra e o "Assistir" fica
+   à direita; `min-width: 0` nele é o que deixa o nome encurtar com reticências
+   em vez de esticar a linha. `flex-wrap` existe para o popover de volume, que
+   precisa de uma linha inteira — é o `flex-basis: 100%` dele que o manda para
+   baixo, e sem o wrap ele entraria apertado ao lado do nome.
+   A base `0` do botão do nome (`flex: 1 1 0`) não é enfeite: com `auto`, um
+   nome longo faz o navegador QUEBRAR a linha em vez de encolher o nome, e o
+   "Assistir" cai para baixo — exatamente o que esta mudança veio desfazer. */
+.voice-member-entry { position: relative; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; }
+.voice-member-mini { flex: 1 1 0; min-width: 0; width: auto; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .voice-member-mini:focus-visible { outline: 2px solid rgba(139,114,255,.65); outline-offset: 1px; }
-.voice-volume-popover { position: relative; z-index: 20; display: grid; gap: 9px; margin: 4px 5px 10px 24px; padding: 11px; border: 1px solid rgba(139,114,255,.24); border-radius: 12px; background: #0f1118; box-shadow: 0 14px 32px rgba(0,0,0,.34); }
+.voice-volume-popover { flex: 1 0 100%; position: relative; z-index: 20; display: grid; gap: 9px; margin: 4px 5px 10px 24px; padding: 11px; border: 1px solid rgba(139,114,255,.24); border-radius: 12px; background: #0f1118; box-shadow: 0 14px 32px rgba(0,0,0,.34); }
 .voice-volume-popover > header { display: flex; align-items: center; gap: 8px; cursor: default; }
 .voice-volume-popover > header > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .voice-volume-popover > header strong { overflow: hidden; color: #eef0f5; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

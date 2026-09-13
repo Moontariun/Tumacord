@@ -1044,6 +1044,17 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
               const self = member.id === session.user.id;
               const canAdjustVolume = !self && voice.members.some((candidate) => candidate.id === member.id);
               const memberVolume = Math.max(0, Math.min(2, userVolumes[member.id] ?? 1));
+              const assistindo = Boolean(voice.watching[member.socketId]);
+              const naMesmaCall = voice.channelId === channel.id;
+              // A frase inteira continua sendo dita por `aria-label` e `title`.
+              // O rótulo visível encurtou porque agora divide a linha com o
+              // nome; encurtar também o que um leitor de tela anuncia seria
+              // trocar informação por espaço, e não é a mesma economia.
+              const fraseDoBotao = assistindo
+                ? `Parar de assistir a transmissão de ${member.username}`
+                : naMesmaCall
+                  ? `Assistir a transmissão de ${member.username}`
+                  : `Entrar na call e assistir a transmissão de ${member.username}`;
               return <div className="voice-member-entry" key={member.socketId}>
                 <button className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => { if (canAdjustVolume) setVoiceMenuUserId((current) => current === member.id ? null : member.id); else setProfileUser(member); }} title={canAdjustVolume ? `Ajustar volume de ${member.username}` : `Ver perfil de ${member.username}`}>
                   <Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small />
@@ -1053,18 +1064,19 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
                   <span className="voice-member-icons">{member.isHost && <Icon name="host" />}{(member.muted || mutedUsers[member.id]) && <Icon name="micOff" />}</span>
                 </button>
                 {/* A live se anuncia aqui, junto da pessoa, e é daqui que se
-                    escolhe assistir. O anúncio não abre nada sozinho na área
-                    principal: quem decide o que ocupa a tela é quem assiste. */}
+                    escolhe assistir — na mesma linha do nome, à direita, e não
+                    numa linha própria embaixo: uma linha extra por quem
+                    transmite empurrava o resto da lista para baixo a cada
+                    transmissão que começava, e a lista é por onde se acha gente.
+                    O anúncio não abre nada sozinho na área principal: quem
+                    decide o que ocupa a tela é quem assiste. */}
                 {!self && member.screen && <button
-                  className={`voice-member-watch ${voice.watching[member.socketId] ? 'is-watching' : ''}`}
+                  className={`voice-member-watch ${assistindo ? 'is-watching' : ''}`}
                   onClick={() => void watchMemberLive(member, channel)}
-                  title={voice.watching[member.socketId]
-                    ? `Parar de assistir a transmissão de ${member.username}`
-                    : voice.channelId === channel.id
-                      ? `Assistir a transmissão de ${member.username}`
-                      : `Entrar na call e assistir a transmissão de ${member.username}`}
-                ><Icon name={voice.watching[member.socketId] ? 'close' : 'screen'} />
-                  <span>{voice.watching[member.socketId] ? 'Parar' : voice.channelId === channel.id ? 'Assistir' : 'Entrar e assistir'}</span>
+                  aria-label={fraseDoBotao}
+                  title={fraseDoBotao}
+                ><Icon name={assistindo ? 'close' : 'screen'} />
+                  <span>{assistindo ? 'Parar' : naMesmaCall ? 'Assistir' : 'Entrar'}</span>
                 </button>}
                 {voiceMenuUserId === member.id && canAdjustVolume && <VoiceMemberVolume member={member} volume={memberVolume} muted={Boolean(mutedUsers[member.id])} onVolume={(volume) => setUserVolume(member.id, volume)} onMuted={(muted) => setUserMuted(member.id, muted)} onProfile={() => setProfileUser(member)} onClose={() => setVoiceMenuUserId(null)} />}
               </div>;
