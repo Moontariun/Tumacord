@@ -31,7 +31,7 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "Falha na atualização (linha ${BASH_LINENO[0]}, código ${status}). Nada foi apagado; veja o backup acima." >&2; exit "$status"' ERR
 
-alvo="${1:-release/ja-volto-v0.12.0}"
+alvo="${1:-release/ja-volto-v0.12.1}"
 repositorio="${TUMACORD_REPO:-Moontariun/Tumacord}"
 projeto="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$projeto"

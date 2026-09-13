@@ -283,7 +283,7 @@ test('o package.json declara a versão do produto e os campos derivados dela', a
   const { createRequire } = await import('node:module');
   const pkg = createRequire(import.meta.url)('../package.json');
   const { packageFields } = await import('../scripts/generate-version.mjs');
-  assert.equal(pkg.version, '0.12.0', 'esta é a versão que a branch entrega');
+  assert.equal(pkg.version, '0.12.1', 'esta é a versão que a branch entrega');
   assert.equal(isVersion(pkg.version), true, 'a versão publicada precisa caber na convenção');
   assert.deepEqual({ buildNumber: pkg.build.buildNumber, buildVersion: pkg.build.buildVersion }, packageFields(pkg.version));
 });

@@ -1,6 +1,6 @@
 {
   "name": "tumacord",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": true,
   "type": "module",
   "description": "Chat, chamadas e compartilhamento de tela para grupos de amigos.",
@@ -129,7 +129,7 @@
       "artifactName": "Tumacord-${version}-portable.${ext}"
     },
     "buildNumber": "0",
-    "buildVersion": "0.12.0"
+    "buildVersion": "0.12.1"
   },
   "allowScripts": {
     "electron@41.10.7": true,

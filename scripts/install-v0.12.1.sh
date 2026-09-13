@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-branch="release/ja-volto-v0.12.0"
+branch="release/ja-volto-v0.12.1"
 installer_url="https://raw.githubusercontent.com/Moontariun/Tumacord/${branch}/scripts/install-from-github.sh"
 bootstrap_file="$(mktemp "${TMPDIR:-/tmp}/tumacord-bootstrap.XXXXXX.sh")"
 trap 'rm -f -- "$bootstrap_file"' EXIT

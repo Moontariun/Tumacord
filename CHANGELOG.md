@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## 0.12.1 — a tela de atualização parou de apontar para o GitHub
+
+<!-- tumacord:resumo -->
+O bloco "também dá para atualizar como sempre" saiu da tela de atualização.
+
+- Ele oferecia dois caminhos que deixaram de valer: um comando que **compila do código-fonte** e um link para a página de Releases do GitHub. Os aplicativos não buscam mais nada no GitHub desde a 0.9.4, e o repositório pode ser privado.
+- Oferecer uma saída que não é mais a saída manda a pessoa para o lugar errado justamente quando ela está com problema — que é quando ela lê aquele bloco.
+
 ## 0.12.0 — "já volto" sobre a transmissão, e o silêncio que não se perde
 
 <!-- tumacord:resumo -->

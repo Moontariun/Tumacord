@@ -11,28 +11,18 @@
 // procura de novo. Um botão que aparece e some seria um botão que ninguém
 // aprende onde fica.
 //
-// O que esta tela nunca faz é esconder os outros caminhos. Continua dando para
-// atualizar pelo comando de instalação ou baixando o arquivo na página de
-// Releases, e os dois estão escritos aqui — inclusive quando não existe arquivo
-// para o jeito que esta cópia foi instalada, que é justamente quando eles são
-// a única saída.
+// Até a 0.12.0 esta tela também mostrava "também dá para atualizar como sempre",
+// com o comando de instalação e um link para a página de Releases do GitHub.
+// Isso saiu: os aplicativos não buscam mais nada no GitHub, o repositório pode
+// ser privado, e o comando ali compilava do código-fonte — um caminho que
+// contradiz o que o resto da tela faz. Oferecer uma saída que não é mais a
+// saída manda a pessoa para o lugar errado justamente quando ela está com
+// problema.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { playSound } from '../lib/sound';
-import { copyText } from '../lib/clipboard';
 import { describePublished, formatBytes, readReleaseHighlights } from '../lib/releaseNotes';
-
-const REPOSITORY = 'Moontariun/Tumacord';
-export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
-
-// O comando que instala uma versão específica a partir do código. É o mesmo
-// caminho do README, com a tag no lugar da branch: ele continua existindo, e
-// continua sendo o jeito de instalar quando o botão não serve.
-export function installCommand(version: string): string {
-  const alvo = version ? `v${version}` : 'main';
-  return `curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/main/scripts/install-from-github.sh | bash -s -- ${alvo}`;
-}
 
 // Como esta cópia foi instalada, dito em português. Aparece quando o motivo
 // importa: é o que decide qual arquivo serve e o que acontece ao aplicar.
@@ -202,19 +192,6 @@ function ReleaseNotes({ markdown }: { markdown: string }) {
   </div>;
 }
 
-// Os outros caminhos, sempre à vista. Quando não há arquivo para este tipo de
-// instalação, eles deixam de ser alternativa e passam a ser o caminho.
-function ManualPaths({ version, onNotice }: { version: string; onNotice: (message: string) => void }) {
-  const comando = installCommand(version);
-  return <div className="update-manual">
-    <strong>Também dá para atualizar como sempre</strong>
-    <p>No Linux, pelo comando de instalação — ele compila do código e troca só o atalho da versão:</p>
-    <code>{comando}</code>
-    <button className="ghost" onClick={() => void copyText(comando).then((ok) => onNotice(ok ? 'Comando copiado.' : 'Não consegui copiar; selecione o texto à mão.'))}>Copiar o comando</button>
-    <p>No Windows, baixando o instalador ou o portátil em <span className="update-link">{RELEASES_PAGE}</span>.</p>
-  </div>;
-}
-
 export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridge; onClose: () => void; onNotice: (message: string) => void }) {
   const state = bridge.state;
   // O estado chega do processo principal em milissegundos, mas um clique é
@@ -316,8 +293,6 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
       <input type="checkbox" checked={state.enabled} onChange={(event) => bridge.setEnabled(event.target.checked)} />
       <span><strong>Procurar uma versão nova ao abrir</strong><small>Uma consulta ao servidor de atualizações do grupo quando o aplicativo inicia. Nada seu é enviado, e desligar aqui deixa a procura só no botão acima.</small></span>
     </label>
-
-    <ManualPaths version={state.version} onNotice={onNotice} />
   </div></div>;
 }
 
