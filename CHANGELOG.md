@@ -1,5 +1,23 @@
 # Histórico de versões
 
+## 0.13.2 — a live parou de dar tela preta
+
+<!-- tumacord:resumo -->
+Entrar na live de alguém dava tela preta, ficava tentando carregar e só aparecia depois de um tempão. A causa era o vigia de mídia derrubando o enlace no meio da negociação.
+
+- **O vigia esperava trilha de vídeo de todo mundo que estivesse transmitindo** — inclusive de quem ninguém tinha assinado. A trilha nunca chega para esses, porque ela só é anexada ao enlace de quem assina; e a cada dez segundos o enlace inteiro era derrubado e reconstruído, em laço, enquanto durasse a transmissão.
+- O estrago aparecia em quem estava tentando **entrar** na live: a negociação da inscrição era morta no meio por uma dessas reconstruções, recomeçava, e a imagem só surgia quando uma tentativa coubesse inteira entre duas delas. É exatamente o "às vezes funciona" e o "depois de um tempão aparece do nada".
+- Agora a expectativa é de quem **assinou** aquela transmissão, e a decisão virou uma função pura em `liveSubscription.ts`, com testes.
+
+**Duas causas secundárias, minhas, da 0.11.0**
+
+- O anúncio de "estou assistindo fulano" era emitido no instante exato da inscrição. Ele é cosmético — alimenta o selo de espectadores — e a negociação da live não é: cada `voice:state` faz o servidor devolver a lista de membros para toda a sala, bem em cima do momento sensível. Ele passou a sair com um atraso curto, e o último pedido ganha.
+- Toda mudança de membro refazia a lista de mídia, e `speaking` muda várias vezes por segundo enquanto alguém fala. Reavaliar a mídia a cada sílaba é trabalho à toa no melhor caso e barulho sobre uma negociação no pior. Agora só uma mudança que afeta as faixas — tela, câmera, áudio da tela, mudo, entrada e saída — refaz a lista.
+
+**Selo de espectadores**
+
+- As iniciais viraram a **foto de perfil** de cada pessoa, com a inicial só para quem não tem foto.
+
 ## 0.13.1 — mover um pacote de pasta voltou a contar como mudança
 
 <!-- tumacord:resumo -->

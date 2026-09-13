@@ -1470,9 +1470,9 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
         onClick={() => void toggleStageFullscreen()}
         title={stageFullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia com todas as lives abertas'}
       ><Icon name={stageFullscreen ? 'minimize' : 'maximize'} /><span>{stageFullscreen ? 'Sair' : 'Todas em tela cheia'}</span></button>}
-      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} watchers={myWatchers} ownStream away={voice.away} awayTheme={awayTheme} awayWho={voice.user.username} />}
+      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} watchers={myWatchers} ownStream away={voice.away} awayTheme={awayTheme} awayWho={voice.user.username} serverUrl={serverUrl} />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted || mutedFor(media) : voice.deafened || mutedFor(media)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} watchers={screen ? watchersByStreamer.get(media.peerId) ?? [] : []} away={memberOf(media.peerId)?.away ?? ''} awayTheme={memberOf(media.peerId)?.awayTheme ?? 'violeta'} awayWho={media.user?.username ?? ''} />; })}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted || mutedFor(media) : voice.deafened || mutedFor(media)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} watchers={screen ? watchersByStreamer.get(media.peerId) ?? [] : []} away={memberOf(media.peerId)?.away ?? ''} awayTheme={memberOf(media.peerId)?.awayTheme ?? 'violeta'} awayWho={media.user?.username ?? ''} serverUrl={serverUrl} />; })}
       {/* Uma live que começou não começa a tocar sozinha, e também não abre
           um cartão no meio da tela para avisar que existe. Ela se anuncia
           junto da pessoa, na lista da esquerda, e é de lá que se escolhe
@@ -1699,7 +1699,7 @@ interface TileVolume {
   onMuted: (muted: boolean) => void;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl, watchers = [], ownStream = false, away = '', awayTheme = 'violeta', awayWho = '' }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume; watchers?: VoiceState[]; ownStream?: boolean; away?: string; awayTheme?: string; awayWho?: string }) {
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl, watchers = [], ownStream = false, away = '', awayTheme = 'violeta', awayWho = '', serverUrl = '' }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume; watchers?: VoiceState[]; ownStream?: boolean; away?: string; awayTheme?: string; awayWho?: string; serverUrl?: string }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const detachedLive = useDetachedLive(mediaRef, label, `tumacord-live-${mediaKey.replace(/[^a-zA-Z0-9]/g, '')}`);
@@ -1775,7 +1775,7 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     onFocusCapture={revealControls}
     onPointerLeave={() => setControlsVisible(false)}
     className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${controlsVisible ? 'mostra-controles' : ''}`}
-  ><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<AwayCard message={away} theme={awayTheme} who={awayWho} /><span>{screen && <i className="live-dot" />}{label}</span>{screen && <StreamViewers watchers={watchers} self={ownStream} />}<div className="video-actions">{volumeControl && fullscreen && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  ><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<AwayCard message={away} theme={awayTheme} who={awayWho} /><span>{screen && <i className="live-dot" />}{label}</span>{screen && <StreamViewers watchers={watchers} self={ownStream} serverUrl={serverUrl} />}<div className="video-actions">{volumeControl && fullscreen && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 /**
@@ -1899,7 +1899,7 @@ function AwayCard({ message, theme, who }: { message: string; theme: string; who
  * pessoas transmitem, saber que ninguém está na sua e todo mundo está na do
  * lado é a informação que faz alguém parar de falar sozinho.
  */
-function StreamViewers({ watchers, self }: { watchers: VoiceState[]; self: boolean }) {
+function StreamViewers({ watchers, self, serverUrl }: { watchers: VoiceState[]; self: boolean; serverUrl: string }) {
   if (!watchers.length) {
     // "Ninguém ainda" só é dito na SUA transmissão. Na dos outros seria uma
     // plateia vazia anunciada para todo mundo, e ninguém precisa disso.
@@ -1912,8 +1912,11 @@ function StreamViewers({ watchers, self }: { watchers: VoiceState[]; self: boole
   >
     <Icon name="eye" />
     <div className="stream-viewers-faces">
+      {/* A foto de perfil, e a inicial só quando não há foto — é o que o
+          próprio `Avatar` já resolve, e reusá-lo mantém a mesma cor de fundo
+          por pessoa em toda a interface. */}
       {watchers.slice(0, 3).map((watcher) => (
-        <i key={watcher.socketId} aria-hidden="true">{watcher.username.slice(0, 1).toLocaleUpperCase('pt-BR')}</i>
+        <Avatar key={watcher.socketId} name={watcher.username} profile={watcher.profile} serverUrl={serverUrl} small />
       ))}
     </div>
     <span>{watchers.length > 3 ? `+${watchers.length - 3}` : watchers.length}</span>

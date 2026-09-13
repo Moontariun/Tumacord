@@ -100,3 +100,35 @@ export function mediaBelongsToPeer(media: string, streamId: string, watchingStre
   if (media !== 'screen') return true;
   return Boolean(watchingStream) && watchingStream === streamId;
 }
+
+/**
+ * De quem, exatamente, se espera uma trilha de vídeo de live.
+ *
+ * O vigia de mídia derruba e reconstrói um enlace quando uma trilha esperada
+ * não chega. A pergunta "esperada por quem?" tem uma resposta só: por quem
+ * **assinou** aquela transmissão. Uma pessoa transmitindo para a sala não
+ * manda a tela para quem não pediu — a faixa só é anexada ao enlace de quem
+ * assinou —, então esperá-la de todo mundo é esperar o que nunca vai chegar.
+ *
+ * ## O defeito que isto corrige
+ *
+ * O filtro era só `member.screen`. Bastava alguém transmitir para o vigia
+ * passar a esperar vídeo daquela pessoa em **todos** os enlaces, inclusive nos
+ * de quem nunca abriu a live. A trilha nunca chegava, e a cada dez segundos o
+ * enlace inteiro era reconstruído — em laço, enquanto durasse a transmissão.
+ *
+ * O estrago aparecia justamente em quem tentava entrar na live: a negociação
+ * da inscrição era morta no meio por uma dessas reconstruções, recomeçava, e a
+ * imagem só aparecia quando uma tentativa coubesse inteira entre duas delas.
+ * Daí o relato de tela preta que "às vezes funciona" e que "depois de um
+ * tempão aparece do nada".
+ */
+export function expectedScreenPeers<T extends { socketId: string; screen: boolean }>(
+  members: readonly T[],
+  selfId: string,
+  watching: Readonly<Record<string, string>>,
+): T[] {
+  return members.filter((member) => member.socketId !== selfId
+    && member.screen
+    && Boolean(watching[member.socketId]));
+}

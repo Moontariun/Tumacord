@@ -5,8 +5,7 @@ import {
   intentAfterAnnouncement,
   intentAfterBroadcasters,
   mediaBelongsToPeer,
-  pendingWatchRequests,
-} from '../src/lib/liveSubscription';
+  pendingWatchRequests, expectedScreenPeers } from '../src/lib/liveSubscription';
 import { type LocalTrack, type PeerSender, planPeerMediaSync } from '../src/lib/peerMediaSync';
 
 // A inscrição na live, que é a parte que erra em silêncio: quando ela erra,
@@ -161,4 +160,37 @@ test('sair da live não tira a voz nem a câmera da call', () => {
   const camera: LocalTrack = { media: 'camera', trackId: 'cam', kind: 'video', streamId: 'cam-1', readyState: 'live' };
   const local = [microphoneTrack, camera, screenTrack].filter((track) => mediaBelongsToPeer(track.media, track.streamId, ''));
   assert.deepEqual(local.map((track) => track.media), ['microphone', 'camera'], 'só a tela depende da inscrição');
+});
+
+// ── De quem se espera uma trilha de live ────────────────────────────────────
+//
+// O vigia de mídia reconstrói um enlace quando uma trilha esperada não chega.
+// Esperar a trilha da pessoa errada custa caro: o enlace dela é derrubado em
+// laço enquanto ela transmite, e a negociação de quem está tentando entrar na
+// live morre junto.
+
+const transmitindo = (socketId: string) => ({ socketId, screen: true });
+const calado = (socketId: string) => ({ socketId, screen: false });
+
+test('só se espera trilha de quem esta pessoa assinou', () => {
+  const membros = [transmitindo('a'), transmitindo('b'), calado('c'), transmitindo('eu')];
+  const esperados = expectedScreenPeers(membros, 'eu', { a: 'stream-a' });
+  assert.deepEqual(esperados.map((m) => m.socketId), ['a']);
+});
+
+// A regressão que dava tela preta: bastava alguém transmitir para o vigia
+// esperar vídeo dela em todo enlace, inclusive no de quem nunca abriu a live.
+test('quem transmite sem ninguém assinar não gera expectativa nenhuma', () => {
+  assert.deepEqual(expectedScreenPeers([transmitindo('a'), transmitindo('b')], 'eu', {}), []);
+});
+
+test('a própria pessoa nunca entra na conta', () => {
+  assert.deepEqual(expectedScreenPeers([transmitindo('eu')], 'eu', { eu: 'stream-eu' }), []);
+});
+
+test('parar de transmitir tira a expectativa, mesmo com a inscrição pendurada', () => {
+  // O "sim" some por outro caminho, mas o vigia não pode depender disso: uma
+  // pessoa que fechou a live não deve ter o enlace reconstruído por causa de
+  // uma trilha que ela mesma retirou.
+  assert.deepEqual(expectedScreenPeers([calado('a')], 'eu', { a: 'stream-a' }), []);
 });

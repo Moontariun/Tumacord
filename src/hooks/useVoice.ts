@@ -17,7 +17,7 @@ import { iceServers } from '../lib/iceServers';
 import { selectedCandidatePath, type SelectedPath } from '../lib/iceDiagnostics';
 import type { MicrophonePipelineSnapshot, PeerAudioSnapshot } from '../lib/mediaDiagnostics';
 import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSender, type TrackKind } from '../lib/peerMediaSync';
-import { intentAfterAnnouncement, intentAfterBroadcasters, mediaBelongsToPeer, pendingWatchRequests } from '../lib/liveSubscription';
+import { expectedScreenPeers, intentAfterAnnouncement, intentAfterBroadcasters, mediaBelongsToPeer, pendingWatchRequests } from '../lib/liveSubscription';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
 import { sanitizeAwayMessage, sanitizeAwayTheme } from '../lib/away';
@@ -1536,15 +1536,33 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   useEffect(() => {
     if (!socket) return;
+    /**
+     * O que de um membro muda a classificação da mídia dele.
+     *
+     * `speaking` muda várias vezes por segundo enquanto alguém fala, e
+     * `watching`/`away` mudam por gesto de interface. Nenhum deles altera quais
+     * faixas existem — mas todos chegavam como "lista de membros nova" e
+     * refaziam `remoteMedia`, que é dependência do vigia de mídia e de meia
+     * dúzia de efeitos. Reavaliar a mídia a cada sílaba dita é trabalho à toa
+     * no melhor caso, e barulho em cima de uma negociação em andamento no pior.
+     */
+    const midiaRelevante = (member: VoiceState) => [
+      member.socketId, member.id, member.username, member.screen, member.camera, member.screenAudio, member.muted,
+    ].join('|');
+    const mesmaMidia = (left: VoiceState[], right: VoiceState[]) => left.length === right.length
+      && left.map(midiaRelevante).sort().join('¦') === right.map(midiaRelevante).sort().join('¦');
+
     const onMembers = (next: VoiceState[]) => {
       const previous = membersRef.current;
       const remoteStreamStarted = next.some((member) => member.socketId !== selfId.current && member.screen && !previous.some((candidate) => candidate.id === member.id && candidate.screen));
       const remoteStreamStopped = previous.some((member) => member.socketId !== selfId.current && member.screen && !next.some((candidate) => candidate.id === member.id && candidate.screen));
+      const precisaReclassificar = !mesmaMidia(previous, next);
       membersRef.current = next;
       setMembers(next);
       // A identificação provisória de câmera/tela também depende do estado
-      // anunciado. Reclassifique quando esse estado chegar depois da faixa.
-      refreshRemote();
+      // anunciado. Reclassifique quando esse estado chegar depois da faixa —
+      // e só então.
+      if (precisaReclassificar) refreshRemote();
       if (remoteStreamStarted) playSound('streamStart');
       else if (remoteStreamStopped) playSound('streamStop');
     };
@@ -1790,6 +1808,26 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
    */
   const myWatchingRef = useRef('');
 
+  /**
+   * Anuncia à sala quem esta pessoa está assistindo — fora do caminho crítico.
+   *
+   * O atraso não é folga: entrar numa live dispara uma negociação WebRTC, e
+   * cada `voice:state` faz o servidor devolver a lista de membros para todo
+   * mundo. Um enfeite chegando no meio da negociação é ruído em cima de um
+   * caminho que este arquivo inteiro trata como sensível a tempo.
+   *
+   * O último pedido ganha: trocar de live duas vezes em um segundo anuncia uma
+   * vez só, a última.
+   */
+  const anuncioPendente = useRef<number | null>(null);
+  const anunciarQuemAssisto = useCallback((peerId: string) => {
+    if (anuncioPendente.current) window.clearTimeout(anuncioPendente.current);
+    anuncioPendente.current = window.setTimeout(() => {
+      anuncioPendente.current = null;
+      socket?.emit('voice:state', { watching: peerId });
+    }, 1_200);
+  }, [socket]);
+
   // Um pedido de assistir feito antes de o anúncio chegar.
   //
   // Clicar em "Assistir" na lista lateral pode exigir entrar na call antes, e
@@ -1804,11 +1842,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     setWatching((atual) => (atual[peerId] === streamId ? atual : { ...atual, [peerId]: streamId }));
     socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
     // O `rtc:watch` acima é ponto-a-ponto: só quem transmite fica sabendo, e é
-    // o que basta para a mídia fluir. Este aqui é o anúncio para a SALA, e é o
-    // que permite todo mundo ver quem está assistindo cada transmissão — sem
-    // ele, cada pessoa saberia apenas o que ela mesma assiste.
+    // o que basta para a mídia fluir. O anúncio para a SALA — que é o que
+    // permite todo mundo ver quem está assistindo cada transmissão — sai
+    // DEPOIS, e de propósito.
+    //
+    // Ele é cosmético e a negociação da live não é: mandá-lo agora faz o
+    // servidor devolver uma lista de membros nova no exato instante em que a
+    // inscrição está sendo negociada. Um atraso curto tira o enfeite de cima
+    // do que importa, e ninguém percebe a diferença num selo de espectadores.
     myWatchingRef.current = peerId;
-    socket?.emit('voice:state', { watching: peerId });
+    anunciarQuemAssisto(peerId);
     watchSent.current.set(peerId, streamId);
   }, [socket]);
   watchLiveRef.current = watchLive;
@@ -1834,7 +1877,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // registro de que se está assistindo a B.
     if (myWatchingRef.current === peerId) {
       myWatchingRef.current = '';
-      socket?.emit('voice:state', { watching: '' });
+      anunciarQuemAssisto('');
     }
   }, [socket]);
 
@@ -2310,9 +2353,22 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     if (!channelId) return;
     const inspectExpectedMedia = () => {
       const now = Date.now();
-      const expectedScreens = new Map(membersRef.current
-        .filter((member) => member.socketId !== selfId.current && member.screen)
-        .map((member) => [member.socketId, member]));
+      // Só de quem esta pessoa PEDIU para assistir.
+      //
+      // Antes, bastava alguém estar transmitindo para o vigia passar a esperar
+      // uma trilha de vídeo dela — mesmo de quem ninguém tinha assinado. A
+      // trilha nunca chegava, porque ela só é anexada a quem assina, e a cada
+      // dez segundos o enlace inteiro era derrubado e reconstruído. Numa call
+      // com alguém transmitindo, isso é um `recoverPeer` "hard" em laço.
+      //
+      // É o que produzia a tela preta ao entrar numa live: a negociação da
+      // inscrição era morta no meio pela reconstrução, recomeçava, e só
+      // aparecia quando uma tentativa coubesse inteira na janela de dez
+      // segundos. Daí "às vezes funciona" e "depois de um tempão aparece".
+      const expectedScreens = new Map(
+        expectedScreenPeers(membersRef.current, selfId.current, watchingRef.current)
+          .map((member) => [member.socketId, member]),
+      );
       for (const peerId of [...missingScreenSince.current.keys()]) if (!expectedScreens.has(peerId)) missingScreenSince.current.delete(peerId);
       for (const [peerId, member] of expectedScreens) {
         const screenMedia = remoteMedia.find((media) => media.peerId === peerId && media.kind === 'screen' && media.stream.getVideoTracks().some((track) => track.readyState === 'live'));

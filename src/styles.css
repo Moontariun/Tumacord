@@ -356,14 +356,15 @@ svg { width: 20px; height: 20px; }
 /* As iniciais se sobrepõem levemente, como uma pilha de fichas: três cabem em
    menos espaço do que três círculos lado a lado, e a leitura continua clara. */
 .stream-viewers-faces { display: flex; }
-.stream-viewers-faces i {
-  width: 17px; height: 17px; margin-left: -5px;
-  display: grid; place-items: center;
-  border: 1.5px solid rgba(8,9,13,.9); border-radius: 50%;
-  background: linear-gradient(145deg, #7d5cff, #5b3fd6); color: white;
-  font-size: 8px; font-style: normal; font-weight: 900;
+/* As fotos se sobrepõem levemente, como uma pilha de fichas: três cabem em
+   menos espaço do que três círculos lado a lado, e a leitura continua clara.
+   A borda escura é o que separa uma da outra quando duas fotos são parecidas. */
+.stream-viewers-faces .avatar {
+  width: 18px; height: 18px; min-width: 18px; margin-left: -6px;
+  border: 1.5px solid rgba(8,9,13,.92); box-shadow: none;
+  font-size: 8px; font-weight: 900;
 }
-.stream-viewers-faces i:first-child { margin-left: 0; }
+.stream-viewers-faces .avatar:first-child { margin-left: 0; }
 
 /* O cartão de "já volto", sobre a transmissão de quem saiu um instante.
    Ele cobre a imagem de propósito: uma tarja discreta num canto seria lida como
