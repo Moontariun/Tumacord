@@ -254,7 +254,10 @@ test('sem origem configurada, o updater diz isso em vez de tentar um endereço',
   const environment = await start();
   context.after(() => environment.close());
   await rm(path.join(environment.userDataPath, 'update-origin.json'), { force: true });
-  const updater = environment.newUpdater();
+  // A build traz a origem do grupo embutida desde a 0.12.2, então "sem origem"
+  // precisa ser dito explicitamente aqui: o que este teste exercita é o caminho
+  // do código, e ele não pode depender de qual build a máquina tem.
+  const updater = environment.newUpdater({ builtIn: { origin: '', keys: [] } });
   const outcome = await updater.check({ manual: true });
   assert.equal(outcome.phase, 'no-origin');
   assert.match(outcome.error, /origem de atualizações/);

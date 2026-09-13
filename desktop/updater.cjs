@@ -87,6 +87,9 @@ class Updater {
       resourcesPath: process.resourcesPath ?? '',
       home: app?.getPath ? app.getPath('home') : '',
     });
+    // Injetável só para teste: é o que permite exercitar "esta build não tem
+    // origem" sem depender de qual build está na máquina que roda a suíte.
+    this.builtInOrigin = arguments[0]?.builtIn;
     this.preferences = this.readPreferences();
     this.listeners = new Set();
     // Preenchida só quando o chaveiro do sistema não aceitou guardar a
@@ -135,7 +138,7 @@ class Updater {
    * precisa enxergar isso.
    */
   source() {
-    const origin = updateOrigin({ env: this.env, userDataPath: this.userDataPath });
+    const origin = updateOrigin({ env: this.env, userDataPath: this.userDataPath, builtIn: this.builtInOrigin });
     const stored = this.userDataPath
       ? readDeviceCredential({ userDataPath: this.userDataPath, safeStorage: this.safeStorage })
       : { token: '', deviceId: '', reason: 'missing' };

@@ -1,5 +1,14 @@
 # Histórico de versões
 
+## 0.12.2 — o aplicativo já nasce sabendo onde procurar atualização
+
+<!-- tumacord:resumo -->
+A origem das atualizações e as chaves confiáveis do grupo passaram a vir embutidas no código. Quem instala pelo script deixa de precisar de um arquivo escrito à mão em cada máquina.
+
+- Até aqui, `install-linux.sh` compilava do código-fonte e o aplicativo saía **sem saber onde procurar** — a tela de atualização dizia "este Tumacord não sabe onde procurar atualização", e resolver exigia escrever `update-origin.json` na pasta de configuração de cada pessoa. Um passo manual por máquina é um passo que metade do grupo não dá.
+- A restrição existia porque o repositório era **público**, e um repositório público não carrega o domínio de ninguém. Ele passou a ser privado, e com isso a razão desapareceu enquanto o custo continuava.
+- O arquivo gerado pelo `gerar-origem.mjs` continua tendo precedência, para quem empacota apontando para outro serviço. E o embutido virou injetável, para o teste conseguir exercitar "esta build não tem origem" sem depender de qual build está na máquina que roda a suíte.
+
 ## 0.12.1 — a tela de atualização parou de apontar para o GitHub
 
 <!-- tumacord:resumo -->

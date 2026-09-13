@@ -47,8 +47,24 @@ try {
   // Build sem origem gravada: um clone recém-feito, ou os testes.
 }
 
-/** A origem embutida na build. Vazia quando o gerador não rodou. */
-const BUILT_IN_ORIGIN = typeof gravado.origin === 'string' ? gravado.origin : '';
+/**
+ * A origem deste grupo, embutida no código.
+ *
+ * Até a 0.12.1 ela era vazia aqui, porque o repositório era **público** e um
+ * repositório público não carrega o domínio de ninguém. Ele passou a ser
+ * privado, e com isso a razão daquela restrição deixou de existir — enquanto o
+ * custo dela continuava alto: quem instalava pelo `install-linux.sh` recebia um
+ * aplicativo que não sabia onde procurar atualização, e precisava de um arquivo
+ * escrito à mão em cada máquina. Um passo manual por máquina é um passo que
+ * metade do grupo não dá.
+ *
+ * O arquivo gerado (`update-origin.generated.cjs`) continua tendo precedência,
+ * para quem empacota apontando para outro serviço.
+ */
+const FALLBACK_ORIGIN = 'https://updates.tumati.fun';
+
+/** A origem embutida na build. */
+const BUILT_IN_ORIGIN = typeof gravado.origin === 'string' && gravado.origin ? gravado.origin : FALLBACK_ORIGIN;
 
 /**
  * As chaves públicas em que esta build confia.
@@ -56,7 +72,26 @@ const BUILT_IN_ORIGIN = typeof gravado.origin === 'string' ? gravado.origin : ''
  * Elas viajam **dentro do aplicativo**. Buscá-las na rede junto com o que elas
  * verificam seria pedir a chave a quem quer ser verificado.
  */
-const BUILT_IN_KEYS = Array.isArray(gravado.keys) ? gravado.keys : [];
+const FALLBACK_KEYS = [
+  {
+    "keyId": "d1f0d8034f5c599348968c00e4e3ffb6",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEAtUFMTvK3U4kJAqnrXqS939KfkEjtZ9LQ/IKU0bTksSc=",
+    "scope": [
+      "manifest"
+    ]
+  },
+  {
+    "keyId": "6c9e6185a61f0f604da3754dbeaa85e4",
+    "algorithm": "ed25519",
+    "publicKey": "MCowBQYDK2VwAyEAvVaega0B7ACVjUmplcdzieHZa/MPPERkyhV7649Wa/I=",
+    "scope": [
+      "catalog"
+    ]
+  }
+];
+
+const BUILT_IN_KEYS = Array.isArray(gravado.keys) && gravado.keys.length ? gravado.keys : FALLBACK_KEYS;
 
 /** Nome do arquivo local de configuração, dentro do `userData`. */
 const ORIGIN_FILE = 'update-origin.json';
@@ -102,12 +137,16 @@ function readOriginFile(userDataPath) {
  * Devolve `origin` vazio quando não há origem configurada — e isso é dito na
  * tela, em vez de virar uma tentativa a um endereço adivinhado.
  */
-function updateOrigin({ env = process.env, userDataPath = '' } = {}) {
+function updateOrigin({ env = process.env, userDataPath = '', builtIn } = {}) {
   const stored = readOriginFile(userDataPath);
+  // O embutido é injetável para o teste conseguir exercitar "esta build não
+  // tem origem" sem depender de qual build está na máquina. Em uso normal ele
+  // não é passado, e vale o do código.
+  const embutido = builtIn && typeof builtIn === 'object' ? builtIn : { origin: BUILT_IN_ORIGIN, keys: BUILT_IN_KEYS };
 
   // O ambiente vem primeiro porque ele é o caminho de homologação: quem o
   // define está na máquina e sabe o que está fazendo.
-  const candidates = [env.TUMACORD_UPDATE_ORIGIN, stored?.origin, BUILT_IN_ORIGIN];
+  const candidates = [env.TUMACORD_UPDATE_ORIGIN, stored?.origin, embutido.origin];
   let origin = '';
   let source = 'none';
   for (const [index, candidate] of candidates.entries()) {
@@ -122,7 +161,7 @@ function updateOrigin({ env = process.env, userDataPath = '' } = {}) {
   // sem as chaves correspondentes não passa a valer: o catálogo dela não
   // verifica.
   const fromFile = Array.isArray(stored?.trustedKeys) ? stored.trustedKeys : [];
-  const trustedKeys = fromFile.length ? fromFile : BUILT_IN_KEYS;
+  const trustedKeys = fromFile.length ? fromFile : (Array.isArray(embutido.keys) ? embutido.keys : []);
 
   return {
     origin,

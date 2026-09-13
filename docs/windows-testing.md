@@ -34,7 +34,7 @@ Não repita à mão o que a automação já garante:
 
 - **Windows A** — Windows 11 x64, Tumacord instalado pelo `Setup.exe`;
 - **Windows B** — segunda máquina Windows, para o Caso 1;
-- **Linux C** — instalação pelo `install-v0.12.1.sh`, com PipeWire;
+- **Linux C** — instalação pelo `install-v0.12.2.sh`, com PipeWire;
 - fone de ouvido em uma das máquinas e **caixas de som** em outra: o eco
   acústico só aparece com caixas;
 - Discord instalado no Windows A, com uma segunda conta para o Caso 4.
