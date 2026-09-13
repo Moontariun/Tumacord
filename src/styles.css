@@ -335,10 +335,43 @@ svg { width: 20px; height: 20px; }
 .video-tile.is-fullscreen video { object-fit: contain; }
 .video-tile > span { position: absolute; left: 9px; bottom: 9px; border-radius: 7px; background: rgba(8,9,13,.76); padding: 5px 8px; font-size: 10px; font-weight: 700; backdrop-filter: blur(8px); }
 .video-tile > span .live-dot { margin-right: 6px; width: 6px; height: 6px; }
+
+/* Quem está vendo esta transmissão.
+   No canto de baixo à direita: o rótulo com o nome fica na esquerda e os
+   controles no alto, então esta é a única quina livre — e a de baixo é a que
+   menos cobre o que se está mostrando.
+   Ele NÃO some com os controles: saber quem está vendo é informação sobre a
+   call, não um botão, e some-la a cada dois segundos obrigaria a mexer o mouse
+   para responder "alguém está aí?". */
+.stream-viewers {
+  position: absolute; right: 9px; bottom: 9px; z-index: 3;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px 4px 7px; border-radius: 999px;
+  background: rgba(8,9,13,.76); color: #d6d8e2; backdrop-filter: blur(8px);
+  font-size: 10px; font-weight: 800;
+}
+.stream-viewers svg { width: 13px; height: 13px; color: #9c87ff; }
+.stream-viewers.is-empty { color: #7b7f90; }
+.stream-viewers.is-empty svg { color: #6c6f7e; }
+/* As iniciais se sobrepõem levemente, como uma pilha de fichas: três cabem em
+   menos espaço do que três círculos lado a lado, e a leitura continua clara. */
+.stream-viewers-faces { display: flex; }
+.stream-viewers-faces i {
+  width: 17px; height: 17px; margin-left: -5px;
+  display: grid; place-items: center;
+  border: 1.5px solid rgba(8,9,13,.9); border-radius: 50%;
+  background: linear-gradient(145deg, #7d5cff, #5b3fd6); color: white;
+  font-size: 8px; font-style: normal; font-weight: 900;
+}
+.stream-viewers-faces i:first-child { margin-left: 0; }
 .video-tile:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; }
 .video-tile:fullscreen video { object-fit: contain; }
 .video-actions { position: absolute; right: 9px; top: 9px; z-index: 4; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }
-.video-tile:hover .video-actions { opacity: 1; }
+/* Quem revela os controles é a classe, não o `:hover` puro: ela some sozinha
+   por inatividade, e o `:hover` sozinho manteria a barra acesa enquanto o
+   ponteiro estivesse parado sobre a live — que é justamente quando a pessoa
+   está assistindo. */
+.video-tile.mostra-controles .video-actions { opacity: 1; }
 .video-actions button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(8,9,13,.78); color: white; backdrop-filter: blur(8px); }
 .video-actions button:hover { background: rgba(125,92,255,.94); transform: translateY(-1px); }
 .video-actions svg { width: 17px; height: 17px; }
@@ -649,7 +682,9 @@ body { background: var(--bg); }
 .video-tile.is-fullscreen > span { left: max(18px, env(safe-area-inset-left)); bottom: max(18px, env(safe-area-inset-bottom)); }
 .video-tile.is-fullscreen .video-actions { right: max(18px, env(safe-area-inset-right)); top: max(18px, env(safe-area-inset-top)); }
 .video-actions { right: 12px; top: 12px; opacity: 0; transform: translateY(-3px); transition: opacity .16s, transform .16s; }
-.video-tile:hover .video-actions, .video-tile.is-fullscreen .video-actions { opacity: 1; transform: none; }
+/* Em tela cheia a barra também some: é lá que ela mais atrapalha, porque a
+   imagem ocupa o monitor inteiro. Um movimento do mouse a traz de volta. */
+.video-tile.mostra-controles .video-actions { opacity: 1; transform: none; }
 .video-actions button { width: 38px; height: 38px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: rgba(10,11,16,.78); }
 .call-control { min-width: 76px; font-size: 9px; }
 
@@ -667,6 +702,21 @@ body { background: var(--bg); }
 .sound-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 6px; margin-top: 12px; }
 .sound-gallery button { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: #15161f; color: #b6b9c6; font-size: 11px; font-weight: 700; text-align: left; }
 .sound-gallery button:hover:not(:disabled) { border-color: rgba(125,92,255,.45); background: #1c1d28; color: white; }
+
+/* Cada efeito: um interruptor e um botão de ouvir.
+   O interruptor ocupa a linha inteira para o alvo de clique ser generoso; o
+   botão de ouvir fica à direita e continua ativo mesmo com o efeito desligado,
+   porque é ouvindo que se decide se ele volta. */
+.sound-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 10px; background: #15161f; }
+.sound-item:hover { border-color: rgba(125,92,255,.45); background: #1c1d28; }
+.sound-item label { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; color: #b6b9c6; font-size: 11px; font-weight: 700; cursor: pointer; }
+.sound-item label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sound-item input { flex: 0 0 auto; accent-color: var(--violet); cursor: pointer; }
+.sound-item.is-off label { color: #6f7280; }
+.sound-item .sound-preview { flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #8b8fa0; }
+.sound-item .sound-preview:hover:not(:disabled) { background: rgba(125,92,255,.18); color: white; }
+.sound-item .sound-preview svg { width: 14px; height: 14px; }
+.sound-item .sound-preview:disabled { opacity: .4; }
 .sound-gallery svg { width: 15px; height: 15px; flex: 0 0 auto; color: #8b7bff; }
 
 .share-setup { position: relative; width: min(660px, 94vw); max-height: 90vh; overflow-y: auto; padding: 34px; border: 1px solid var(--border); border-radius: 22px; }
@@ -732,6 +782,7 @@ body { background: var(--bg); }
   .stage-grid.count-3,
   .stage-grid.count-4 { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: minmax(230px, 1fr); overflow-x: hidden; overflow-y: auto; }
   .stage-grid.focused-live { grid-template-columns: 1fr; grid-template-rows: 1fr; grid-auto-rows: auto; overflow: hidden; }
+  /* Sem ponteiro não há como revelar: numa tela de toque a barra fica. */
   .video-actions { opacity: .82; transform: none; }
 }
 

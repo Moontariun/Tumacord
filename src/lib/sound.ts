@@ -36,7 +36,8 @@ export type FeedbackSound =
   | 'connect' | 'callJoin' | 'callLeave' | 'peerJoin' | 'peerLeave'
   | 'message' | 'messageSent' | 'notification' | 'error'
   | 'mute' | 'unmute' | 'deafen' | 'undeafen'
-  | 'streamStart' | 'streamStop' | 'host' | 'update';
+  | 'streamStart' | 'streamStop' | 'host' | 'update'
+  | 'viewerJoin' | 'viewerLeave';
 
 /**
  * O timbre de uma nota, como receita de parciais.
@@ -134,6 +135,26 @@ const RECIPES: Record<FeedbackSound, Recipe> = {
       { freq: D5, at: 0.05, length: 0.3, gain: 0.3, timbre: 'glass', pan: -0.2 },
     ],
     attack: 0.004, space: 0.3, tone: 7_000, trim: 1.15,
+  },
+  // Alguém abriu ou fechou a SUA transmissão.
+  //
+  // Deliberadamente mais discretos que `peerJoin`/`peerLeave`: eles tocam
+  // enquanto você está apresentando alguma coisa, que é o pior momento para um
+  // som chamativo. Ganho menor, cauda curta e um intervalo apertado — presente
+  // o bastante para você saber, discreto o bastante para não cortar a frase.
+  viewerJoin: {
+    notes: [
+      { freq: D5, at: 0, length: 0.1, gain: 0.16, timbre: 'glass', pan: 0.28 },
+      { freq: A5, at: 0.035, length: 0.16, gain: 0.15, timbre: 'glass', pan: 0.28 },
+    ],
+    attack: 0.003, space: 0.16, tone: 8_400, trim: 0.85,
+  },
+  viewerLeave: {
+    notes: [
+      { freq: A5, at: 0, length: 0.09, gain: 0.15, timbre: 'glass', pan: 0.28 },
+      { freq: D5, at: 0.035, length: 0.16, gain: 0.14, timbre: 'glass', pan: 0.28 },
+    ],
+    attack: 0.003, space: 0.16, tone: 7_400, trim: 0.85,
   },
   // Mensagem de outra pessoa: duas notas de vidro, curtas, com cauda.
   message: {
@@ -252,7 +273,42 @@ export const SOUND_LABEL: Record<FeedbackSound, string> = {
   streamStop: 'Transmissão parou',
   host: 'Virou host',
   update: 'Versão nova',
+  viewerJoin: 'Alguém abriu sua live',
+  viewerLeave: 'Alguém fechou sua live',
 };
+
+/**
+ * Os efeitos que esta pessoa desligou, um a um.
+ *
+ * Guardamos os **desligados**, e não os ligados. A diferença aparece quando uma
+ * versão nova acrescenta um efeito: com a lista dos ligados, ele nasceria mudo
+ * para quem já usava o aplicativo e ninguém descobriria que ele existe. Com a
+ * lista dos desligados, ele nasce ligado — e quem não quiser desliga.
+ */
+const SOUND_OFF_KEY = 'tumacord.sound-off';
+
+export function readDisabledSounds(): Set<FeedbackSound> {
+  if (typeof localStorage === 'undefined') return new Set();
+  try {
+    const stored = JSON.parse(localStorage.getItem(SOUND_OFF_KEY) ?? '[]');
+    return new Set(Array.isArray(stored) ? stored.filter((name): name is FeedbackSound => typeof name === 'string' && name in RECIPES) : []);
+  } catch {
+    // Uma preferência ilegível não pode calar o aplicativo inteiro.
+    return new Set();
+  }
+}
+
+export function isSoundEnabled(sound: FeedbackSound): boolean {
+  return readSoundEnabled() && !readDisabledSounds().has(sound);
+}
+
+export function setSoundEnabledFor(sound: FeedbackSound, enabled: boolean): void {
+  if (typeof localStorage === 'undefined') return;
+  const disabled = readDisabledSounds();
+  if (enabled) disabled.delete(sound);
+  else disabled.add(sound);
+  localStorage.setItem(SOUND_OFF_KEY, JSON.stringify([...disabled]));
+}
 
 export function readSoundEnabled(): boolean {
   return typeof localStorage === 'undefined' || localStorage.getItem(SOUND_KEY) !== 'false';
@@ -318,8 +374,12 @@ function noiseBurst(audio: BaseAudioContext, seconds: number): AudioBuffer {
   return buffer;
 }
 
-export function playSound(sound: FeedbackSound): void {
-  if (!readSoundEnabled()) return;
+export function playSound(sound: FeedbackSound, options: { preview?: boolean } = {}): void {
+  // O interruptor geral e o do efeito. O modo `preview` pula só o segundo: a
+  // tela de configuração precisa poder tocar um efeito DESLIGADO, porque é
+  // ouvindo que a pessoa decide se quer ligá-lo de volta. Descrever um som em
+  // uma frase não funciona.
+  if (options.preview ? !readSoundEnabled() : !isSoundEnabled(sound)) return;
   const audio = sharedAudioContext();
   if (!audio) return;
   if (audio.state === 'suspended') void resumeSharedAudio();
@@ -431,4 +491,9 @@ export function playSound(sound: FeedbackSound): void {
   // em um contexto que também carrega a voz da call.
   const duracao = Math.max(...recipe.notes.map((nota) => nota.at + nota.length)) + (recipe.space ? 0.95 : 0.1);
   window.setTimeout(() => { master.disconnect(); compressor.disconnect(); seco.disconnect(); molhado?.disconnect(); }, duracao * 1_000);
+}
+
+/** Toca um efeito na tela de configuração, mesmo que ele esteja desligado. */
+export function previewSound(sound: FeedbackSound): void {
+  playSound(sound, { preview: true });
 }

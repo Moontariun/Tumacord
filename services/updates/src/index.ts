@@ -81,13 +81,50 @@ app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], 
 app.use(express.json({ limit: '32kb' }));
 
 /**
- * Exige um dispositivo autorizado.
+ * Leitura aberta: baixar deixa de exigir credencial de dispositivo.
  *
- * Vale para `GET`, `HEAD` e `Range` igualmente: um `HEAD` anônimo revelaria
- * tamanho e existência, e um `Range` anônimo seria o download inteiro em
- * pedaços.
+ * Ligada por `TUMACORD_UPDATES_PUBLIC_READ=1`. Ela existe porque a alternativa
+ * — um convite de uso único por máquina — não escala para um grupo de amigos:
+ * quem instala no Windows não tem como digitar convite antes de o aplicativo
+ * existir, e uma versão nova que exige um passo manual em cada máquina é uma
+ * versão que metade do grupo não instala.
+ *
+ * **O que se perde, exatamente.** Quem souber o endereço passa a poder baixar
+ * o catálogo e os pacotes. Só isso. As três coisas que importam continuam de pé:
+ *
+ *   · **integridade** — catálogo e manifesto continuam assinados por uma chave
+ *     que não vive nesta máquina, e o cliente confere antes de ler o conteúdo.
+ *     Ninguém entrega um binário como oficial por saber o endereço;
+ *   · **a administração não fica exposta** — importar, publicar e retirar
+ *     escutam na 4301, que nunca sai do laço local. Esta porta é só leitura,
+ *     e leitura de arquivo assinado;
+ *   · **o teto de downloads simultâneos** continua valendo, então um mutirão
+ *     de atualização não tira a call de todo mundo.
+ *
+ * O que deixa de existir é o sigilo dos binários e a revogação por máquina.
+ * Num repositório público, o sigilo já não existia; e revogar uma máquina
+ * nunca impediu ninguém de pegar o pacote com outra pessoa do grupo.
+ *
+ * A inscrição por convite continua funcionando: uma credencial ainda é aceita,
+ * e desligar esta variável volta a exigi-la sem mais nada.
+ */
+const PUBLIC_READ = process.env.TUMACORD_UPDATES_PUBLIC_READ === '1';
+
+/**
+ * Exige um dispositivo autorizado — ou não, se a leitura for aberta.
+ *
+ * Vale para `GET`, `HEAD` e `Range` igualmente: com a leitura fechada, um
+ * `HEAD` anônimo revelaria tamanho e existência, e um `Range` anônimo seria o
+ * download inteiro em pedaços.
  */
 function requireDevice(request: express.Request, response: express.Response): { deviceId: string } | null {
+  if (PUBLIC_READ) {
+    // A credencial continua sendo lida quando vem: é ela que dá nome ao
+    // download no registro, e um grupo que voltar a fechar a leitura não perde
+    // o histórico de quem baixava o quê.
+    const identified = authorize(store.state.devices, bearerToken(request.headers.authorization), 'download', Date.now());
+    return { deviceId: identified.ok ? identified.device.deviceId : 'aberto' };
+  }
   const result = authorize(store.state.devices, bearerToken(request.headers.authorization), 'download', Date.now());
   if (!result.ok) {
     // A mensagem é útil e o estado é dito: expirado e revogado levam a caminhos
@@ -241,6 +278,9 @@ app.get('/v1/health', (_request, response) => {
     service: 'tumacord-updates',
     catalog: catalogDoc ? { sequence: catalogDoc.sequence, expiresAt: catalogDoc.expiresAt } : null,
     activeDownloads: gate.active,
+    // Dito, e não adivinhado: o cliente decide entre pedir um convite e baixar
+    // direto, e o operador consegue conferir num `curl` em qual modo está.
+    auth: PUBLIC_READ ? 'public' : 'device',
   });
 });
 

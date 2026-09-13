@@ -30,6 +30,7 @@ export class VoiceRooms {
       camera: false,
       screen: false,
       screenAudio: false,
+      watching: '',
     });
     this.rooms.set(channelId, room);
     return this.members(channelId);
@@ -63,7 +64,7 @@ export class VoiceRooms {
     return changed;
   }
 
-  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio'>>): VoiceState[] {
+  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'watching'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
     if (participant) {
       Object.assign(participant, patch);

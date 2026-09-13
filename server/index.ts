@@ -1673,6 +1673,10 @@ io.on('connection', (socket) => {
     const parsed = z.object({
       muted: z.boolean().optional(), speaking: z.boolean().optional(), deafened: z.boolean().optional(),
       camera: z.boolean().optional(), screen: z.boolean().optional(), screenAudio: z.boolean().optional(),
+      // Quem esta pessoa está assistindo. É um `socketId` de outra pessoa, ou
+      // vazio; o teto existe porque o valor vem do cliente e vira estado que
+      // todo mundo na sala recebe.
+      watching: z.string().max(64).optional(),
     }).safeParse(patch);
     if (!channelId || !parsed.success) return;
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));

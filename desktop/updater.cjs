@@ -208,14 +208,17 @@ class Updater {
       const withoutKeys = 'Este aplicativo não tem nenhuma chave pública configurada para verificar as atualizações. Peça ao dono do servidor a configuração de origem.';
       return this.update({ phase: 'no-origin', origin, originSource, error: manual ? withoutKeys : '', needsEnrollment: false, enrollmentMessage: withoutKeys });
     }
-    if (!credential.token) {
-      const notice = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
-      this.log({ event: 'update-check-blocked', reason: credential.reason });
-      return this.update({
-        phase: 'needs-enrollment', origin, originSource, deviceId: credential.deviceId ?? '',
-        needsEnrollment: true, enrollmentMessage: notice, error: manual ? notice : '',
-      });
-    }
+    // Sem credencial, **tenta assim mesmo**.
+    //
+    // Um serviço com leitura aberta responde, e a pessoa não precisa digitar
+    // convite nenhum — que é o ponto: um passo manual por máquina é um passo
+    // que metade do grupo não dá, e no Windows ele acontece antes de o
+    // aplicativo existir. Um serviço fechado responde 401, e é aí, e só aí,
+    // que o convite é pedido.
+    //
+    // Custa um pedido a mais só no caso fechado, e evita inventar um contrato
+    // novo de "me diga se você exige credencial" — a resposta do próprio
+    // catálogo já diz isso.
 
     this.update({ phase: 'checking', error: '', origin, originSource, deviceId: credential.deviceId ?? '', needsEnrollment: false, enrollmentMessage: '' });
 
@@ -299,10 +302,16 @@ class Updater {
       const reason = String(error?.reason ?? '');
       this.log({ event: 'update-check-failed', message, reason });
 
-      // Credencial revogada não é falha de rede: ela não volta sozinha, e
+      // Credencial recusada não é falha de rede: ela não volta sozinha, e
       // insistir a cada abertura só gastaria pedido. A credencial local sai, e
       // a tela passa a pedir um convite novo.
-      if (reason === 'revoked' || reason === 'unknown') {
+      //
+      // O `status` entra na conta porque a procura passou a ser tentada **sem**
+      // credencial: num serviço de leitura aberta ela nem é necessária, e num
+      // serviço fechado a recusa chega como 401 antes de haver `reason` algum
+      // para classificar. Sem isto, quem não tem credencial veria "falhou" em
+      // vez do pedido de convite.
+      if (reason === 'revoked' || reason === 'unknown' || error?.status === 401 || error?.status === 403) {
         clearDeviceCredential({ userDataPath: this.userDataPath });
         this.sessionCredential = null;
         return this.update({
@@ -375,9 +384,13 @@ class Updater {
     if (this.snapshot.phase === 'downloading') return this.state();
 
     const { origin, trustedKeys, credential } = this.source();
-    if (!origin || !credential.token) {
-      const notice = CREDENTIAL_MESSAGES[credential.reason] ?? CREDENTIAL_MESSAGES.missing;
-      return this.update({ phase: 'needs-enrollment', needsEnrollment: true, enrollmentMessage: notice, error: notice });
+    // Sem origem não há de onde baixar. Sem credencial, **tenta assim mesmo**:
+    // a procura só chegou aqui porque o catálogo respondeu, e um serviço que
+    // entrega o catálogo sem credencial entrega o pacote também. Se ele
+    // recusar, a recusa chega como 401 e cai no tratamento de erro abaixo.
+    if (!origin) {
+      const semOrigem = 'Este aplicativo não tem uma origem de atualizações configurada.';
+      return this.update({ phase: 'no-origin', error: semOrigem, enrollmentMessage: semOrigem });
     }
     if (asset.size > MAX_DOWNLOAD_BYTES) {
       return this.update({ phase: 'error', error: 'O pacote anunciado é maior do que qualquer versão do Tumacord; nada foi baixado.' });

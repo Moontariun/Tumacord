@@ -1764,6 +1764,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   const watchingRef = useRef(watching);
   watchingRef.current = watching;
 
+  /**
+   * Qual transmissão esta pessoa anunciou à sala que está assistindo.
+   *
+   * O estado de voz tem espaço para uma só, e é o suficiente: a interface
+   * mostra "quem está vendo esta live", não "quantas lives cada um abriu". O
+   * ref existe para o anúncio de saída poder perguntar "era esta que eu tinha
+   * anunciado?" — sem ele, fechar a live de A apagaria o registro de B.
+   */
+  const myWatchingRef = useRef('');
+
   // Um pedido de assistir feito antes de o anúncio chegar.
   //
   // Clicar em "Assistir" na lista lateral pode exigir entrar na call antes, e
@@ -1777,6 +1787,12 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     watchIntent.current = { ...watchIntent.current, [peerId]: streamId };
     setWatching((atual) => (atual[peerId] === streamId ? atual : { ...atual, [peerId]: streamId }));
     socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: true });
+    // O `rtc:watch` acima é ponto-a-ponto: só quem transmite fica sabendo, e é
+    // o que basta para a mídia fluir. Este aqui é o anúncio para a SALA, e é o
+    // que permite todo mundo ver quem está assistindo cada transmissão — sem
+    // ele, cada pessoa saberia apenas o que ela mesma assiste.
+    myWatchingRef.current = peerId;
+    socket?.emit('voice:state', { watching: peerId });
     watchSent.current.set(peerId, streamId);
   }, [socket]);
   watchLiveRef.current = watchLive;
@@ -1797,6 +1813,13 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     watchSent.current.delete(peerId);
     watchPending.current.delete(peerId);
     if (streamId) socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: false });
+    // Sair da live de alguém limpa o anúncio para a sala. Só quando é a live
+    // que estava sendo assistida: parar de assistir a A não pode apagar o
+    // registro de que se está assistindo a B.
+    if (myWatchingRef.current === peerId) {
+      myWatchingRef.current = '';
+      socket?.emit('voice:state', { watching: '' });
+    }
   }, [socket]);
 
   /**
@@ -2649,6 +2672,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
 
   return {
     mediaSnapshot,
+    // O próprio `socketId`. A interface precisa dele para saber quais membros
+    // estão assistindo à MINHA transmissão — a pergunta que decide o som de
+    // alguém entrando e saindo da sua live.
+    selfSocketId: selfId.current,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     screenSource,

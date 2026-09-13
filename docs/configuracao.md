@@ -39,6 +39,22 @@ printf 'TUMACORD_SERVER_ACCESS_KEY=%s\n' "$(openssl rand -base64 24)" >> .env
 | `TUMACORD_UPDATES_STATE_DIR` | não | `/estado` | catálogo, manifestos, dispositivos, chaves confiáveis |
 | `TUMACORD_UPDATES_STORAGE_DIR` | não | `/pacotes` | os bytes dos pacotes, fora de qualquer webroot |
 | `TUMACORD_UPDATES_MAX_DOWNLOADS` | não | `6` | downloads simultâneos |
+| `TUMACORD_UPDATES_PUBLIC_READ` | não | vazio | `1` dispensa a credencial de dispositivo para **baixar** |
+
+> **Sobre `TUMACORD_UPDATES_PUBLIC_READ`.** Com ele ligado, qualquer um que
+> saiba o endereço baixa o catálogo e os pacotes. É o que faz uma instalação
+> nova conseguir se atualizar sem alguém digitar um convite naquela máquina —
+> e no Windows esse convite teria de ser digitado antes de o aplicativo
+> existir.
+>
+> O que **não** muda: catálogo e manifesto continuam assinados por uma chave
+> que não vive nesta máquina, então saber o endereço não permite entregar um
+> binário como oficial; e a administração continua na porta 4301, que nunca
+> sai do laço local. Esta porta é só leitura, e leitura de documento assinado.
+>
+> O que se perde é o sigilo dos binários e a revogação por máquina. Pese isso
+> contra o custo de um passo manual em cada instalação — para um grupo de
+> amigos com o código já público, a conta costuma fechar do lado de ligar.
 
 **Sobre o teto de downloads:** a VPS divide rede, CPU e disco com o chat e com
 o TURN. Sem teto, um mutirão de atualização tira a call de todo mundo — e o

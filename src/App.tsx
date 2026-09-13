@@ -15,7 +15,7 @@ import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { describeOrigin, originLabel } from './lib/origin';
 import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetThisDestination, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
 import { ATTACHMENT_SYNC_KEY, attachmentSyncEnabled, attachmentSyncVisible } from './lib/attachmentSync';
-import { FEEDBACK_SOUNDS, SOUND_LABEL, playSound, readSoundEnabled, readSoundVolume, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
+import { FEEDBACK_SOUNDS, SOUND_LABEL, playSound, previewSound, readDisabledSounds, readSoundEnabled, readSoundVolume, setSoundEnabledFor, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, imagePreview, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { syncIdentity } from './lib/identity';
 import { volumeToGain } from './lib/audioGain';
@@ -1266,6 +1266,8 @@ function ChatView({ channel, messages, message, setMessage, sendMessage, pending
 }
 
 interface VoiceViewModel {
+  /** O `socketId` desta pessoa, para saber quem assiste à transmissão dela. */
+  selfSocketId: string;
   channelId: string | null;
   members: VoiceState[];
   muted: boolean;
@@ -1326,6 +1328,48 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
   const watchingLive = visibleVideoMedia.some((media) => media.kind === 'screen');
   const volumeFor = (userId?: string) => userId ? Math.max(0, Math.min(2, userVolumes[userId] ?? 1)) : 1;
   const mutedFor = (userId?: string) => Boolean(userId && mutedUsers[userId]);
+
+  /**
+   * Os espectadores de cada transmissão, indexados por quem transmite.
+   *
+   * Derivado da sala, e não guardado à parte: cada pessoa declara o que está
+   * assistindo no próprio estado de voz, e a lista de espectadores é o inverso
+   * disso. Duas metades guardadas separadamente divergiriam — alguém sai da
+   * call e some de um lado sem sumir do outro.
+   */
+  const watchersByStreamer = useMemo(() => {
+    const porTransmissor = new Map<string, VoiceState[]>();
+    for (const member of members) {
+      if (!member.watching) continue;
+      const lista = porTransmissor.get(member.watching) ?? [];
+      lista.push(member);
+      porTransmissor.set(member.watching, lista);
+    }
+    return porTransmissor;
+  }, [members]);
+
+  const myWatchers = useMemo(
+    () => (voice.selfSocketId ? watchersByStreamer.get(voice.selfSocketId) ?? [] : []),
+    [voice.selfSocketId, watchersByStreamer],
+  );
+
+  // O som de alguém abrir ou fechar a sua live.
+  //
+  // Compara com o conjunto anterior em vez de reagir ao tamanho: duas pessoas
+  // trocando de lugar no mesmo instante manteriam a contagem igual, e as duas
+  // mudanças passariam em silêncio.
+  const previousWatchers = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const agora = new Set(myWatchers.map((watcher) => watcher.socketId));
+    const antes = previousWatchers.current;
+    previousWatchers.current = agora;
+    // A primeira leitura não toca nada: quem já estava assistindo quando esta
+    // tela abriu não "acabou de entrar".
+    if (!antes) return;
+    if (!voice.screenOn) return;
+    for (const socketId of agora) if (!antes.has(socketId)) playSound('viewerJoin');
+    for (const socketId of antes) if (!agora.has(socketId)) playSound('viewerLeave');
+  }, [myWatchers, voice.screenOn]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.fullscreenElement) setTheaterMediaKey(null); };
     window.addEventListener('keydown', onKeyDown);
@@ -1392,9 +1436,9 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
         onClick={() => void toggleStageFullscreen()}
         title={stageFullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia com todas as lives abertas'}
       ><Icon name={stageFullscreen ? 'minimize' : 'maximize'} /><span>{stageFullscreen ? 'Sair' : 'Todas em tela cheia'}</span></button>}
-      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} />}
+      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} watchers={myWatchers} ownStream />}
       {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} />; })}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted || mutedFor(media.user?.id) : voice.deafened || mutedFor(media.user?.id)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} watchers={screen ? watchersByStreamer.get(media.peerId) ?? [] : []} />; })}
       {/* Uma live que começou não começa a tocar sozinha, e também não abre
           um cartão no meio da tela para avisar que existe. Ela se anuncia
           junto da pessoa, na lista da esquerda, e é de lá que se escolhe
@@ -1615,12 +1659,26 @@ interface TileVolume {
   onMuted: (muted: boolean) => void;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume }) {
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl, watchers = [], ownStream = false }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume; watchers?: VoiceState[]; ownStream?: boolean }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const detachedLive = useDetachedLive(mediaRef, label, `tumacord-live-${mediaKey.replace(/[^a-zA-Z0-9]/g, '')}`);
   const canDetach = Boolean(remote && detachedLive.supported);
   const [fullscreen, setFullscreen] = useState(false);
+  // Os controles só aparecem quando o mouse passa, e somem sozinhos depois.
+  //
+  // Uma barra fixa sobre a transmissão come a parte de baixo da imagem o tempo
+  // todo — e é justamente ali que costuma estar o que se quer ver. Some por
+  // inatividade, e não ao sair do quadro: quem está com o ponteiro parado sobre
+  // a live está assistindo, não mexendo nos botões.
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setControlsVisible(false), 2_600);
+  }, []);
+  useEffect(() => () => { if (hideTimer.current) window.clearTimeout(hideTimer.current); }, []);
   const fullscreenRef = useRef(false);
   fullscreenRef.current = fullscreen;
   const toggleFullscreen = async () => {
@@ -1666,7 +1724,18 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     if ((event.target as HTMLElement).closest('.video-actions')) return;
     toggleTheater();
   };
-  return <div ref={tileRef} onDoubleClick={onTileDoubleClick} className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''}`}><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span><div className="video-actions">{volumeControl && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  return <div
+    ref={tileRef}
+    onDoubleClick={onTileDoubleClick}
+    onPointerMove={revealControls}
+    onPointerEnter={revealControls}
+    // O foco por teclado também revela: quem navega com Tab precisa ver onde
+    // chegou, e um controle visível só ao mouse é um controle que não existe
+    // para quem não usa mouse.
+    onFocusCapture={revealControls}
+    onPointerLeave={() => setControlsVisible(false)}
+    className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${controlsVisible ? 'mostra-controles' : ''}`}
+  ><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<span>{screen && <i className="live-dot" />}{label}</span>{screen && <StreamViewers watchers={watchers} self={ownStream} />}<div className="video-actions">{volumeControl && fullscreen && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 /**
@@ -1704,6 +1773,79 @@ function TileVolumeButton({ control }: { control: TileVolume }) {
       />
       <small>{control.muted ? 'mudo' : `${percent}%`}</small>
     </div>
+  </div>;
+}
+
+/**
+ * Quem está vendo esta transmissão.
+ *
+ * Compacto de propósito: um selo no canto com as iniciais de até três pessoas e
+ * um "+N" para o resto. Uma lista com nomes por extenso sobre a imagem tiraria
+ * da live justamente o espaço que se quer ver — e a pergunta que este selo
+ * responde é "alguém está vendo?", não "quem exatamente", que o `title`
+ * responde para quem passar o mouse.
+ *
+ * Ele aparece em TODAS as transmissões, e não só na sua: numa call em que três
+ * pessoas transmitem, saber que ninguém está na sua e todo mundo está na do
+ * lado é a informação que faz alguém parar de falar sozinho.
+ */
+function StreamViewers({ watchers, self }: { watchers: VoiceState[]; self: boolean }) {
+  if (!watchers.length) {
+    // "Ninguém ainda" só é dito na SUA transmissão. Na dos outros seria uma
+    // plateia vazia anunciada para todo mundo, e ninguém precisa disso.
+    return self ? <div className="stream-viewers is-empty" title="Ninguém está vendo sua transmissão ainda"><Icon name="eye" /><span>0</span></div> : null;
+  }
+  const nomes = watchers.map((watcher) => watcher.username);
+  return <div
+    className="stream-viewers"
+    title={`${nomes.length === 1 ? 'Vendo agora' : `${nomes.length} vendo agora`}: ${nomes.join(', ')}`}
+  >
+    <Icon name="eye" />
+    <div className="stream-viewers-faces">
+      {watchers.slice(0, 3).map((watcher) => (
+        <i key={watcher.socketId} aria-hidden="true">{watcher.username.slice(0, 1).toLocaleUpperCase('pt-BR')}</i>
+      ))}
+    </div>
+    <span>{watchers.length > 3 ? `+${watchers.length - 3}` : watchers.length}</span>
+  </div>;
+}
+
+/**
+ * Cada efeito sonoro, com interruptor próprio e prévia.
+ *
+ * O interruptor geral continua acima e vale por cima de todos: desligá-lo cala
+ * o aplicativo sem apagar as escolhas individuais de quem depois ligá-lo de
+ * volta.
+ *
+ * O botão de ouvir toca mesmo com o efeito desligado, de propósito — é ouvindo
+ * que se decide se ele merece voltar.
+ */
+function SoundGallery({ enabled }: { enabled: boolean }) {
+  const [disabled, setDisabled] = useState<Set<FeedbackSound>>(readDisabledSounds);
+  const toggle = (nome: FeedbackSound) => {
+    const ligado = disabled.has(nome);
+    setSoundEnabledFor(nome, ligado);
+    setDisabled(readDisabledSounds());
+    if (ligado) previewSound(nome);
+  };
+  return <div className="sound-gallery">
+    {FEEDBACK_SOUNDS.map((nome) => {
+      const ligado = !disabled.has(nome);
+      return <div key={nome} className={`sound-item ${ligado ? '' : 'is-off'}`}>
+        <label title={ligado ? `Desligar: ${SOUND_LABEL[nome]}` : `Ligar: ${SOUND_LABEL[nome]}`}>
+          <input type="checkbox" checked={ligado} disabled={!enabled} onChange={() => toggle(nome)} />
+          <span>{SOUND_LABEL[nome]}</span>
+        </label>
+        <button
+          type="button"
+          className="sound-preview"
+          disabled={!enabled}
+          onClick={() => previewSound(nome)}
+          title={`Ouvir: ${SOUND_LABEL[nome]}`}
+          aria-label={`Ouvir ${SOUND_LABEL[nome]}`}
+        ><Icon name="volume" /></button>
+      </div>;
+    })}
   </div>;
 }
 
@@ -1855,7 +1997,7 @@ function VoiceMemberVolume({ member, volume, muted, onVolume, onMuted, onProfile
   return <div className="voice-volume-popover" ref={root}>
     <header><div><strong>{member.username}</strong><small>{member.pingMs < 9999 ? `${member.pingMs} ms` : 'Na chamada'}</small></div><button onClick={onClose} title="Fechar"><Icon name="close" /></button></header>
     <label><span><Icon name={muted || volume === 0 ? 'volumeOff' : 'volume'} /> Volume da voz</span><output>{muted ? 0 : Math.round(volume * 100)}%</output><input type="range" min="0" max="2" step="0.01" value={muted ? 0 : volume} disabled={muted} onChange={(event) => onVolume(Number(event.target.value))} aria-label={`Volume da voz de ${member.username}`} /></label>
-    <button className={`voice-volume-mute ${muted ? 'is-muted' : ''}`} aria-pressed={muted} onClick={() => onMuted(!muted)} title={muted ? 'A voz volta; a transmissão tem controle próprio' : 'Silencia só a voz; a transmissão tem controle próprio'}>
+    <button className={`voice-volume-mute ${muted ? 'is-muted' : ''}`} aria-pressed={muted} onClick={() => onMuted(!muted)} title={muted ? `Voltar a ouvir ${member.username} — só para você` : `Silenciar ${member.username} para você: a voz e o áudio da transmissão dela. Ninguém mais é afetado.`}>
       <Icon name={muted ? 'micOff' : 'mic'} />
       <span>{muted ? 'Ouvir' : 'Silenciar'}</span>
     </button>
@@ -1980,9 +2122,10 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
       <div className="setting-label"><span className="setting-title">Qualidade da transmissão<small>Vale para a próxima live e para a que já estiver no ar.</small></span><Dropdown label="Qualidade da transmissão" value={quality} options={qualityDropdownOptions} onChange={(next) => { void setQuality(next as StreamQuality); }} /></div>
       <label className="sound-toggle" title="Entrada, saída, mensagens, microfone, transmissão e troca de host."><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /><span><strong>Sons de feedback</strong></span></label>
       <label className="feedback-volume"><span>Volume dos feedbacks</span><input type="range" min="0.2" max="1" step="0.05" value={soundVolume} disabled={!soundEnabled} onChange={(event) => updateSoundVolume(Number(event.target.value))} onMouseUp={() => playSound('notification')} /><output>{Math.round(soundVolume * 100)}%</output></label>
-      {/* Ouvir cada um. Descrever um som em uma frase não funciona: quem quer
-          saber como é precisa poder tocar. */}
-      <div className="sound-gallery">{FEEDBACK_SOUNDS.map((nome) => <button key={nome} type="button" disabled={!soundEnabled} onClick={() => playSound(nome)} title={`Ouvir: ${SOUND_LABEL[nome]}`}><Icon name="volume" />{SOUND_LABEL[nome]}</button>)}</div>
+      {/* Ligar e desligar cada um, e ouvir antes de decidir. Descrever um som
+          em uma frase não funciona: quem quer saber como é precisa poder
+          tocar — inclusive um que esteja desligado. */}
+      <SoundGallery enabled={soundEnabled} />
       <div className="quality-note"><strong>Áudio da transmissão</strong><span>{screenAudioExplanation(audioSupport)}</span></div>
     </section>}
   </div></div>;

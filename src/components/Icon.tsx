@@ -6,7 +6,7 @@ export type IconName =
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
   | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser' | 'update'
-  | 'board' | 'hand' | 'undo' | 'lock' | 'trash';
+  | 'board' | 'hand' | 'undo' | 'lock' | 'trash' | 'eye';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -35,6 +35,9 @@ const glyphs: Record<IconName, ReactNode> = {
   settings: <><path d="M4 6.4h9.4M18.6 6.4h1.4M4 12h4.4M13.6 12H20M4 17.6h9.4M18.6 17.6H20" /><circle cx="15.8" cy="6.4" r="2.2" /><circle cx="10.8" cy="12" r="2.2" /><circle cx="15.8" cy="17.6" r="2.2" /></>,
   leave: <><path d="M14.2 3.4H6.8a2 2 0 0 0-2 2v13.2a2 2 0 0 0 2 2h7.4" /><path d="M11.2 12h9.4M17.2 8.6 20.6 12l-3.4 3.4" /></>,
   plus: <path d="M12 5.2v13.6M5.2 12h13.6" />,
+  // Quem está vendo uma transmissão. Traço só, para casar com o resto do
+  // conjunto — nenhum ícone daqui é preenchido.
+  eye: <><path d="M2.2 12S5.9 5.6 12 5.6 21.8 12 21.8 12 18.1 18.4 12 18.4 2.2 12 2.2 12Z" /><circle cx="12" cy="12" r="3.1" /></>,
   users: <><circle cx="9.2" cy="7.6" r="3.6" /><path d="M2.6 20.4v-1.3a4.4 4.4 0 0 1 4.4-4.4h4.4a4.4 4.4 0 0 1 4.4 4.4v1.3" /><path d="M16.4 4.4a3.6 3.6 0 0 1 0 6.9M18.4 14.9a4.4 4.4 0 0 1 3 4.2v1.3" /></>,
   send: <><path d="M20.8 3.2 3.4 9.6a.7.7 0 0 0 0 1.3l7 2.5 2.6 7.2a.7.7 0 0 0 1.3 0Z" /><path d="m20.8 3.2-10.4 10.2" /></>,
   host: <><path d="m3.4 8.2 4 3.2L12 5l4.6 6.4 4-3.2-1.7 9.4H5.1Z" /><path d="M5.4 20.4h13.2" /></>,

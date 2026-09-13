@@ -77,7 +77,7 @@ interface Environment {
   close: () => Promise<void>;
 }
 
-async function start(): Promise<Environment> {
+async function start(leituraAberta = false): Promise<Environment> {
   const rootDir = await mkdtemp(path.join(tmpdir(), 'tumacord-updater-'));
   const stateDir = path.join(rootDir, 'estado');
   const packagesDir = path.join(rootDir, 'pacotes');
@@ -90,6 +90,10 @@ async function start(): Promise<Environment> {
   process.env.TUMACORD_UPDATES_NO_LISTEN = '1';
   process.env.TUMACORD_UPDATES_STATE_DIR = stateDir;
   process.env.TUMACORD_UPDATES_STORAGE_DIR = packagesDir;
+  // A leitura é decidida na carga do módulo, e cada teste importa uma cópia
+  // nova — então a variável precisa estar posta ANTES do import.
+  if (leituraAberta) process.env.TUMACORD_UPDATES_PUBLIC_READ = '1';
+  else delete process.env.TUMACORD_UPDATES_PUBLIC_READ;
 
   const serviceModule = await import(`../services/updates/src/index.js?u=${Date.now()}${Math.random()}`) as typeof import('../services/updates/src/index');
   await serviceModule.store.load();
@@ -276,4 +280,46 @@ test('nenhum arquivo do caminho de atualização aponta para o GitHub', async ()
     );
     assert.equal(lines.join('\n').includes('githubusercontent'), false, `${file} ainda aponta para o armazenamento do GitHub`);
   }
+});
+
+// ── Leitura aberta ──────────────────────────────────────────────────────────
+//
+// O convite de uso único por máquina não escala para um grupo de amigos: no
+// Windows ele teria de ser digitado antes de o aplicativo existir, e uma
+// versão que exige um passo manual em cada máquina é uma versão que metade do
+// grupo não instala. Com `TUMACORD_UPDATES_PUBLIC_READ=1`, baixar deixa de
+// exigir credencial — e o que protege continua sendo a assinatura, não o
+// sigilo do endereço.
+
+test('com leitura aberta, atualizar não pede convite nenhum', { timeout: 30_000 }, async (context) => {
+  const environment = await start(true);
+  context.after(() => environment.close());
+
+  // Nenhuma credencial foi gravada: é uma máquina recém-instalada.
+  await rm(path.join(environment.userDataPath, 'update-device.json'), { force: true });
+
+  const updater = environment.newUpdater();
+  const outcome = await updater.check({ manual: true });
+  assert.equal(outcome.phase, 'available', `esperava uma oferta, veio ${outcome.phase}: ${outcome.error}`);
+  assert.equal(outcome.version, '0.9.10');
+  assert.equal(outcome.needsEnrollment, false, 'não pode pedir convite quando o serviço não exige');
+
+  // E o download também: um serviço que entrega o catálogo entrega o pacote.
+  const baixado = await updater.download();
+  assert.equal(baixado.phase, 'ready', `esperava o pacote pronto, veio ${baixado.phase}: ${baixado.error}`);
+  assert.match(baixado.sha256, /^[0-9a-f]{64}$/);
+});
+
+test('o serviço diz em qual modo está, para o operador poder conferir', { timeout: 30_000 }, async (context) => {
+  const aberto = await start(true);
+  context.after(() => aberto.close());
+  const saude = await (await fetch(`${aberto.origin}/v1/health`)).json() as { auth?: string };
+  assert.equal(saude.auth, 'public');
+
+  const fechado = await start(false);
+  context.after(() => fechado.close());
+  const saudeFechada = await (await fetch(`${fechado.origin}/v1/health`)).json() as { auth?: string };
+  assert.equal(saudeFechada.auth, 'device');
+  // E o catálogo continua recusado sem credencial.
+  assert.equal((await fetch(`${fechado.origin}/v1/catalog`)).status, 401);
 });

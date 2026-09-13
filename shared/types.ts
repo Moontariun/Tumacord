@@ -94,6 +94,18 @@ export interface VoiceState extends PublicUser {
   camera: boolean;
   screen: boolean;
   screenAudio: boolean;
+  /**
+   * O `socketId` de quem esta pessoa está assistindo agora, ou vazio.
+   *
+   * Um campo só, e não uma lista de espectadores por transmissão: quem assiste
+   * sabe o que assiste, e a lista de espectadores de alguém é derivada
+   * filtrando a sala. Guardar as duas metades deixaria as duas divergirem —
+   * alguém sai da call e some de um lado sem sumir do outro.
+   *
+   * Ele viaja no estado de voz que já é transmitido a todo mundo na sala, e
+   * por isso não custa nem um evento novo nem uma consulta.
+   */
+  watching: string;
 }
 
 export interface ServerSnapshot {

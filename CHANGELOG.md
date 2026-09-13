@@ -1,5 +1,40 @@
 # Histórico de versões
 
+## 0.11.0 — a live diz quem está vendo, e atualizar deixou de pedir convite
+
+<!-- tumacord:resumo -->
+Atualizar não exige mais um convite por máquina — o que finalmente faz o Windows conseguir se atualizar sozinho. E a transmissão ganhou o que faltava: quem está vendo, som quando alguém entra ou sai, e uma barra de controles que some em vez de ficar por cima da imagem.
+
+**Atualizar deixou de exigir um passo manual em cada máquina**
+
+- O serviço de atualizações ganhou `TUMACORD_UPDATES_PUBLIC_READ=1`: baixar catálogo, manifesto e pacote passa a não exigir credencial de dispositivo. O convite de uso único continua funcionando, e desligar a variável volta a exigi-lo.
+- **O que isso troca, exatamente:** quem souber o endereço passa a poder baixar. Só isso. Catálogo e manifesto continuam assinados por uma chave que não vive no servidor — ninguém entrega um binário como oficial por saber o endereço. A administração (importar, publicar, retirar) continua na 4301, que nunca sai do laço local. O que se perde é o sigilo dos binários, que num repositório público já não existia, e a revogação por máquina, que nunca impediu ninguém de pegar o pacote com outra pessoa do grupo.
+- O aplicativo passou a **tentar sem credencial** em vez de recusar de antemão. Num serviço aberto ele simplesmente atualiza; num fechado, a recusa chega como 401 e é aí — e só aí — que o convite é pedido.
+- `/v1/health` passou a dizer em qual modo o serviço está, para o operador conferir num `curl` em vez de deduzir.
+
+**A transmissão diz quem está vendo**
+
+- Um selo compacto no canto de cada transmissão mostra os espectadores: as iniciais de até três e um `+N` para o resto, com os nomes por extenso ao passar o mouse. Ele aparece em **todas** as lives da call, e não só na sua — numa call com três transmissões, saber que ninguém está na sua e todo mundo está na do lado é a informação que faz alguém parar de falar sozinho.
+- Na sua própria transmissão o selo aparece mesmo com ninguém vendo, mostrando zero. Na dos outros, uma plateia vazia não é anunciada para a sala.
+- A informação sai do estado de voz que já era transmitido: cada pessoa declara o que está assistindo, e a lista de espectadores é o inverso disso. Guardar as duas metades faria as duas divergirem — alguém sai da call e some de um lado sem sumir do outro.
+- Dois efeitos sonoros novos avisam quando alguém abre ou fecha **a sua** live. Eles são de propósito mais discretos que os de entrar e sair da call: tocam enquanto você está apresentando, que é o pior momento para um som chamativo.
+
+**A barra de controles sai da frente**
+
+- Os controles de cada transmissão aparecem quando o mouse passa e somem sozinhos depois de alguns segundos. Uma barra fixa come a parte de baixo da imagem o tempo todo, e é justamente ali que costuma estar o que se quer ver. Em tela cheia ela também some, que é onde ela mais atrapalha.
+- O botão de volume da transmissão passou a aparecer **só em tela cheia** — é o único lugar onde o controle de volume normal não está ao alcance. Fora dela ele era um botão a mais cobrindo a imagem para fazer o que já dava para fazer.
+- Em telas de toque, sem ponteiro para revelar nada, a barra continua fixa.
+
+**Silenciar uma pessoa passou a silenciar tudo o que vem dela**
+
+- O botão silenciava só a voz; o áudio da transmissão daquela pessoa continuava tocando, o que fazia o botão parecer quebrado. Agora ele cobre os dois.
+- Continua valendo **só para você**: a preferência vive nesta máquina, nada é enviado ao servidor nem à outra pessoa, e ninguém mais é afetado.
+
+**Cada efeito sonoro tem interruptor próprio**
+
+- A tela de voz e vídeo passou a ligar e desligar os efeitos um a um, além do interruptor geral que continua valendo por cima de todos. O botão de ouvir toca mesmo com o efeito desligado — é ouvindo que se decide se ele merece voltar.
+- A preferência guarda os efeitos **desligados**, e não os ligados: com a lista dos ligados, um efeito novo nasceria mudo para quem já usa o aplicativo e ninguém descobriria que ele existe.
+
 ## 0.10.0 — SemVer, e a VPS busca a release no GitHub privado
 
 <!-- tumacord:resumo -->
