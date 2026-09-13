@@ -44,6 +44,8 @@ export interface UpdateBridge {
   restart: () => void;
   dismiss: () => void;
   setEnabled: (enabled: boolean) => void;
+  setShowOlder: (showOlder: boolean) => void;
+  chooseVersion: (version: string) => void;
   /** Troca o convite do dono por uma credencial deste dispositivo. */
   enroll: (invite: string, label?: string) => Promise<void>;
   openPage: () => void;
@@ -92,6 +94,8 @@ export function useUpdates(): UpdateBridge {
     restart: () => void bridge?.restart().catch(() => undefined),
     dismiss: () => acao(bridge ? () => bridge.dismiss() : undefined),
     setEnabled: (enabled: boolean) => acao(bridge ? () => bridge.setEnabled(enabled) : undefined),
+    setShowOlder: (showOlder: boolean) => acao(bridge ? () => bridge.setShowOlder(showOlder) : undefined),
+    chooseVersion: (version: string) => acao(bridge ? () => bridge.chooseVersion(version) : undefined),
     // Esta devolve a promessa: a tela de inscrição desabilita o botão enquanto
     // o pedido corre, e precisa saber quando ele termina.
     enroll: async (invite: string, label?: string) => {
@@ -192,6 +196,51 @@ function ReleaseNotes({ markdown }: { markdown: string }) {
   </div>;
 }
 
+/**
+ * As versões que o servidor oferece, para quem quiser voltar atrás.
+ *
+ * Desligada por padrão. A pergunta normal é "tem versão nova?", e uma lista de
+ * tudo o que já existiu na frente de quem só quer atualizar é ruído — além de
+ * custar um documento por versão a cada consulta.
+ *
+ * Ligada, ela lista tudo o que está na pasta do servidor, marca a instalada e
+ * desabilita o que não tem pacote para este jeito de instalação. Uma versão sem
+ * pacote continua aparecendo: escondê-la faria a pessoa procurar no servidor o
+ * que ela está vendo lá e não achar aqui.
+ */
+function VersionList({ state, onChoose, onToggle }: { state: TumacordUpdateState; onChoose: (version: string) => void; onToggle: (showOlder: boolean) => void }) {
+  const versoes = state.versions ?? [];
+  return <div className="update-versions">
+    <label className="sound-toggle update-toggle">
+      <input type="checkbox" checked={state.showOlder} onChange={(event) => onToggle(event.target.checked)} />
+      <span><strong>Mostrar versões antigas</strong><small>Lista tudo o que o servidor oferece e deixa instalar uma versão anterior. Voltar de versão é sempre uma escolha sua — a procura automática nunca oferece isso.</small></span>
+    </label>
+    {state.showOlder && (versoes.length
+      ? <ul className="update-version-list">
+        {versoes.map((item) => <li key={item.releaseId} className={item.installed ? 'is-installed' : ''}>
+          <span className="update-version-name">
+            {item.version}
+            {item.installed && <em>instalada</em>}
+            {item.older && !item.installed && <em className="is-older">anterior</em>}
+          </span>
+          <span className="update-version-size">{item.size ? formatBytes(item.size) : ''}</span>
+          <button
+            type="button"
+            className="ghost"
+            disabled={item.installed || !item.canApply}
+            onClick={() => onChoose(item.version)}
+            title={item.installed
+              ? 'É a versão que está rodando agora'
+              : item.canApply
+                ? `Preparar a ${item.version} para instalar`
+                : 'Esta versão não tem pacote para o jeito que o Tumacord foi instalado aqui'}
+          >{item.installed ? 'Em uso' : item.canApply ? 'Escolher' : 'Sem pacote'}</button>
+        </li>)}
+      </ul>
+      : <p className="update-versions-empty">O servidor não está oferecendo nenhuma versão agora.</p>)}
+  </div>;
+}
+
 export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridge; onClose: () => void; onNotice: (message: string) => void }) {
   const state = bridge.state;
   // O estado chega do processo principal em milissegundos, mas um clique é
@@ -288,6 +337,8 @@ export function UpdateModal({ bridge, onClose, onNotice }: { bridge: UpdateBridg
           fazer. */}
       {state.phase !== 'checking' && state.phase !== 'downloading' && state.phase !== 'applying' && state.phase !== 'applied' && <button className="ghost" onClick={bridge.check}><Icon name="refresh" /> Procurar de novo</button>}
     </div>
+
+    <VersionList state={state} onChoose={bridge.chooseVersion} onToggle={bridge.setShowOlder} />
 
     <label className="sound-toggle update-toggle">
       <input type="checkbox" checked={state.enabled} onChange={(event) => bridge.setEnabled(event.target.checked)} />

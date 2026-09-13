@@ -573,6 +573,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('tumacord:update-dismiss', (_event, version) => updater.dismiss(typeof version === 'string' ? version : ''));
   ipcMain.handle('tumacord:update-notes-seen', (_event, version) => updater.markNotesSeen(typeof version === 'string' ? version : ''));
   ipcMain.handle('tumacord:update-set-enabled', (_event, enabled) => updater.setEnabled(enabled !== false));
+  ipcMain.handle('tumacord:update-set-show-older', (_event, showOlder) => updater.setShowOlder(showOlder === true));
+  // A versão vem do renderer, então ela é conferida contra a lista que o
+  // próprio processo principal montou — e nunca usada como caminho ou etiqueta.
+  ipcMain.handle('tumacord:update-choose-version', (_event, version) => updater.chooseVersion(String(version ?? '')));
   // Trocar o convite recebido do dono por uma credencial deste dispositivo.
   // Quem chega aqui é a pessoa na frente do computador: nenhum caminho de rede
   // inscreve dispositivo.

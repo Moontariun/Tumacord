@@ -99,6 +99,26 @@ interface TumacordUpdateState {
   needsEnrollment: boolean;
   /** O que dizer sobre a autorização: o motivo, ou o aviso de que não foi gravada. */
   enrollmentMessage: string;
+  /** Se a lista de versões antigas está ligada. */
+  showOlder: boolean;
+  /**
+   * Toda versão que o servidor oferece, da mais nova para a mais antiga.
+   *
+   * Só vem completa com `showOlder` ligado: sem ele, buscar o manifesto de todo
+   * o histórico seria pedir vinte documentos para usar um.
+   */
+  versions: Array<{
+    version: string;
+    releaseId: string;
+    publishedAt: string;
+    installed: boolean;
+    older: boolean;
+    size: number;
+    /** Se há pacote desta versão para o jeito que esta cópia foi instalada. */
+    canApply: boolean;
+    /** O manifesto ainda não foi buscado, então não dá para afirmar que não há. */
+    unknownArtifact: boolean;
+  }>;
 }
 
 /** O que a interface pode saber da identidade deste dispositivo: nada que assine. */
@@ -156,6 +176,8 @@ interface Window {
       dismiss: (version?: string) => Promise<TumacordUpdateState>;
       markNotesSeen: (version?: string) => Promise<TumacordUpdateState>;
       setEnabled: (enabled: boolean) => Promise<TumacordUpdateState>;
+      setShowOlder: (showOlder: boolean) => Promise<TumacordUpdateState>;
+      chooseVersion: (version: string) => Promise<TumacordUpdateState>;
       /** Troca o convite recebido do dono por uma credencial deste dispositivo. */
       enroll: (invite: string, label?: string) => Promise<TumacordUpdateState>;
       openPage: () => Promise<string>;

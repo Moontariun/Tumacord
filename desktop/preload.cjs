@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('tumacordDesktop', {
     dismiss: (version) => ipcRenderer.invoke('tumacord:update-dismiss', typeof version === 'string' ? version : ''),
     markNotesSeen: (version) => ipcRenderer.invoke('tumacord:update-notes-seen', typeof version === 'string' ? version : ''),
     setEnabled: (enabled) => ipcRenderer.invoke('tumacord:update-set-enabled', enabled !== false),
+    setShowOlder: (showOlder) => ipcRenderer.invoke('tumacord:update-set-show-older', showOlder === true),
+    chooseVersion: (version) => ipcRenderer.invoke('tumacord:update-choose-version', String(version ?? '')),
     enroll: (invite, label) => ipcRenderer.invoke('tumacord:update-enroll', String(invite ?? ''), String(label ?? '')),
     openPage: () => ipcRenderer.invoke('tumacord:update-open-page'),
     onChanged: (listener) => {

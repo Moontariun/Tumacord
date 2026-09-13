@@ -30,10 +30,10 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { failureMessage, launchElevatedInstaller, verifyInstallerFile } = require('./windows-installer.cjs');
-const { chooseFromCatalog, installKind, manifestsToFetch } = require('./update-check.cjs');
+const { chooseFromCatalog, installKind, manifestsToFetch, versionsFromCatalog } = require('./update-check.cjs');
 const { MESSAGES: CREDENTIAL_MESSAGES, clearDeviceCredential, readDeviceCredential, shouldRenew, writeDeviceCredential } = require('./update-credentials.cjs');
 const { updateOrigin } = require('./update-origin.cjs');
-const { downloadArtifact, enrollDevice, fetchCatalog, fetchManifest, renewDevice } = require('./update-source.cjs');
+const { downloadArtifact, enrollDevice, fetchCatalog, fetchManifest, renewDevice, selectArtifact } = require('./update-source.cjs');
 
 // Um arquivo maior do que isso não é uma versão do Tumacord: o instalador do
 // Windows tem ~110 MB e o AppImage ~120 MB. O teto existe para que um serviço
@@ -61,6 +61,15 @@ function sanitizeState(input) {
     // alguém no meio do caminho — reoferecia uma versão que o grupo já deixou
     // para trás, ou segurava a retirada de uma defeituosa. Ela só cresce.
     catalogSequence: Number.isSafeInteger(source.catalogSequence) && source.catalogSequence >= 0 ? source.catalogSequence : 0,
+    /**
+     * Mostrar também as versões antigas que o servidor ainda oferece.
+     *
+     * Desligado por padrão: a pergunta normal é "tem versão nova?", e uma lista
+     * de tudo o que já existiu na frente de quem só quer atualizar é ruído.
+     * Ligado, ele custa alguns documentos a mais por consulta — por isso é
+     * escolha, e não sempre.
+     */
+    showOlder: source.showOlder === true,
   };
 }
 
@@ -119,6 +128,9 @@ class Updater {
       lastCheck: this.preferences.lastCheck,
       dismissed: this.preferences.dismissed,
       notesSeen: this.preferences.notesSeen,
+      showOlder: this.preferences.showOlder,
+      /** Toda versão que o servidor oferece, para a lista de versões antigas. */
+      versions: [],
       // De onde este aplicativo aceita atualização, e se ele já foi autorizado
       // a baixar. Os dois aparecem na tela: sem origem não há o que procurar,
       // e sem credencial a pessoa precisa de um convite do dono.
@@ -242,7 +254,7 @@ class Updater {
       // Só os manifestos que podem virar oferta, e o da versão instalada pelas
       // notas de "o que mudou". Buscar todos seria pedir dez documentos para
       // usar um.
-      const wanted = manifestsToFetch({ catalog, currentVersion: this.version });
+      const wanted = manifestsToFetch({ catalog, currentVersion: this.version, includeOlder: this.preferences.showOlder });
       const manifests = [];
       for (const item of wanted) {
         try {
@@ -274,8 +286,14 @@ class Updater {
       const mesmaOferta = Boolean(decision.version) && decision.version === this.snapshot.version;
       const baixadaSegueValendo = mesmaOferta && this.snapshot.phase === 'ready' && Boolean(this.snapshot.file);
 
+      const versions = versionsFromCatalog({
+        catalog, manifests, currentVersion: this.version, kind: this.kind,
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      });
+
       this.log({ event: 'update-check', status: decision.status, version: decision.version ?? '', kind: this.kind, manual, sequence: catalog.sequence });
       return this.update({
+        versions,
         phase: baixadaSegueValendo ? 'ready' : decision.status === 'available' ? 'available' : decision.status === 'no-asset' ? 'no-asset' : 'up-to-date',
         installedBroken: decision.installedBroken ?? '',
         installedRelease: decision.installedRelease ?? this.snapshot.installedRelease,
@@ -377,6 +395,59 @@ class Updater {
       : { token: renewed.token, deviceId: renewed.deviceId ?? credential.deviceId, expiresAt: renewed.expiresAt, reason: '' };
     this.log({ event: 'update-device-renewed', deviceId: renewed.deviceId ?? credential.deviceId });
     return this.state();
+  }
+
+  /**
+   * Escolher uma versão da lista — inclusive uma mais antiga que a instalada.
+   *
+   * Este é o único caminho por onde uma versão abaixo da instalada vira oferta,
+   * e ele exige um clique numa lista que só aparece com "mostrar versões
+   * antigas" ligado. A procura automática continua **nunca** oferecendo
+   * downgrade: voltar de versão é uma decisão, e uma decisão não acontece
+   * sozinha ao abrir o aplicativo.
+   */
+  async chooseVersion(version) {
+    const alvo = String(version ?? '');
+    const escolhida = (this.snapshot.versions ?? []).find((item) => item.version === alvo);
+    if (!escolhida) return this.update({ error: `A versão ${alvo} não está na lista deste servidor.` });
+    if (!escolhida.canApply) {
+      return this.update({ error: `A ${alvo} não tem pacote para o jeito que o Tumacord foi instalado aqui.` });
+    }
+
+    const { origin, trustedKeys, credential } = this.source();
+    if (!origin) return this.update({ phase: 'no-origin', error: 'Este aplicativo não tem uma origem de atualizações configurada.' });
+
+    try {
+      const manifest = await fetchManifest({
+        origin, token: credential.token, trustedKeys, releaseId: escolhida.releaseId,
+      });
+      const artifact = selectArtifact(manifest, this.kind, process.arch === 'arm64' ? 'arm64' : 'x64');
+      if (!artifact) return this.update({ error: `A ${alvo} não tem pacote para o jeito que o Tumacord foi instalado aqui.` });
+      this.log({ event: 'update-version-chosen', version: manifest.version, older: escolhida.older });
+      return this.update({
+        phase: 'available',
+        version: manifest.version,
+        title: manifest.title ?? '',
+        notes: manifest.notes ?? '',
+        publishedAt: manifest.createdAt ?? '',
+        asset: { ...artifact, releaseId: manifest.releaseId, name: artifact.fileName },
+        // O arquivo de uma oferta anterior não vale para esta: descartá-lo é o
+        // que impede o resumo velho de "validar" o pacote novo.
+        file: '', sha256: '', progress: { received: 0, total: artifact.size || 0 },
+        error: '',
+      });
+    } catch (error) {
+      return this.update({ error: String(error?.message ?? error) });
+    }
+  }
+
+  /** Ligar ou desligar a lista de versões antigas. */
+  async setShowOlder(showOlder) {
+    this.writePreferences({ showOlder: showOlder === true });
+    this.update({ showOlder: showOlder === true });
+    // Reconsultar na hora: ligar a opção e não ver a lista aparecer pareceria
+    // um interruptor quebrado.
+    return this.check({ manual: true });
   }
 
   async download() {

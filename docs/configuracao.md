@@ -40,6 +40,8 @@ printf 'TUMACORD_SERVER_ACCESS_KEY=%s\n' "$(openssl rand -base64 24)" >> .env
 | `TUMACORD_UPDATES_STORAGE_DIR` | não | `/pacotes` | os bytes dos pacotes, fora de qualquer webroot |
 | `TUMACORD_UPDATES_MAX_DOWNLOADS` | não | `6` | downloads simultâneos |
 | `TUMACORD_UPDATES_PUBLIC_READ` | não | vazio | `1` dispensa a credencial de dispositivo para **baixar** |
+| `TUMACORD_UPDATES_SIGNING_DIR` | não | vazio | onde as chaves moram, para o serviço publicar sozinho o que está na pasta |
+| `TUMACORD_UPDATES_SCAN_MS` | não | `60000` | de quanto em quanto tempo a pasta é varrida |
 
 > **Sobre `TUMACORD_UPDATES_PUBLIC_READ`.** Com ele ligado, qualquer um que
 > saiba o endereço baixa o catálogo e os pacotes. É o que faz uma instalação

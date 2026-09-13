@@ -55,13 +55,16 @@ test('o nome do arquivo baixado não sai da pasta de downloads', () => {
 });
 
 test('preferência corrompida no disco não impede o aplicativo de abrir', () => {
-  const empty = { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '', catalogSequence: 0 };
+  const empty = { enabled: true, lastCheck: 0, dismissed: '', notesSeen: '', catalogSequence: 0, showOlder: false };
   assert.deepEqual(sanitizeState(null), empty);
-  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [], catalogSequence: -3 }), empty);
+  assert.deepEqual(sanitizeState({ enabled: 'talvez', lastCheck: 'ontem', dismissed: 42, notesSeen: [], catalogSequence: -3, showOlder: 'sim' }), empty);
   assert.deepEqual(
-    sanitizeState({ enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 }),
-    { enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7 },
+    sanitizeState({ enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7, showOlder: true }),
+    { enabled: false, lastCheck: 10, dismissed: '0.9.1', notesSeen: '0.9.0', catalogSequence: 7, showOlder: true },
   );
+  // A lista de versões antigas nasce desligada, e só um `true` de verdade a
+  // liga: um valor torto no disco não pode virar "mostre tudo".
+  assert.equal(sanitizeState({ showOlder: 'true' }).showOlder, false);
   // A sequência do catálogo é o anti-retrocesso, e um valor torto no disco não
   // pode virar "aceito qualquer catálogo".
   assert.equal(sanitizeState({ catalogSequence: 1.5 }).catalogSequence, 0);

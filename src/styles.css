@@ -417,6 +417,25 @@ svg { width: 20px; height: 20px; }
 /* A prévia é do tamanho real do cartão: escolher cor olhando uma bolinha não
    responde "como isto vai ficar sobre a minha transmissão". */
 .away-preview { position: relative; min-height: 130px; border-radius: 12px; overflow: hidden; background: linear-gradient(145deg, #242633, #1b1c26); }
+
+/* A lista de versões que o servidor oferece.
+   Ela fica atrás de um interruptor: a pergunta normal é "tem versão nova?", e
+   uma lista de tudo o que já existiu na frente de quem só quer atualizar é
+   ruído. */
+.update-versions { display: grid; gap: 8px; }
+.update-version-list { display: grid; gap: 4px; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; list-style: none; }
+.update-version-list li {
+  display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 8px;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px; background: #15161f;
+}
+.update-version-list li.is-installed { border-color: rgba(125,92,255,.4); background: rgba(125,92,255,.08); }
+.update-version-name { display: flex; align-items: center; gap: 7px; color: #d3d6e0; font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.update-version-name em { padding: 2px 6px; border-radius: 999px; background: rgba(125,92,255,.2); color: #c9c0ff; font-size: 8px; font-style: normal; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.update-version-name em.is-older { background: rgba(255,255,255,.07); color: #9296a6; }
+.update-version-size { color: #6f7280; font-size: 10px; font-variant-numeric: tabular-nums; }
+.update-version-list button { padding: 6px 10px; border-radius: 8px; font-size: 10px; font-weight: 800; }
+.update-version-list button:disabled { opacity: .45; }
+.update-versions-empty { margin: 0; color: #8a8d9c; font-size: 11px; }
 .video-tile:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; background: #050609; }
 .video-tile:fullscreen video { object-fit: contain; }
 .video-actions { position: absolute; right: 9px; top: 9px; z-index: 4; display: flex; gap: 6px; opacity: .72; transition: opacity .15s; }

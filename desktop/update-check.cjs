@@ -270,7 +270,7 @@ function chooseFromCatalog({
  * notas de "o que mudou", e as que estão acima dela — na ordem da mais nova
  * para a mais antiga.
  */
-function manifestsToFetch({ catalog, currentVersion, channel = 'stable', limit = 6 } = {}) {
+function manifestsToFetch({ catalog, currentVersion, channel = 'stable', limit = 6, includeOlder = false } = {}) {
   const current = parseVersion(currentVersion);
   const entries = catalog?.channels?.[channel]?.entries;
   if (!Array.isArray(entries)) return [];
@@ -280,15 +280,63 @@ function manifestsToFetch({ catalog, currentVersion, channel = 'stable', limit =
     const version = parseVersion(entry.version);
     if (!version) continue;
     // A instalada entra pelas notas; as acima dela, porque podem ser a oferta.
-    if (current && compareVersions(version, current) < 0) continue;
+    //
+    // `includeOlder` traz também as abaixo, e existe para quem ligou "mostrar
+    // versões antigas": sem o manifesto delas não há como saber se há pacote
+    // para aquela máquina, e uma lista que oferece o que não dá para instalar
+    // é pior do que não listar.
+    if (!includeOlder && current && compareVersions(version, current) < 0) continue;
     wanted.push({ releaseId: entry.releaseId, version: version.text, manifestSha256: String(entry.manifestSha256 ?? '') });
   }
   wanted.sort((left, right) => compareVersions(right.version, left.version));
-  return wanted.slice(0, Math.max(1, limit));
+  // O teto sobe junto: com as antigas na conta, seis documentos não cobrem nem
+  // um histórico curto.
+  return wanted.slice(0, Math.max(1, includeOlder ? Math.max(limit, 24) : limit));
+}
+
+/**
+ * Toda versão do catálogo, com o pacote que serve para esta máquina.
+ *
+ * É o que a lista de "versões antigas" mostra. Ela é derivada dos manifestos já
+ * buscados — nada de rede a mais — e diz, por versão, se há arquivo para o jeito
+ * que esta cópia foi instalada. Uma versão sem pacote aparece assim mesmo, e
+ * desabilitada: some-la faria a pessoa procurar o que ela está vendo na
+ * página de versões e não achar aqui.
+ */
+function versionsFromCatalog({ catalog, manifests, currentVersion, kind = 'unknown', arch = 'x64', channel = 'stable' } = {}) {
+  const entries = catalog?.channels?.[channel]?.entries;
+  if (!Array.isArray(entries)) return [];
+  const porRelease = new Map();
+  for (const manifest of Array.isArray(manifests) ? manifests : []) {
+    if (manifest?.releaseId) porRelease.set(manifest.releaseId, manifest);
+  }
+  const current = parseVersion(currentVersion);
+  const lista = [];
+  for (const entry of entries) {
+    const version = parseVersion(entry?.version);
+    if (!version || entry.state !== 'published') continue;
+    const manifest = porRelease.get(entry.releaseId);
+    const artifact = manifest ? selectArtifact(manifest, kind, arch) : null;
+    lista.push({
+      version: version.text,
+      releaseId: entry.releaseId,
+      publishedAt: String(entry.publishedAt ?? ''),
+      installed: Boolean(current) && compareVersions(version, current) === 0,
+      older: Boolean(current) && compareVersions(version, current) < 0,
+      size: artifact?.size ?? 0,
+      // Sem manifesto buscado não dá para afirmar que há pacote; dizer que não
+      // há seria mentir para quem só não pediu as antigas ainda.
+      canApply: Boolean(artifact),
+      unknownArtifact: !manifest,
+    });
+  }
+  lista.sort((left, right) => compareVersions(right.version, left.version));
+  return lista;
 }
 
 module.exports = {
   BROKEN_VERSIONS,
+  versionsFromCatalog,
   INSTALL_KINDS,
   assetFrom,
   brokenReason,

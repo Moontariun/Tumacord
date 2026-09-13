@@ -1,5 +1,32 @@
 # Histórico de versões
 
+## 0.13.0 — publicar virou largar o arquivo numa pasta
+
+<!-- tumacord:resumo -->
+O servidor passou a olhar duas pastas — `linux/` e `windows/` — e a publicar sozinho o que estiver nelas. Largar o pacote por FTP ou `wget` é a publicação inteira. E o aplicativo ganhou uma lista para instalar versões antigas quando você quiser.
+
+**Publicar por pasta**
+
+- O serviço varre `<armazenamento>/linux/` e `<armazenamento>/windows/`, lê a versão do **nome do arquivo**, calcula os resumos e gera o catálogo assinado sozinho. Sem importar, sem promover, sem comando nenhum.
+- **Não há convenção nova.** São exatamente os nomes que o `electron-builder` já produz: `tumacord-0.13.0.tar.gz`, `Tumacord-0.13.0.AppImage`, `Tumacord-0.13.0-Setup.exe`, `Tumacord-0.13.0-portable.exe`.
+- Nome fora do padrão é **ignorado e dito no log**, em vez de virar uma versão com número errado — que é pior do que não aparecer.
+- A varredura roda no arranque e a cada minuto. `POST /admin/scan` varre na hora, para quem não quer esperar. A porta de administração continua sem sair do laço local: varredura é trabalho de disco, e trabalho de disco disparado de fora é um jeito de derrubar servidor.
+- Uma varredura que encontra o mesmo de antes **não gasta sequência**. Republicar a cada minuto faria o número crescer sem parar e cada cliente rebaixaria o que já tinha aceitado sem nada ter acontecido.
+- Dois arquivos para o mesmo alvo param **aquela versão**, e só ela: as outras continuam sendo oferecidas.
+- O caminho antigo continua existindo. Sem chaves em `TUMACORD_UPDATES_SIGNING_DIR`, o serviço se comporta exatamente como antes e serve o que foi importado de fora.
+
+**O que isto custa, dito em voz alta**
+
+A chave que assina passa a viver **no servidor**, porque é ele que publica agora. Quem entrar nele passa a poder entregar um binário como oficial; antes isso exigia a chave, que estava fora.
+
+A assinatura continua protegendo o caminho entre o servidor e o aplicativo — proxy trocado, espelho, DNS sequestrado. O que ela deixou de proteger é o servidor contra si mesmo. É o preço de "largar o arquivo e pronto", e não existe desvio: ou alguém assina no momento do drop, ou quem assina é o servidor.
+
+**Instalar uma versão antiga**
+
+- Um interruptor em Atualizações lista tudo o que o servidor oferece e deixa escolher uma versão anterior. Ele nasce desligado: a pergunta normal é "tem versão nova?", e uma lista de tudo o que já existiu na frente de quem só quer atualizar é ruído.
+- A versão instalada aparece marcada, e uma versão sem pacote para aquela máquina aparece desabilitada em vez de sumir — escondê-la faria a pessoa procurar no servidor o que ela está vendo lá e não achar aqui.
+- **A procura automática continua nunca oferecendo downgrade.** Voltar de versão passou a ser possível por um clique numa lista, e continua sendo uma decisão — não algo que acontece sozinho ao abrir o aplicativo.
+
 ## 0.12.2 — o aplicativo já nasce sabendo onde procurar atualização
 
 <!-- tumacord:resumo -->

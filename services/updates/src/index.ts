@@ -45,6 +45,7 @@ import {
 } from './devices.js';
 import { ConcurrencyGate, fileSize, openRange, planDelivery, resolveStoragePath } from './delivery.js';
 import { PUBLISH_MESSAGES, StateStore, validateCatalog, withdrawEntry } from './state.js';
+import { loadSigningKeys, publishFromFolder, type SigningKeys } from './publisher.js';
 
 const config = {
   port: Number(process.env.TUMACORD_UPDATES_PORT ?? 4300),
@@ -58,6 +59,19 @@ const config = {
   storageDir: process.env.TUMACORD_UPDATES_STORAGE_DIR ?? '/var/lib/tumacord/packages',
   /** Quantos downloads simultâneos. A VPS divide rede com o chat e o TURN. */
   maxDownloads: Number(process.env.TUMACORD_UPDATES_MAX_DOWNLOADS ?? 6),
+  /**
+   * Onde as chaves de assinatura moram, para o serviço publicar sozinho o que
+   * estiver na pasta. Sem elas, ele só serve o que foi importado de fora.
+   */
+  signingDir: process.env.TUMACORD_UPDATES_SIGNING_DIR ?? '',
+  /**
+   * De quanto em quanto tempo a pasta é varrida.
+   *
+   * Um minuto: largar um arquivo por FTP e esperar até um minuto é aceitável, e
+   * varrer mais rápido do que isso só gasta disco. Quem não quiser esperar
+   * chama `POST /admin/scan`, que varre na hora.
+   */
+  scanMs: Number(process.env.TUMACORD_UPDATES_SCAN_MS ?? 60_000),
 };
 
 const store = new StateStore(config.stateDir);
@@ -271,6 +285,70 @@ app.post('/v1/devices/renew', async (request, response) => {
 
 // ── Saúde ───────────────────────────────────────────────────────────────────
 
+/**
+ * A publicação automática: o que está na pasta vira o catálogo.
+ *
+ * Ela só roda quando há chave. Sem chave o serviço continua exatamente como
+ * antes — servindo o catálogo que alguém importou —, e é isso que faz esta
+ * mudança não quebrar uma instalação que não a queira.
+ */
+let signingKeys: SigningKeys | null = null;
+let scanning = false;
+
+export async function scanNow(reason: string): Promise<{ ok: boolean; versions?: string[]; sequence?: number; reason?: string }> {
+  if (!signingKeys) return { ok: false, reason: 'sem-chave' };
+  // Uma varredura por vez. Duas em paralelo produziriam duas sequências a
+  // partir do mesmo número, e a segunda a gravar apagaria a primeira.
+  if (scanning) return { ok: false, reason: 'ja-varrendo' };
+  scanning = true;
+  try {
+    const outcome = await publishFromFolder({
+      storageDir: config.storageDir,
+      keys: signingKeys,
+      currentSequence: store.state.catalog?.payload.sequence ?? 0,
+      currentManifests: store.state.manifests,
+    });
+    for (const item of outcome.ignored) log('scan-ignored', item);
+    for (const conflito of outcome.conflicts) log('scan-conflict', conflito);
+    if (!outcome.changed) return { ok: true, versions: outcome.versions, sequence: outcome.sequence };
+
+    await store.mutate((state) => {
+      state.catalog = outcome.catalog;
+      state.manifests = outcome.manifests;
+      state.history.push({ sequence: outcome.sequence, publishedAt: new Date().toISOString(), digest: '' });
+      if (state.history.length > 200) state.history.splice(0, state.history.length - 200);
+    });
+    log('scan-published', { reason, sequence: outcome.sequence, versions: outcome.versions.join(', ') });
+    return { ok: true, versions: outcome.versions, sequence: outcome.sequence };
+  } finally {
+    scanning = false;
+  }
+}
+
+export async function startAutoPublish(): Promise<void> {
+  signingKeys = await loadSigningKeys(config.signingDir);
+  if (!signingKeys) {
+    log('auto-publish-off', { motivo: config.signingDir ? 'sem chaves na pasta' : 'TUMACORD_UPDATES_SIGNING_DIR não definida' });
+    return;
+  }
+  log('auto-publish-on', { manifestKey: signingKeys.manifest.keyId, catalogKey: signingKeys.catalog.keyId, scanMs: config.scanMs });
+  // As chaves que ESTE serviço usa passam a ser confiáveis por ele: sem isso,
+  // um catálogo que ele mesmo assinou seria recusado na importação manual.
+  const publicas = [
+    { keyId: signingKeys.manifest.keyId, algorithm: signingKeys.manifest.algorithm, publicKey: signingKeys.manifest.publicKey, scope: ['manifest'] },
+    { keyId: signingKeys.catalog.keyId, algorithm: signingKeys.catalog.algorithm, publicKey: signingKeys.catalog.publicKey, scope: ['catalog'] },
+  ];
+  await store.mutate((state) => {
+    for (const chave of publicas) {
+      if (!state.trustedKeys.some((existente) => existente.keyId === chave.keyId)) state.trustedKeys.push(chave as never);
+    }
+  });
+  await scanNow('arranque');
+  const timer = setInterval(() => { void scanNow('periódica').catch((causa) => log('scan-failed', { message: String(causa?.message ?? causa) })); }, config.scanMs);
+  // Um timer que segura o processo impediria o contêiner de parar limpo.
+  timer.unref?.();
+}
+
 app.get('/v1/health', (_request, response) => {
   const catalogDoc = store.state.catalog?.payload;
   response.json({
@@ -281,6 +359,8 @@ app.get('/v1/health', (_request, response) => {
     // Dito, e não adivinhado: o cliente decide entre pedir um convite e baixar
     // direto, e o operador consegue conferir num `curl` em qual modo está.
     auth: PUBLIC_READ ? 'public' : 'device',
+    // Dito para o operador conferir num `curl` se a pasta está no comando.
+    publish: signingKeys ? 'folder' : 'imported',
   });
 });
 
@@ -296,6 +376,25 @@ app.use((_request, response) => response.status(404).json({ error: 'Não há nad
 const admin = express();
 admin.disable('x-powered-by');
 admin.use(express.json({ limit: '8mb' }));
+
+/**
+ * Varre a pasta agora.
+ *
+ * Existe para quem acabou de largar um arquivo e não quer esperar o intervalo.
+ * Fica na porta de administração, que não sai do laço local: uma varredura é
+ * barata, mas é trabalho de disco, e trabalho de disco disparado de fora é um
+ * jeito de derrubar servidor.
+ */
+admin.post('/admin/scan', async (_request, response) => {
+  const resultado = await scanNow('pedida');
+  if (!resultado.ok) {
+    const motivo = resultado.reason === 'sem-chave'
+      ? 'Este serviço não publica pela pasta: não há chaves em TUMACORD_UPDATES_SIGNING_DIR.'
+      : 'Já há uma varredura em andamento.';
+    return response.status(409).json({ error: motivo, reason: resultado.reason });
+  }
+  response.json({ ok: true, sequence: resultado.sequence, versions: resultado.versions });
+});
 
 admin.post('/admin/manifest', async (request, response) => {
   const document = request.body as Signed<ReleaseManifest>;
@@ -418,6 +517,10 @@ admin.post('/admin/withdraw', async (request, response) => {
 
 async function main(): Promise<void> {
   await store.load();
+  // Antes de escutar: quem abrir a porta já encontra o catálogo do que está na
+  // pasta, em vez de um "ainda não há catálogo" que some sozinho um segundo
+  // depois e faz o operador achar que quebrou.
+  await startAutoPublish().catch((causa) => log('auto-publish-failed', { message: String(causa?.message ?? causa) }));
   app.listen(config.port, config.host, () => {
     log('service-listening', { port: config.port, host: config.host, storage: path.basename(config.storageDir) });
   });
