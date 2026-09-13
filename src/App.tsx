@@ -1000,7 +1000,23 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   }, [showToast, socket]);
 
   const currentVoiceChannel = snapshot.channels.find((channel) => channel.id === voice.channelId);
-  const selectedMembers = selectedChannel?.type === 'voice' ? snapshot.voiceRooms[selectedChannel.id] ?? [] : [];
+  /**
+   * Os membros de um canal de voz, o mais fresco que houver.
+   *
+   * O instantâneo do servidor é a fonte para os canais em que esta pessoa NÃO
+   * está: ele é a única que existe para eles. Mas para o canal em que ela está,
+   * `voice:members` é melhor por dois motivos — ele é emitido só para a sala,
+   * e ele chega em todo `voice:ping`.
+   *
+   * O instantâneo, não: `voice:ping` atualiza a sala no servidor mas emite
+   * apenas `voice:members`. Lendo só o instantâneo, o ping da tela de call
+   * dependia de **outro** evento qualquer disparar um instantâneo — na prática,
+   * de alguém falar. Sem ninguém falando, ele ficava em "medindo" indefinidamente.
+   */
+  const membrosDoCanal = (canalId: string) => (voice.channelId === canalId && voice.members.length
+    ? voice.members
+    : snapshot.voiceRooms[canalId] ?? []);
+  const selectedMembers = selectedChannel?.type === 'voice' ? membrosDoCanal(selectedChannel.id) : [];
   const allVoiceMembers = [...new Map(Object.values(snapshot.voiceRooms).flat().map((member) => [member.id, member])).values()];
   const currentUser = snapshot.onlineUsers.find((user) => user.id === session.user.id) ?? session.user;
   const isServerAdmin = session.connectionMode === 'server' && Boolean(currentUser.isAdmin);
@@ -1050,7 +1066,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={canCreateChannel ? () => setCreatingChannelType('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
             <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
-            {(snapshot.voiceRooms[channel.id] ?? []).map((member) => {
+            {membrosDoCanal(channel.id).map((member) => {
               const self = member.id === session.user.id;
               const canAdjustVolume = !self && voice.members.some((candidate) => candidate.id === member.id);
               const memberVolume = Math.max(0, Math.min(2, userVolumes[member.id] ?? 1));

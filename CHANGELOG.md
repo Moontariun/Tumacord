@@ -1,5 +1,21 @@
 # Histórico de versões
 
+## 0.13.4 — o ping deixa de depender de alguém estar falando
+
+<!-- tumacord:resumo -->
+A contenção do instantâneo, introduzida na 0.13.3, foi desfeita: em uso real ela piorou o que deveria melhorar. E a causa de fundo do ping preso em "medindo" foi corrigida na origem.
+
+**A contenção foi desfeita**
+
+- A 0.13.3 passou a mandar o instantâneo do servidor no máximo a cada 250 ms, para não disputar o socket com a sinalização do WebRTC. O raciocínio continua de pé; a medida, não — em uso real o enlace voltou a demorar e o ping parou de aparecer.
+- Ela saiu sem que a causa exata fosse encontrada, e o comentário no código diz isso, para que a próxima tentativa comece sabendo que esta já foi feita e o que custou.
+
+**Por que o ping ficava em "medindo"**
+
+- A tela da call lia os membros do **instantâneo do servidor**. Mas `voice:ping` atualiza a sala e emite apenas `voice:members` — que aquela tela não usava. O ping só chegava de carona em outro evento qualquer disparar um instantâneo: na prática, alguém falar. Sem ninguém falando, ele ficava em "medindo" indefinidamente.
+- Foi também o que fez a contenção da 0.13.3 doer tanto: ela segurou justamente a carona de que o ping dependia.
+- Agora, para o canal em que a pessoa está, a tela lê `voice:members` — que é emitido só para aquela sala e chega em todo ping. O instantâneo continua sendo a fonte para os canais em que ela não está, que é onde ele é a única que existe.
+
 ## 0.13.3 — o enlace para de esperar atrás do instantâneo do servidor
 
 <!-- tumacord:resumo -->

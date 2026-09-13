@@ -1462,52 +1462,28 @@ function snapshot(): ServerSnapshot {
 }
 
 /**
- * O instantâneo do servidor, no máximo uma vez a cada `SNAPSHOT_MIN_MS`.
+ * O instantâneo do servidor, para todo mundo.
  *
- * ## Por que isto precisa ser contido
+ * ## Uma contenção que foi tentada e desfeita
  *
- * `snapshot()` monta canais, usuários online e **todas** as salas de voz, e o
- * `io.emit` manda isso para todo mundo conectado — inclusive quem não está em
- * call nenhuma. Ele é disparado por `voice:state`, e `voice:state` carrega
- * `speaking`: enquanto alguém fala, são vários instantâneos completos por
- * segundo para o servidor inteiro.
+ * Na 0.13.3 este disparo passou a ser contido a um a cada 250 ms. O raciocínio
+ * era que `snapshot()` monta canais, usuários e todas as salas de voz, vai para
+ * todo mundo conectado, e disputa o socket com a sinalização do WebRTC — que
+ * chega em rajada quando um enlace está subindo.
  *
- * O custo não é o CPU — é a fila. Esse mesmo socket carrega a **sinalização
- * WebRTC**: ofertas, respostas e candidatos ICE, que chegam em rajada
- * justamente quando um enlace está subindo. Instantâneo na frente de candidato
- * é enlace que demora a conectar, ping que fica "medindo" e live que demora a
- * abrir — e piora exatamente no momento em que alguém entra numa transmissão,
- * porque aí há negociação e mudança de estado ao mesmo tempo.
+ * O raciocínio continua de pé; a contenção, não. Em uso real ela piorou o que
+ * deveria melhorar: o enlace voltou a demorar e o ping parou de aparecer. Ela
+ * foi desfeita na 0.13.4 sem que a causa exata fosse encontrada — e é por isso
+ * que este comentário existe, para que a próxima tentativa comece sabendo que
+ * esta já foi feita e o que ela custou.
  *
- * ## O que a contenção preserva
- *
- * O primeiro pedido depois de um período parado sai **na hora**: quem entra num
- * canal não espera um quarto de segundo para ver a tela montar. O que é
- * contido é a rajada — e ela sempre termina com o estado final entregue, porque
- * o disparo atrasado usa o instantâneo do momento em que ele roda, e não o de
- * quando foi pedido.
+ * Quem for tentar de novo: meça antes. O ping da interface vem do instantâneo,
+ * e não do `voice:members` — o `voice:ping` atualiza a sala mas só emite
+ * `voice:members`, que a tela da call não usa. Segurar o instantâneo segura o
+ * ping junto, e é o primeiro lugar onde olhar.
  */
-const SNAPSHOT_MIN_MS = 250;
-let snapshotTimer: NodeJS.Timeout | null = null;
-let snapshotSentAt = 0;
-
 function broadcastSnapshot(): void {
-  // Já há um disparo agendado: ele vai levar o estado mais recente, incluindo
-  // esta mudança. Agendar outro só duplicaria o trabalho.
-  if (snapshotTimer) return;
-  const desde = Date.now() - snapshotSentAt;
-  if (desde >= SNAPSHOT_MIN_MS) {
-    snapshotSentAt = Date.now();
-    io.emit('server:snapshot', snapshot());
-    return;
-  }
-  snapshotTimer = setTimeout(() => {
-    snapshotTimer = null;
-    snapshotSentAt = Date.now();
-    io.emit('server:snapshot', snapshot());
-  }, SNAPSHOT_MIN_MS - desde);
-  // Um temporizador pendente não pode segurar o processo no encerramento.
-  snapshotTimer.unref?.();
+  io.emit('server:snapshot', snapshot());
 }
 
 function refreshProfilePresence(normalizedUsernames: ReadonlySet<string>): void {
