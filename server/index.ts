@@ -1815,6 +1815,32 @@ io.on('connection', (socket) => {
 
   socket.on('voice:leave', () => leaveVoice(socket.id));
 
+  // A administração escolhe o host da call.
+  //
+  // Só no P2P híbrido: ali o host é um marcador, e a sinalização continua no
+  // servidor. No P2P o host é quem hospeda a conexão, escolhido pela rede —
+  // trocá-lo por decisão de alguém derrubaria a call de todo mundo.
+  socket.on('voice:set-host', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = z.object({ socketId: z.string().min(1).max(64) }).safeParse(payload);
+    const quem = socket.data.user as PublicUser;
+    if (p2pMode) return acknowledge?.({ ok: false, error: 'No modo P2P o host é escolhido pela própria conexão.' });
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    const papel = normalizeRole(store.users.find((candidate) => candidate.id === quem.id)?.role);
+    const channelId = rooms.roomOf(parsed.data.socketId);
+    const alvo = channelId ? rooms.members(channelId).find((member) => member.socketId === parsed.data.socketId) : undefined;
+    if (!isAdministrator(papel)) {
+      await audit(quem, 'voice.host', alvo?.username ?? '', 'denied');
+      return acknowledge?.({ ok: false, error: 'Ação exclusiva da administração do servidor.' });
+    }
+    if (!channelId || !alvo) return acknowledge?.({ ok: false, error: 'Essa pessoa já não está na call.' });
+    if (alvo.isHost) return acknowledge?.({ ok: true });
+    rooms.setHost(channelId, alvo.socketId);
+    io.to(`voice:${channelId}`).emit('voice:members', rooms.members(channelId));
+    broadcastSnapshot();
+    await audit(quem, 'voice.host', alvo.username);
+    acknowledge?.({ ok: true });
+  });
+
   // A administração tira alguém da call. A pessoa pode voltar — quem quiser
   // impedir isso tira dela a permissão de entrar no canal.
   socket.on('voice:disconnect-member', async (payload: unknown, acknowledge?: (result: unknown) => void) => {

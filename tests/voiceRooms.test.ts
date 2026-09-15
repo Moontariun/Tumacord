@@ -72,3 +72,15 @@ test('quem está sem permissão de falar entra mudo e não consegue se desmutar'
   assert.equal(ana.muted, false);
   assert.equal(rooms.setSpeakBlocked('call', 'a', false), false, 'nada mudou, nada a avisar');
 });
+
+test('a administração troca o host: só uma pessoa fica com a coroa', () => {
+  const rooms = new VoiceRooms();
+  rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927' });
+  rooms.join('call', { id: 'b', username: 'Beto', socketId: 'socket-b', endpoint: 'http://10.0.0.2:3927' });
+  rooms.join('call', { id: 'c', username: 'Caio', socketId: 'socket-c', endpoint: 'http://10.0.0.3:3927' });
+  assert.equal(rooms.setHost('call', 'socket-c'), true);
+  assert.deepEqual(rooms.members('call').map((member) => [member.username, member.isHost]), [['Ana', false], ['Beto', false], ['Caio', true]]);
+  assert.equal(rooms.setHost('call', 'socket-fantasma'), false, 'quem não está na sala não vira host');
+  assert.equal(rooms.setHost('outra-call', 'socket-a'), false);
+  assert.equal(rooms.members('call').filter((member) => member.isHost).length, 1);
+});

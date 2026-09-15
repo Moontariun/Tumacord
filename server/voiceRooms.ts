@@ -89,6 +89,20 @@ export class VoiceRooms {
   }
 
   /**
+   * Faz de uma pessoa o host da sala, e só dela.
+   *
+   * No P2P híbrido o host é um marcador da call: a sinalização mora no
+   * servidor, e trocá-lo não move conexão nenhuma. Devolve se a pessoa estava
+   * na sala.
+   */
+  setHost(channelId: string, socketId: string): boolean {
+    const room = this.rooms.get(channelId);
+    if (!room?.has(socketId)) return false;
+    for (const participant of room.values()) participant.isHost = participant.socketId === socketId;
+    return true;
+  }
+
+  /**
    * Liga ou desliga o bloqueio de fala de uma pessoa em uma sala.
    *
    * Devolve se algo mudou, para quem chama saber se precisa avisar a sala.

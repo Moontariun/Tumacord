@@ -1,5 +1,21 @@
 # Histórico de versões
 
+## 0.13.7 — a administração escolhe o host da call, e a entrada fica mais direta
+
+<!-- tumacord:resumo -->
+No P2P híbrido, a administração passa a trocar o host da call pelo botão direito sobre a pessoa. Na tela de entrada, os modos se chamam P2P e P2P híbrido, com descrições curtas.
+
+**Trocar o host**
+
+- Clique com o botão direito sobre alguém na call: "Tornar host da call". Sobre si mesmo, a opção é "Assumir como host da call". Ela não aparece para quem já é o host.
+- O servidor confere o papel **persistido** antes de trocar, registra a ação na auditoria e avisa a sala na hora — a coroa muda em todas as telas.
+- A opção existe só no P2P híbrido. No P2P, o host é quem hospeda a conexão, e ele é escolhido pela própria rede quando alguém sai; lá não há administração para decidir.
+
+**Tela de entrada**
+
+- "P2P automático" passou a se chamar **P2P**.
+- As dicas ao passar o mouse ficaram curtas: P2P é a conexão direta entre os participantes, sem servidor; P2P híbrido é a entrada por servidor, com voz e vídeo diretos entre os participantes.
+
 ## 0.13.6 — o áudio da live no Linux para de criar dispositivo, agora de verdade
 
 <!-- tumacord:resumo -->

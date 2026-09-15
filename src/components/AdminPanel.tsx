@@ -118,6 +118,7 @@ const ACTION_LABEL: Record<string, string> = {
   'user.role': 'mudou o papel de',
   'user.remove': 'removeu',
   'voice.disconnect': 'desconectou da call',
+  'voice.host': 'tornou host da call',
 };
 
 function quando(iso: string): string {

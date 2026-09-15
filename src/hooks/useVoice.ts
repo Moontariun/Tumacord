@@ -1494,6 +1494,16 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     });
   }), [socket]);
 
+  /** Pede ao servidor para tornar alguém o host da call. Só a administração consegue. */
+  const setCallHost = useCallback((socketId: string) => new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    if (!socket) return resolve({ ok: false, error: 'Sem conexão com o servidor.' });
+    const prazo = window.setTimeout(() => resolve({ ok: false, error: 'O servidor não respondeu. Ele pode estar numa versão anterior à 0.13.7.' }), 8_000);
+    socket.emit('voice:set-host', { socketId }, (reply?: { ok?: boolean; error?: string }) => {
+      window.clearTimeout(prazo);
+      resolve({ ok: reply?.ok === true, error: reply?.error });
+    });
+  }), [socket]);
+
   const leave = useCallback(() => {
     const wasInCall = Boolean(channelRef.current);
     stopSpeakingMonitor();
@@ -2792,7 +2802,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // estão assistindo à MINHA transmissão — a pergunta que decide o som de
     // alguém entrando e saindo da sua live.
     selfSocketId: selfId.current,
-    away, setAway, selfSpeakBlocked, disconnectMember,
+    away, setAway, selfSpeakBlocked, disconnectMember, setCallHost,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     screenSource,

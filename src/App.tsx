@@ -233,8 +233,8 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       </aside>
       <form className="login-form" onSubmit={submit}>
         <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
-          <button type="button" role="tab" aria-selected={connectionMode === 'p2p'} disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={isDesktop ? 'Enlace direto entre os computadores. Na mesma rede as calls aparecem sozinhas; fora dela, um código de convite basta.' : 'O modo P2P automático está disponível no aplicativo instalado.'}><Icon name="users" />P2P automático</button>
-          <button type="button" role="tab" aria-selected={connectionMode === 'server'} className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')} title="Conectar a um servidor por endereço. A primeira entrada cria sua conta nele; a porta padrão é 4600."><Icon name="server" />P2P híbrido</button>
+          <button type="button" role="tab" aria-selected={connectionMode === 'p2p'} disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={isDesktop ? 'Conexão direta entre os participantes, sem servidor.' : 'Disponível no aplicativo instalado.'}><Icon name="users" />P2P</button>
+          <button type="button" role="tab" aria-selected={connectionMode === 'server'} className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')} title="Entrada por servidor, com voz e vídeo diretos entre os participantes."><Icon name="server" />P2P híbrido</button>
         </div>
         {connectionMode === 'server' && <div className="field-row">
           <label>Endereço <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
@@ -1121,6 +1121,11 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   /** Quem a sala diz que está sem permissão de falar: a voz dessa pessoa não toca. */
   const vozBloqueada = (media: { peerId: string }) => Boolean(voice.members.find((member) => member.socketId === media.peerId)?.speakBlocked);
 
+  const makeCallHost = async (member: VoiceState) => {
+    const resultado = await voice.setCallHost(member.socketId);
+    showToast(resultado.ok ? `${member.id === session.user.id ? 'Você' : member.username} agora é host da call.` : resultado.error ?? 'Não consegui trocar o host da call.');
+  };
+
   const disconnectFromCall = async (member: VoiceState) => {
     const resultado = await voice.disconnectMember(member.socketId);
     showToast(resultado.ok ? `${member.username} foi desconectado da call.` : resultado.error ?? 'Não consegui desconectar essa pessoa.');
@@ -1148,8 +1153,14 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
       const assistindo = Boolean(voice.watching[member.socketId]);
       items.push({ label: assistindo ? 'Parar de assistir' : 'Assistir a transmissão', icon: assistindo ? 'close' : 'screen', onSelect: () => void watchMemberLive(member, channel) });
     }
-    if (isServerAdmin && !self) {
+    // Trocar o host é da administração, e só no P2P híbrido — onde o host é um
+    // marcador da call. O servidor confere o papel de novo antes de trocar.
+    if (isServerAdmin && !member.isHost) {
       items.push({ separator: true });
+      items.push({ label: self ? 'Assumir como host da call' : 'Tornar host da call', icon: 'host', onSelect: () => void makeCallHost(member) });
+    }
+    if (isServerAdmin && !self) {
+      if (member.isHost) items.push({ separator: true });
       items.push({ label: 'Desconectar da call', icon: 'leave', danger: true, hint: 'Tira a pessoa da call agora. Ela pode entrar de novo, a menos que perca a permissão no canal.', onSelect: () => void disconnectFromCall(member) });
     }
     setContextMenu({ x: event.clientX, y: event.clientY, title: member.username, items });

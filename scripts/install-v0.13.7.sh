@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-branch="release/audio-oculto-v0.13.6"
+branch="release/host-e-login-v0.13.7"
 installer_url="https://raw.githubusercontent.com/Moontariun/Tumacord/${branch}/scripts/install-from-github.sh"
 bootstrap_file="$(mktemp "${TMPDIR:-/tmp}/tumacord-bootstrap.XXXXXX.sh")"
 trap 'rm -f -- "$bootstrap_file"' EXIT
