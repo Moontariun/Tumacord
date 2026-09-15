@@ -651,7 +651,7 @@ export class JsonStore {
     // Campos opcionais apagados de verdade, e não guardados como `undefined`:
     // um `undefined` sobrevive ao JSON como chave ausente, mas confunde quem
     // lê o objeto em memória.
-    for (const chave of ['topic', 'userLimit', 'categoryId'] as const) {
+    for (const chave of ['topic', 'userLimit', 'categoryId', 'permissions'] as const) {
       if (patch[chave] === undefined && chave in patch) delete channel[chave];
     }
     await this.save();

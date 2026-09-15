@@ -79,3 +79,33 @@ export function readAwayTheme(): AwayTheme {
 export function setAwayTheme(theme: AwayTheme): void {
   if (typeof localStorage !== 'undefined') localStorage.setItem(THEME_KEY, sanitizeAwayTheme(theme));
 }
+
+/**
+ * O tamanho do texto do recado, em porcentagem do padrão.
+ *
+ * Viaja pela rede como NÚMERO, e o receptor o prende nesta faixa antes de usar:
+ * um valor fora dela vira o limite mais próximo, e nunca uma fonte gigante
+ * cobrindo a tela de quem assiste.
+ */
+export const AWAY_SIZE_MIN = 60;
+export const AWAY_SIZE_MAX = 200;
+export const AWAY_SIZE_DEFAULT = 100;
+const SIZE_KEY = 'tumacord.away-size';
+
+export function sanitizeAwaySize(size: unknown): number {
+  const numero = typeof size === 'number' ? size : Number(size);
+  if (!Number.isFinite(numero) || numero <= 0) return AWAY_SIZE_DEFAULT;
+  return Math.round(Math.max(AWAY_SIZE_MIN, Math.min(AWAY_SIZE_MAX, numero)));
+}
+
+export function readAwaySize(): number {
+  if (typeof localStorage === 'undefined') return AWAY_SIZE_DEFAULT;
+  // Chave ausente é `null`, e `Number(null)` é 0: sem esta guarda todo mundo
+  // nasceria com o menor tamanho.
+  const guardado = localStorage.getItem(SIZE_KEY);
+  return guardado === null ? AWAY_SIZE_DEFAULT : sanitizeAwaySize(guardado);
+}
+
+export function setAwaySize(size: number): void {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(SIZE_KEY, String(sanitizeAwaySize(size)));
+}

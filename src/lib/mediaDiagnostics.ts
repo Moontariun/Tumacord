@@ -197,6 +197,7 @@ export interface ScreenAudioDiagnostics {
 const MECHANISM_LABEL: Record<string, string> = {
   'wasapi-process-loopback': 'captura por aplicação (Windows)',
   'pipewire-bus': 'barramento do PipeWire (Linux)',
+  'pipewire-capture': 'fluxo de captura do PipeWire (Linux)',
   none: 'indisponível neste sistema',
 };
 

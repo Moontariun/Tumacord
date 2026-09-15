@@ -9,7 +9,8 @@ import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
 import packageMetadata from '../package.json' with { type: 'json' };
-import type { AdminOverview, Channel, ChatMessage, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
+import type { AdminOverview, Channel, ChannelAccess, ChatMessage, PublicUser, ServerSnapshot, StreamMeta, UserProfile } from '../shared/types.js';
+import { FULL_ACCESS, resolveAccess, sanitizePermissions } from '../shared/channelPermissions.js';
 import { safeAttachmentName } from '../shared/attachmentName.js';
 import {
   BOARD_HEIGHT,
@@ -26,7 +27,8 @@ import { ephemeralTurnCredentials, turnConfiguration, turnIceServers } from './t
 import { AuthRateLimiter, TokenBucket } from './rateLimit.js';
 import { MAX_MESSAGE_BODY, canModify, deleteMessage, editMessage } from '../shared/messageSync.js';
 import { LOCAL_NETWORK_GROUP, LOGIN_MESSAGES, NONCE_TTL_MS, decideLogin, isGroupId, recordsForSync, statusOfName, verifyClaim, verifyLoginProof, type IdentityClaim, type LoginDecision, type LoginProof, type SignatureVerifier } from '../shared/identity.js';
-import { canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
+import { canDisconnectFromVoice, canManageChannels, isAdministrator, normalizeRole, planRemoval, planRoleChange, roleForNewUser, type Role } from './roles.js';
+import { LinkPreviewer } from './linkPreview.js';
 import { canChangeChannelType, canDeleteChannel, slugify, validateCategoryName, validateChannelName, validateTopic, validateUserLimit } from './channels.js';
 import { createAuditEntry } from './audit.js';
 import { SelfUpdater, executorTokenMatches, selfUpdateConfig, unavailableReason } from './selfUpdate.js';
@@ -165,6 +167,58 @@ function availableChannels(): Channel[] {
 
 function channelIsAvailable(channelId: string, type?: Channel['type']): boolean {
   return availableChannels().some((channel) => channel.id === channelId && (!type || channel.type === type));
+}
+
+/**
+ * O que uma pessoa pode fazer num canal, pelo papel PERSISTIDO.
+ *
+ * O papel guardado na sessão do socket envelhece: quem foi promovido ou
+ * rebaixado depois de conectar continuaria com o papel antigo. Aqui a pergunta
+ * vai ao cadastro. No P2P não há regra de canal — cada host é dono do próprio
+ * servidor, e uma permissão ali não significaria nada.
+ */
+function accessFor(channel: Channel, user: PublicUser | undefined): ChannelAccess {
+  if (p2pMode) return { ...FULL_ACCESS };
+  if (!user) return { view: false, send: false, connect: false, speak: false, stream: false };
+  const role = normalizeRole(store.users.find((candidate) => candidate.id === user.id)?.role);
+  return resolveAccess(channel, user.id, isAdministrator(role));
+}
+
+/** O acesso a um canal pelo id, ou `null` quando ele não existe ou é de outro tipo. */
+function channelAccess(channelId: string, user: PublicUser | undefined, type?: Channel['type']): ChannelAccess | null {
+  const channel = availableChannels().find((candidate) => candidate.id === channelId && (!type || candidate.type === type));
+  return channel ? accessFor(channel, user) : null;
+}
+
+function administers(user: PublicUser | undefined): boolean {
+  return !p2pMode && Boolean(user) && isAdministrator(normalizeRole(store.users.find((candidate) => candidate.id === user!.id)?.role));
+}
+
+/**
+ * Os canais como esta pessoa os enxerga.
+ *
+ * Um canal que ela não pode ver não é enviado — nem com a marca de oculto: o
+ * nome de um canal fechado já é informação. As regras vão só para a
+ * administração; o resto recebe apenas o próprio `access`.
+ */
+function channelsFor(user: PublicUser | undefined): Channel[] {
+  const admin = administers(user);
+  return availableChannels().flatMap((channel) => {
+    const access = accessFor(channel, user);
+    if (!access.view) return [];
+    if (admin) return [{ ...channel, access }];
+    const { permissions: _regras, ...visivel } = channel;
+    return [{ ...visivel, access }];
+  });
+}
+
+/** Emite um evento só para quem enxerga aquele canal. */
+function emitToViewers(channelId: string, event: string, payload: unknown): void {
+  const channel = availableChannels().find((candidate) => candidate.id === channelId);
+  if (!channel) return;
+  for (const connected of io.sockets.sockets.values()) {
+    if (accessFor(channel, connected.data.user as PublicUser | undefined).view) connected.emit(event, payload);
+  }
 }
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
@@ -514,6 +568,10 @@ app.get('/api/health', (_request, response) => {
       // Identidade verificável por nome, no P2P. Um cliente que não vê isto
       // está falando com um host anterior, que ainda aceita qualquer nome.
       identityClaims: p2pMode,
+      // 0.13.5: permissões por canal, tirar alguém da call e prévia de links.
+      channelPermissions: !p2pMode,
+      voiceDisconnect: !p2pMode,
+      linkPreview: true,
     },
   });
 });
@@ -854,7 +912,9 @@ async function audit(actor: PublicUser, action: string, target?: string, result:
 // Um único ponto de difusão: quem está com o app aberto vê a mudança sem
 // recarregar nada.
 function broadcastChannels(): void {
-  io.emit('server:channels', { channels: availableChannels(), categories: store.categories });
+  for (const connected of io.sockets.sockets.values()) {
+    connected.emit('server:channels', { channels: channelsFor(connected.data.user as PublicUser | undefined), categories: store.categories });
+  }
   broadcastSnapshot();
 }
 
@@ -988,7 +1048,7 @@ app.patch('/api/admin/channels/:id', async (request, response) => {
   if (!context) return;
   const canal = store.channels.find((candidate) => candidate.id === request.params.id);
   if (!canal) return refuse(response, 404, 'Esse canal não existe mais.');
-  const corpo = request.body as { name?: unknown; topic?: unknown; userLimit?: unknown; categoryId?: unknown; type?: unknown };
+  const corpo = request.body as { name?: unknown; topic?: unknown; userLimit?: unknown; categoryId?: unknown; type?: unknown; permissions?: unknown };
   const patch: Partial<Channel> = {};
   if (corpo?.name !== undefined) {
     const nome = validateChannelName(corpo.name);
@@ -1019,8 +1079,14 @@ app.patch('/api/admin/channels/:id', async (request, response) => {
   if (corpo?.categoryId !== undefined) {
     patch.categoryId = typeof corpo.categoryId === 'string' && store.categories.some((c) => c.id === corpo.categoryId) ? corpo.categoryId : undefined;
   }
+  if (corpo?.permissions !== undefined) {
+    // `null` limpa todas as regras. Pessoas que não existem neste servidor são
+    // descartadas: uma regra para um id qualquer seria lixo guardado para sempre.
+    patch.permissions = sanitizePermissions(corpo.permissions, new Set(store.users.map((user) => user.id)));
+  }
   const atualizado = await store.updateChannel(canal.id, patch);
   await audit(context.user, 'channel.update', atualizado?.name ?? canal.name, 'ok', Object.keys(patch).join(', '));
+  if ('permissions' in patch) enforceChannelAccess(canal.id);
   broadcastChannels();
   response.json({ ok: true, channel: atualizado });
 });
@@ -1245,6 +1311,34 @@ app.post('/api/admin/update', async (request, response) => {
   response.json({ ok: true, tag: resultado.release.tag, state: selfUpdater.snapshot() });
 });
 
+/**
+ * Aplica as regras de um canal a quem já está dentro dele.
+ *
+ * Mudar uma permissão vale na hora, e não só para quem entrar depois: quem
+ * perdeu a entrada sai da call, quem perdeu a fala é emudecido, quem perdeu a
+ * transmissão tem a live encerrada.
+ */
+function enforceChannelAccess(channelId: string): void {
+  const channel = availableChannels().find((candidate) => candidate.id === channelId);
+  if (!channel) return;
+  let mudou = false;
+  for (const member of rooms.members(channelId)) {
+    const access = accessFor(channel, member);
+    if (!access.connect) {
+      io.to(member.socketId).emit('voice:evicted', { channelId, reason: 'Você não tem mais acesso a esta call.' });
+      leaveVoice(member.socketId);
+      continue;
+    }
+    if (rooms.setSpeakBlocked(channelId, member.id, !access.speak)) mudou = true;
+    if (!access.stream && member.screen) {
+      rooms.update(channelId, member.socketId, { screen: false });
+      io.to(member.socketId).emit('voice:stream-blocked', { channelId, reason: 'A administração tirou sua permissão de transmitir nesta call.' });
+      mudou = true;
+    }
+  }
+  if (mudou) io.to(`voice:${channelId}`).emit('voice:members', rooms.members(channelId));
+}
+
 app.post('/api/admin/users/:id/disconnect', (request, response) => {
   const admin = httpUser(request);
   if (!admin?.isAdmin) return void response.status(403).json({ error: 'Acesso exclusivo do administrador do servidor.' });
@@ -1303,6 +1397,23 @@ async function sendAttachment(id: string, response: express.Response): Promise<v
   response.setHeader('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(metadata.name)}`);
   response.send(contents);
 }
+
+// A prévia de links do chat. Com sessão, com teto por pessoa, e com a busca
+// inteira atrás das conferências de `linkPreview.ts`.
+const linkPreviewer = new LinkPreviewer();
+const linkPreviewBuckets = new Map<string, TokenBucket>();
+app.get('/api/link-preview', requireHttpSession, async (request, response) => {
+  const user = httpUser(request)!;
+  let bucket = linkPreviewBuckets.get(user.id);
+  if (!bucket) {
+    bucket = new TokenBucket(20, 0.5);
+    linkPreviewBuckets.set(user.id, bucket);
+  }
+  if (!bucket.take()) return void response.status(429).json({ ok: false, error: 'Muitas prévias de uma vez.' });
+  const preview = await linkPreviewer.preview(request.query.url);
+  response.setHeader('cache-control', 'private, max-age=1800');
+  response.json({ ok: Boolean(preview), preview });
+});
 
 app.post('/api/attachments', requireHttpSession, express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (request, response) => {
   const contents = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
@@ -1456,9 +1567,14 @@ app.get('/api/local/attachments/:id', async (request, response) => {
   await sendAttachment(parsed.data, response);
 });
 
-function snapshot(): ServerSnapshot {
+function snapshot(viewer?: PublicUser): ServerSnapshot {
   const uniqueUsers = [...new Map([...connectedUsers.values()].map((user) => [user.id, user])).values()];
-  return { serverName, channels: availableChannels(), onlineUsers: uniqueUsers, voiceRooms: rooms.snapshot() };
+  const channels = channelsFor(viewer);
+  // As salas de canais que esta pessoa não vê também não vão: quem está numa
+  // call fechada é informação do canal fechado.
+  const visiveis = new Set(channels.map((channel) => channel.id));
+  const voiceRooms = Object.fromEntries(Object.entries(rooms.snapshot()).filter(([channelId]) => visiveis.has(channelId)));
+  return { serverName, channels, onlineUsers: uniqueUsers, voiceRooms };
 }
 
 /**
@@ -1483,7 +1599,14 @@ function snapshot(): ServerSnapshot {
  * ping junto, e é o primeiro lugar onde olhar.
  */
 function broadcastSnapshot(): void {
-  io.emit('server:snapshot', snapshot());
+  // Um instantâneo por pessoa, porque cada uma enxerga os canais que pode ver.
+  // No P2P, ou sem regra nenhuma, todos são iguais e sai um só.
+  if (p2pMode || !availableChannels().some((channel) => channel.permissions)) {
+    const base = snapshot();
+    const admins = [...io.sockets.sockets.values()].filter((connected) => administers(connected.data.user as PublicUser | undefined));
+    if (!admins.length || p2pMode) return void io.emit('server:snapshot', base);
+  }
+  for (const connected of io.sockets.sockets.values()) connected.emit('server:snapshot', snapshot(connected.data.user as PublicUser | undefined));
 }
 
 function refreshProfilePresence(normalizedUsernames: ReadonlySet<string>): void {
@@ -1517,23 +1640,24 @@ io.on('connection', (socket) => {
   // Entrar é o evento certo, e o próprio método já limita a gravação a um
   // carimbo por minuto.
   void store.touchUser(user.id).catch(() => undefined);
-  socket.emit('server:snapshot', snapshot());
+  socket.emit('server:snapshot', snapshot(user));
   broadcastSnapshot();
 
   socket.on('chat:history', (channelId: unknown, acknowledge: (messages: unknown[]) => void) => {
     if (typeof channelId !== 'string') return acknowledge([]);
-    acknowledge(channelIsAvailable(channelId, 'text') ? readableMessages(socket).filter((message) => message.channelId === channelId).slice(-500) : []);
+    const access = channelAccess(channelId, socket.data.user as PublicUser, 'text');
+    acknowledge(access?.view ? readableMessages(socket).filter((message) => message.channelId === channelId).slice(-500) : []);
   });
 
   socket.on('chat:send', async (payload: unknown) => {
     const parsed = z.object({ channelId: z.string(), body: z.string().trim().max(MAX_MESSAGE_BODY).default(''), attachment: attachmentSchema.optional() })
       .refine((value) => Boolean(value.body || value.attachment), { message: 'Mensagem vazia.' })
       .safeParse(payload);
-    if (!parsed.success || !channelIsAvailable(parsed.data.channelId, 'text')) return;
+    if (!parsed.success || !channelAccess(parsed.data.channelId, socket.data.user as PublicUser, 'text')?.send) return;
     if (parsed.data.attachment && !(await store.hasAttachment(parsed.data.attachment.id))) return;
     const message = { id: randomUUID(), ...parsed.data, author: socket.data.user as PublicUser, createdAt: new Date().toISOString() };
     await store.addMessage(message);
-    io.emit('chat:message', message);
+    emitToViewers(message.channelId, 'chat:message', message);
   });
 
   // Editar e apagar.
@@ -1551,11 +1675,11 @@ io.on('connection', (socket) => {
     if (typeof id !== 'string' || !chatEditBucket.take()) return;
     const atual = store.messages.find((message) => message.id === id);
     const quem = socket.data.user as PublicUser;
-    if (!atual || !channelIsAvailable(atual.channelId, 'text')) return;
+    if (!atual || !channelAccess(atual.channelId, quem, 'text')?.view) return;
     if (!canModify(atual, quem, { p2pMode, normalize: normalizeUsername })) return;
     const mudada = mudar(atual);
     await store.replaceMessage(mudada);
-    io.emit('chat:message:updated', mudada);
+    emitToViewers(mudada.channelId, 'chat:message:updated', mudada);
   }
 
   socket.on('chat:edit', (payload: unknown) => {
@@ -1655,6 +1779,8 @@ io.on('connection', (socket) => {
   socket.on('voice:join', (input: unknown, acknowledge?: (result: unknown) => void) => {
     const channelId = typeof input === 'string' ? input : z.object({ channelId: z.string() }).safeParse(input).data?.channelId;
     if (typeof channelId !== 'string' || !channelIsAvailable(channelId, 'voice')) return acknowledge?.({ ok: false, error: 'Call inválida.' });
+    const acesso = channelAccess(channelId, socket.data.user as PublicUser, 'voice');
+    if (!acesso?.connect) return acknowledge?.({ ok: false, error: 'Você não tem permissão para entrar nesta call.' });
     const previousChannels = rooms.leaveEverywhere(socket.id);
     for (const previous of previousChannels) {
       socket.leave(`voice:${previous}`);
@@ -1677,7 +1803,7 @@ io.on('connection', (socket) => {
     }
     socket.join(`voice:${channelId}`);
     const reachability = z.number().finite().min(0).max(100).safeParse((input as { reachability?: unknown } | null)?.reachability).data ?? 0;
-    rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address), reachability });
+    rooms.join(channelId, { ...(socket.data.user as PublicUser), socketId: socket.id, endpoint: endpointFor(socket.handshake.address), reachability, speakBlocked: !acesso.speak });
     acknowledge?.({ ok: true, selfId: socket.id, peers: existingPeers });
     // Participantes que já estavam na call mantêm câmera/tela locais. Este
     // aviso faz cada um recriar apenas o enlace P2P do usuário que voltou,
@@ -1689,6 +1815,29 @@ io.on('connection', (socket) => {
 
   socket.on('voice:leave', () => leaveVoice(socket.id));
 
+  // A administração tira alguém da call. A pessoa pode voltar — quem quiser
+  // impedir isso tira dela a permissão de entrar no canal.
+  socket.on('voice:disconnect-member', async (payload: unknown, acknowledge?: (result: unknown) => void) => {
+    const parsed = z.object({ socketId: z.string().min(1).max(64) }).safeParse(payload);
+    const quem = socket.data.user as PublicUser;
+    if (p2pMode) return acknowledge?.({ ok: false, error: 'No modo P2P não há administração de call.' });
+    if (!parsed.success) return acknowledge?.({ ok: false, error: 'Pedido inválido.' });
+    const channelId = rooms.roomOf(parsed.data.socketId);
+    const alvo = channelId ? rooms.members(channelId).find((member) => member.socketId === parsed.data.socketId) : undefined;
+    if (!channelId || !alvo) return acknowledge?.({ ok: false, error: 'Essa pessoa já não está na call.' });
+    if (alvo.socketId === socket.id) return acknowledge?.({ ok: false, error: 'Para sair da call, use o botão de sair.' });
+    const papelDeQuem = normalizeRole(store.users.find((candidate) => candidate.id === quem.id)?.role);
+    const papelDoAlvo = normalizeRole(store.users.find((candidate) => candidate.id === alvo.id)?.role);
+    if (!canDisconnectFromVoice(papelDeQuem, papelDoAlvo)) {
+      await audit(quem, 'voice.disconnect', alvo.username, 'denied');
+      return acknowledge?.({ ok: false, error: papelDoAlvo === 'owner' ? 'Somente o dono do servidor desconecta outro dono.' : 'Ação exclusiva da administração do servidor.' });
+    }
+    io.to(alvo.socketId).emit('voice:evicted', { channelId, reason: `${quem.username} desconectou você da call.` });
+    leaveVoice(alvo.socketId);
+    await audit(quem, 'voice.disconnect', alvo.username);
+    acknowledge?.({ ok: true });
+  });
+
   socket.on('voice:state', (patch: unknown) => {
     const channelId = rooms.roomOf(socket.id);
     const parsed = z.object({
@@ -1698,6 +1847,8 @@ io.on('connection', (socket) => {
       // vazio; o teto existe porque o valor vem do cliente e vira estado que
       // todo mundo na sala recebe.
       watching: z.string().max(64).optional(),
+      // A lista inteira, desde a 0.13.5. O teto é o de uma call cheia de lives.
+      watchingAll: z.array(z.string().min(1).max(64)).max(16).optional(),
       // O recado aparece na tela de todo mundo na sala, então o teto é do
       // servidor e não só do cliente: um cliente alterado mandaria um texto de
       // qualquer tamanho, e o desenho é de uma linha.
@@ -1705,8 +1856,18 @@ io.on('connection', (socket) => {
       // Um nome de tema, não uma cor. O cliente ainda o procura numa lista
       // fechada antes de usar — este teto é a primeira barreira, não a única.
       awayTheme: z.string().max(16).optional(),
+      // Tamanho do texto do recado, em porcentagem. Fora da faixa é recusado
+      // aqui, e o cliente ainda o prende na faixa antes de desenhar.
+      awaySize: z.number().int().min(60).max(200).optional(),
     }).safeParse(patch);
     if (!channelId || !parsed.success) return;
+    const acessoDaCall = channelAccess(channelId, socket.data.user as PublicUser, 'voice');
+    // Transmitir sem permissão: o estado não é aceito. A mídia é ponto a ponto
+    // e não passa por aqui, mas sem `screen` ninguém é convidado a assistir.
+    if (parsed.data.screen === true && acessoDaCall && !acessoDaCall.stream) {
+      parsed.data.screen = false;
+      socket.emit('voice:stream-blocked', { channelId, reason: 'Você não tem permissão para transmitir nesta call.' });
+    }
     io.to(`voice:${channelId}`).emit('voice:members', rooms.update(channelId, socket.id, parsed.data));
     broadcastSnapshot();
   });
@@ -1784,7 +1945,7 @@ io.on('connection', (socket) => {
   socket.on('board:list', (payload: unknown, acknowledge?: (result: unknown) => void) => {
     const parsed = z.object({ channelId: z.string().min(1).max(64).optional(), archived: z.boolean().optional() }).safeParse(payload ?? {});
     if (!parsed.success) return acknowledge?.({ ok: false });
-    const canais = availableChannels().map((channel) => channel.id).filter((id) => !parsed.data.channelId || id === parsed.data.channelId);
+    const canais = channelsFor(socket.data.user as PublicUser).map((channel) => channel.id).filter((id) => !parsed.data.channelId || id === parsed.data.channelId);
     acknowledge?.({ ok: true, boards: whiteboards.list(canais, parsed.data.archived === true) });
   });
 

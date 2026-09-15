@@ -17,7 +17,7 @@
 // gerenciamento de canais" no meio de uma sessão em que acabara de usá-lo.
 // Por isso `status`: só um servidor que respondeu pode ser dito incompleto.
 
-export type Capability = 'turn' | 'roles' | 'adminChannels' | 'adminUsers' | 'adminAudit' | 'mediaDiagnostics' | 'boards';
+export type Capability = 'turn' | 'roles' | 'adminChannels' | 'adminUsers' | 'adminAudit' | 'mediaDiagnostics' | 'boards' | 'channelPermissions' | 'voiceDisconnect' | 'linkPreview';
 
 export interface ServerCapabilities {
   version: string;
@@ -36,6 +36,9 @@ const NOMES: Record<Capability, string> = {
   adminAudit: 'registro de auditoria',
   mediaDiagnostics: 'diagnóstico de mídia',
   boards: 'mesas de desenho',
+  channelPermissions: 'permissões por canal',
+  voiceDisconnect: 'desconectar da call',
+  linkPreview: 'prévia de links',
 };
 
 export function readCapabilities(health: unknown): ServerCapabilities {

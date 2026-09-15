@@ -48,3 +48,27 @@ test('estado impossível de áudio/tela e fala/mute é normalizado', () => {
   const [stopped] = rooms.update('call', 'socket-a', { screen: false });
   assert.equal(stopped.screenAudio, false);
 });
+
+test('a lista de lives assistidas e o campo antigo contam a mesma história', () => {
+  const rooms = new VoiceRooms();
+  rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927' });
+  let [ana] = rooms.update('call', 'socket-a', { watchingAll: ['socket-b', 'socket-c'] });
+  assert.deepEqual({ watching: ana.watching, all: ana.watchingAll }, { watching: 'socket-b', all: ['socket-b', 'socket-c'] });
+  // Um cliente anterior à 0.13.5 manda só o campo antigo.
+  [ana] = rooms.update('call', 'socket-a', { watching: 'socket-c' });
+  assert.deepEqual(ana.watchingAll, ['socket-c']);
+  [ana] = rooms.update('call', 'socket-a', { watching: '' });
+  assert.deepEqual(ana.watchingAll, []);
+});
+
+test('quem está sem permissão de falar entra mudo e não consegue se desmutar', () => {
+  const rooms = new VoiceRooms();
+  let [ana] = rooms.join('call', { id: 'a', username: 'Ana', socketId: 'socket-a', endpoint: 'http://10.0.0.1:3927', speakBlocked: true });
+  assert.equal(ana.muted, true);
+  [ana] = rooms.update('call', 'socket-a', { muted: false, speaking: true });
+  assert.deepEqual({ muted: ana.muted, speaking: ana.speaking }, { muted: true, speaking: false });
+  assert.equal(rooms.setSpeakBlocked('call', 'a', false), true);
+  [ana] = rooms.update('call', 'socket-a', { muted: false });
+  assert.equal(ana.muted, false);
+  assert.equal(rooms.setSpeakBlocked('call', 'a', false), false, 'nada mudou, nada a avisar');
+});

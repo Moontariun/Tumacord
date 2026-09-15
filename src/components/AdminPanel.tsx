@@ -5,6 +5,7 @@ import { Dropdown } from './Dropdown';
 import { defaultChoice } from '../../shared/serverUpdate';
 import { describeMissing, mergeCapabilities, readCapabilities, UNKNOWN_CAPABILITIES, type ServerCapabilities } from '../lib/capabilities';
 import { beginLoad, failLoad, isBusy, settle, untracked, type Tracked } from '../lib/freshness';
+import { ChannelSettingsModal } from './ChannelSettings';
 
 // Painel de administração do servidor.
 //
@@ -116,6 +117,7 @@ const ACTION_LABEL: Record<string, string> = {
   'server.update': 'pediu a atualização do servidor para',
   'user.role': 'mudou o papel de',
   'user.remove': 'removeu',
+  'voice.disconnect': 'desconectou da call',
 };
 
 function quando(iso: string): string {
@@ -134,6 +136,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
   const [area, setArea] = useState<Area>('overview');
   const [dados, setDados] = useState<Tracked<PainelDados>>(() => untracked<PainelDados>());
   const [busy, setBusy] = useState<string | null>(null);
+  const [editando, setEditando] = useState<Channel | null>(null);
   const [servidor, setServidor] = useState<ServerCapabilities>(UNKNOWN_CAPABILITIES);
   const montado = useRef(true);
   const geracao = useRef(0);
@@ -261,6 +264,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
             onCreateChannel={(corpo) => executar('canal', () => chamar('/api/admin/channels', 'POST', corpo), 'Canal criado.')}
             onRenameChannel={(id, name) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'PATCH', { name }), 'Canal renomeado.')}
             onDeleteChannel={(id, nome) => executar(id, () => chamar(`/api/admin/channels/${encodeURIComponent(id)}`, 'DELETE'), `Canal ${nome} apagado.`)}
+            onEditChannel={setEditando}
             onMoveChannel={(ids) => executar('ordem', () => chamar('/api/admin/channels/order', 'POST', { ids }), 'Ordem salva.')}
             onCreateCategory={(name) => executar('categoria', () => chamar('/api/admin/categories', 'POST', { name }), 'Categoria criada.')}
             onDeleteCategory={(id, nome) => executar(id, () => chamar(`/api/admin/categories/${encodeURIComponent(id)}`, 'DELETE'), `Categoria ${nome} apagada; os canais dela ficaram sem categoria.`)}
@@ -276,6 +280,7 @@ export function AdminPanel({ serverUrl, token, currentUserId, onClose, onNotice 
         </>}
       </section>
     </div>
+    {editando && <ChannelSettingsModal channel={editando} serverUrl={serverUrl} token={token} onClose={() => setEditando(null)} onNotice={onNotice} onSaved={() => void carregar()} />}
   </div>;
 }
 
@@ -402,13 +407,14 @@ function Overview({ overview, users, channels }: { overview: AdminOverview | nul
   </>;
 }
 
-function Channels({ channels, categories, busy, onCreateChannel, onRenameChannel, onDeleteChannel, onMoveChannel, onCreateCategory, onDeleteCategory }: {
+function Channels({ channels, categories, busy, onCreateChannel, onRenameChannel, onDeleteChannel, onEditChannel, onMoveChannel, onCreateCategory, onDeleteCategory }: {
   channels: Channel[];
   categories: ChannelCategory[];
   busy: string | null;
   onCreateChannel: (corpo: { name: string; type: 'text' | 'voice'; categoryId?: string }) => Promise<boolean>;
   onRenameChannel: (id: string, name: string) => Promise<boolean>;
   onDeleteChannel: (id: string, nome: string) => Promise<boolean>;
+  onEditChannel: (canal: Channel) => void;
   onMoveChannel: (ids: string[]) => Promise<boolean>;
   onCreateCategory: (name: string) => Promise<boolean>;
   onDeleteCategory: (id: string, nome: string) => Promise<boolean>;
@@ -456,11 +462,12 @@ function Channels({ channels, categories, busy, onCreateChannel, onRenameChannel
         <Icon name={canal.type === 'voice' ? 'voice' : 'hash'} />
         <div>
           <strong>{canal.name}</strong>
-          <small>{canal.type === 'voice' ? 'voz' : 'texto'}{canal.categoryId ? ` · ${categories.find((c) => c.id === canal.categoryId)?.name ?? 'categoria removida'}` : ''}{canal.topic ? ` · ${canal.topic}` : ''}</small>
+          <small>{canal.type === 'voice' ? 'voz' : 'texto'}{canal.categoryId ? ` · ${categories.find((c) => c.id === canal.categoryId)?.name ?? 'categoria removida'}` : ''}{canal.topic ? ` · ${canal.topic}` : ''}{canal.permissions ? ' · com regras de acesso' : ''}</small>
         </div>
         <div className="admin-row-actions">
           <button disabled={indice === 0 || busy === 'ordem'} title="Subir" onClick={() => mover(canal.id, -1)}>↑</button>
           <button disabled={indice === ordenados.length - 1 || busy === 'ordem'} title="Descer" onClick={() => mover(canal.id, 1)}>↓</button>
+          <button disabled={busy === canal.id} onClick={() => onEditChannel(canal)} title="Nome, tópico, limite e quem pode ver, escrever, entrar, falar e transmitir">Permissões</button>
           <button disabled={busy === canal.id} onClick={() => { const novo = window.prompt('Novo nome do canal', canal.name); if (novo && novo !== canal.name) void onRenameChannel(canal.id, novo); }}>Renomear</button>
           <button className="danger" disabled={busy === canal.id} onClick={() => { if (window.confirm(`Apagar o canal ${canal.name}? As mensagens dele vão junto e isso não tem volta.`)) void onDeleteChannel(canal.id, canal.name); }}>Apagar</button>
         </div>

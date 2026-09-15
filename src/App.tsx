@@ -7,6 +7,10 @@ import { Icon } from './components/Icon';
 import { Dropdown } from './components/Dropdown';
 import { AdminPanel } from './components/AdminPanel';
 import { Whiteboard } from './components/Whiteboard';
+import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './components/ContextMenu';
+import { ChannelSettingsModal } from './components/ChannelSettings';
+import { LinkPreviews, MessageText } from './components/LinkPreview';
+import { MIN_TILE_HEIGHT, bestStageLayout } from './lib/stageLayout';
 import { useBoards } from './lib/boards';
 import { cleanDeviceLabel, useDevices } from './hooks/useDevices';
 import { UpdateButton, UpdateModal, WhatsNewModal, useUpdates } from './components/UpdatePanel';
@@ -15,7 +19,7 @@ import { SCREEN_QUALITIES } from './lib/screenQuality';
 import { describeOrigin, originLabel } from './lib/origin';
 import { abandonSession, clearSession, defaultServerUrl, destinationOf, forgetThisDestination, suspendActive, loadSession, login, register, rememberServerKey, rememberedDestinations, resolveDestination, savedServerKey, saveSession, sessionFor, useDestination, type SavedSession } from './lib/session';
 import { ATTACHMENT_SYNC_KEY, attachmentSyncEnabled, attachmentSyncVisible } from './lib/attachmentSync';
-import { AWAY_THEMES, AWAY_THEME_LABEL, DEFAULT_AWAY_MESSAGE, MAX_AWAY_MESSAGE, readAwayMessage, readAwayTheme, sanitizeAwayMessage, sanitizeAwayTheme, setAwayMessage, setAwayTheme, type AwayTheme } from './lib/away';
+import { AWAY_SIZE_MAX, AWAY_SIZE_MIN, AWAY_THEMES, AWAY_THEME_LABEL, DEFAULT_AWAY_MESSAGE, MAX_AWAY_MESSAGE, readAwayMessage, readAwaySize, readAwayTheme, sanitizeAwayMessage, sanitizeAwaySize, sanitizeAwayTheme, setAwayMessage, setAwaySize, setAwayTheme, type AwayTheme } from './lib/away';
 import { FEEDBACK_SOUNDS, SOUND_LABEL, playSound, previewSound, readDisabledSounds, readSoundEnabled, readSoundVolume, setSoundEnabledFor, setSoundPreference, setSoundVolume, unlockAudio, type FeedbackSound } from './lib/sound';
 import { cacheAttachment, cacheProfileMedia, downloadBlob, formatFileSize, hasLocalAttachment, imagePreview, loadLocalSyncBundle, mirrorLocally, originFor, publishProfileMedia, resolveAttachment, uploadAttachment } from './lib/chatSync';
 import { syncIdentity } from './lib/identity';
@@ -230,7 +234,7 @@ function Login({ onLogin }: { onLogin: (session: SavedSession) => void }) {
       <form className="login-form" onSubmit={submit}>
         <div className="connection-mode" role="tablist" aria-label="Tipo de conexão">
           <button type="button" role="tab" aria-selected={connectionMode === 'p2p'} disabled={!isDesktop} className={connectionMode === 'p2p' ? 'selected' : ''} onClick={() => setConnectionMode('p2p')} title={isDesktop ? 'Enlace direto entre os computadores. Na mesma rede as calls aparecem sozinhas; fora dela, um código de convite basta.' : 'O modo P2P automático está disponível no aplicativo instalado.'}><Icon name="users" />P2P automático</button>
-          <button type="button" role="tab" aria-selected={connectionMode === 'server'} className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')} title="Conectar a um servidor por endereço. A primeira entrada cria sua conta nele; a porta padrão é 4600."><Icon name="server" />Servidor dedicado</button>
+          <button type="button" role="tab" aria-selected={connectionMode === 'server'} className={connectionMode === 'server' ? 'selected' : ''} onClick={() => setConnectionMode('server')} title="Conectar a um servidor por endereço. A primeira entrada cria sua conta nele; a porta padrão é 4600."><Icon name="server" />P2P híbrido</button>
         </div>
         {connectionMode === 'server' && <div className="field-row">
           <label>Endereço <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://tumacord.exemplo:4600" required /></label>
@@ -411,6 +415,22 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   const update = useUpdates();
   const [adminOpen, setAdminOpen] = useState(false);
   const [memberListOpen, setMemberListOpen] = useState(true);
+  // A barra da esquerda recolhida: só ícones, rostos e os botões de voz. As
+  // lives ganham a largura que ela ocupava, sem sair da janela.
+  const [sidebarCompact, setSidebarCompactState] = useState(() => {
+    try { return localStorage.getItem('tumacord.sidebar-compact') === 'true'; } catch { return false; }
+  });
+  const toggleSidebarCompact = useCallback(() => setSidebarCompactState((atual) => {
+    const proximo = !atual;
+    try { localStorage.setItem('tumacord.sidebar-compact', String(proximo)); } catch { /* preferência só desta sessão */ }
+    return proximo;
+  }), []);
+  // A tela cheia das lives: a janela vai para a tela cheia e a interface em
+  // volta some. As lives continuam na mesma arrumação, só que maiores.
+  const [immersive, setImmersive] = useState(false);
+  const immersiveRef = useRef(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(readSoundEnabled);
   const [soundVolume, setFeedbackVolume] = useState(readSoundVolume);
@@ -552,6 +572,46 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
       showToast('Não foi possível alternar o modo tela cheia.');
     }
   }, [showToast]);
+
+  /**
+   * A tela cheia das lives.
+   *
+   * O botão antigo pedia tela cheia da GRADE, e a grade continuava presa ao
+   * espaço entre as barras: a janela ia para a tela cheia e as lives ficavam do
+   * mesmo tamanho, cercadas pela interface. Aqui é a interface que sai de cena
+   * — barras, topo e lista de membros — e o palco ocupa a tela por conta do
+   * próprio layout. Nada é reposicionado à força: as lives só ganham espaço.
+   */
+  const setImmersiveMode = useCallback(async (on: boolean) => {
+    if (on === immersiveRef.current) return;
+    immersiveRef.current = on;
+    setImmersive(on);
+    try {
+      if (on) {
+        if (window.tumacordDesktop) await window.tumacordDesktop.beginMediaFullscreen();
+        else if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      } else if (window.tumacordDesktop) {
+        await window.tumacordDesktop.endMediaFullscreen();
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // Sem tela cheia do sistema o modo continua valendo dentro da janela.
+    }
+  }, []);
+  useEffect(() => {
+    const sair = () => { if (immersiveRef.current) { immersiveRef.current = false; setImmersive(false); } };
+    const stopDesktop = window.tumacordDesktop?.onMediaFullscreenChanged((active) => { if (!active) sair(); });
+    const onFullscreen = () => { if (!window.tumacordDesktop && !document.fullscreenElement) sair(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && immersiveRef.current) void setImmersiveMode(false); };
+    document.addEventListener('fullscreenchange', onFullscreen);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      stopDesktop?.();
+      document.removeEventListener('fullscreenchange', onFullscreen);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [setImmersiveMode]);
 
   useEffect(() => {
     if (!window.tumacordDesktop || session.connectionMode === 'server') {
@@ -824,6 +884,12 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
     return [text, voiceChannel].filter((channel): channel is Channel => Boolean(channel));
   }, [session.connectionMode, snapshot.channels]);
   const selectedChannel = visibleChannels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0];
+  // O "já volto" existe para cobrir a SUA transmissão. Sem live, não há o que
+  // cobrir: ele sai junto com ela, em vez de ficar anunciado para a sala.
+  const { screenOn: transmitindo, away: recadoAtivo, setAway: definirRecado } = voice;
+  useEffect(() => {
+    if (!transmitindo && recadoAtivo) definirRecado('', readAwayTheme(), readAwaySize());
+  }, [definirRecado, recadoAtivo, transmitindo]);
   // A mesa de desenho não depende de live nem de call: ela nasce vinculada a
   // um canal, e quem enxerga o canal enxerga a mesa. A call pode estar
   // acontecendo ao lado, e não precisa estar.
@@ -844,6 +910,12 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
     boards.open(criada.id);
     showToast(`Mesa “${criada.name}” criada. O anúncio foi para o canal.`);
   }, [boards, showToast]);
+
+  // Sair da call pela lista, abrir um canal de texto ou uma mesa: a tela cheia
+  // das lives não tem mais o que mostrar.
+  useEffect(() => {
+    if (immersive && (selectedChannel?.type !== 'voice' || boards.active)) void setImmersiveMode(false);
+  }, [boards.active, immersive, selectedChannel?.type, setImmersiveMode]);
 
   useEffect(() => {
     if (!visibleChannels.length || visibleChannels.some((channel) => channel.id === selectedChannelId)) return;
@@ -1046,12 +1118,102 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
   // reiniciava a saída várias vezes seguidas e derrubava o som da call.
   useEffect(() => { setSharedAudioSink(devices.preferences.speakerId); }, [devices.preferences.speakerId]);
 
-  return <div className="app-shell">
+  /** Quem a sala diz que está sem permissão de falar: a voz dessa pessoa não toca. */
+  const vozBloqueada = (media: { peerId: string }) => Boolean(voice.members.find((member) => member.socketId === media.peerId)?.speakBlocked);
+
+  const disconnectFromCall = async (member: VoiceState) => {
+    const resultado = await voice.disconnectMember(member.socketId);
+    showToast(resultado.ok ? `${member.username} foi desconectado da call.` : resultado.error ?? 'Não consegui desconectar essa pessoa.');
+  };
+
+  /**
+   * O menu do botão direito sobre alguém numa call.
+   *
+   * Tudo que já dava para fazer clicando está aqui junto, e a administração
+   * ganha "Desconectar da call". Esconder a opção de quem não administra é só
+   * conveniência: o servidor confere o papel de novo antes de tirar alguém.
+   */
+  const openMemberMenu = (event: React.MouseEvent, member: VoiceState, channel?: Channel) => {
+    event.preventDefault();
+    const self = member.id === session.user.id;
+    const naMinhaCall = voice.members.some((candidate) => candidate.socketId === member.socketId);
+    const items: ContextMenuEntry[] = [{ label: self ? 'Ver meu perfil' : 'Ver perfil', icon: 'users', onSelect: () => setProfileUser(member) }];
+    if (!self && naMinhaCall) {
+      if (!sidebarCompact) items.push({ label: 'Ajustar volume', icon: 'volume', onSelect: () => setVoiceMenuUserId(member.id) });
+      items.push(mutedUsers[member.id]
+        ? { label: 'Voltar a ouvir', icon: 'volume', onSelect: () => setUserMuted(member.id, false) }
+        : { label: 'Silenciar para mim', icon: 'volumeOff', onSelect: () => setUserMuted(member.id, true) });
+    }
+    if (!self && member.screen && channel) {
+      const assistindo = Boolean(voice.watching[member.socketId]);
+      items.push({ label: assistindo ? 'Parar de assistir' : 'Assistir a transmissão', icon: assistindo ? 'close' : 'screen', onSelect: () => void watchMemberLive(member, channel) });
+    }
+    if (isServerAdmin && !self) {
+      items.push({ separator: true });
+      items.push({ label: 'Desconectar da call', icon: 'leave', danger: true, hint: 'Tira a pessoa da call agora. Ela pode entrar de novo, a menos que perca a permissão no canal.', onSelect: () => void disconnectFromCall(member) });
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY, title: member.username, items });
+  };
+
+  const openChannelMenu = (event: React.MouseEvent, channel: Channel) => {
+    if (!isServerAdmin) return;
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, title: channel.name, items: [
+      { label: 'Editar canal e permissões', icon: 'settings', onSelect: () => setEditingChannelId(channel.id) },
+    ] });
+  };
+
+  const editingChannel = editingChannelId ? snapshot.channels.find((channel) => channel.id === editingChannelId) : undefined;
+  const bloqueado = (channel: Channel) => Boolean(channel.access && (channel.type === 'voice' ? !channel.access.connect : !channel.access.send));
+
+  const compactSidebar = <aside className="channel-sidebar is-compact" aria-label="Canais e calls">
+    <header className="server-header"><img className="compact-logo" src={logoUrl} alt="Tumacord" /></header>
+    <div className="channel-scroll">
+      {(['text', 'voice'] as const).map((tipo) => <div key={tipo} className="compact-group">
+        {visibleChannels.filter((channel) => channel.type === tipo).map((channel) => <div key={channel.id} className="compact-channel">
+          <button
+            className={`compact-channel-button ${selectedChannelId === channel.id ? 'selected' : ''} ${voice.channelId === channel.id ? 'connected' : ''} ${bloqueado(channel) ? 'is-locked' : ''}`}
+            onClick={() => openChannel(channel)}
+            onContextMenu={(event) => openChannelMenu(event, channel)}
+            title={channel.name}
+            aria-label={channel.name}
+          ><Icon name={channel.type === 'voice' ? 'voice' : 'hash'} />{voice.channelId === channel.id && <i />}</button>
+          {channel.type === 'voice' && membrosDoCanal(channel.id).map((member) => {
+            const self = member.id === session.user.id;
+            const assistindo = Boolean(voice.watching[member.socketId]);
+            const mudo = member.muted || Boolean(mutedUsers[member.id]);
+            return <div className="compact-member" key={member.socketId}>
+              <button
+                className={`compact-avatar ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`}
+                onClick={() => setProfileUser(member)}
+                onContextMenu={(event) => openMemberMenu(event, member, channel)}
+                title={`${member.username}${member.screen ? ' · transmitindo' : ''}${mudo ? ' · sem som' : ''}${member.pingMs < 9999 ? ` · ${member.pingMs} ms` : ''}`}
+              >
+                <Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small />
+                {mudo && <span className="compact-badge is-muted"><Icon name="micOff" /></span>}
+                {member.screen && <span className="compact-badge is-live" />}
+              </button>
+              {!self && member.screen && <button className={`compact-watch ${assistindo ? 'is-watching' : ''}`} onClick={() => void watchMemberLive(member, channel)} title={assistindo ? `Parar de assistir ${member.username}` : `Assistir ${member.username}`} aria-label={assistindo ? `Parar de assistir ${member.username}` : `Assistir ${member.username}`}><Icon name={assistindo ? 'close' : 'screen'} /></button>}
+            </div>;
+          })}
+        </div>)}
+      </div>)}
+    </div>
+    {voice.channelId && <div className="voice-status is-compact"><button onClick={voice.leave} title={`Sair de ${currentVoiceChannel?.name ?? 'call'}`} aria-label="Sair da call"><Icon name="leave" /></button></div>}
+    <div className="user-panel is-compact">
+      <button className="profile-summary" onClick={() => setProfileUser(session.user)} title={`${session.user.username} · ${connected ? 'online' : 'reconectando'}`}><Avatar name={session.user.username} profile={session.user.profile} serverUrl={session.serverUrl} small online /></button>
+      <button className={voice.muted ? 'danger-active' : ''} onClick={() => void voice.toggleMute()} title="Microfone"><Icon name={voice.muted ? 'micOff' : 'mic'} /></button>
+      <button className={voice.deafened ? 'danger-active' : ''} onClick={voice.toggleDeafen} title="Áudio"><Icon name="headphones" /></button>
+      <button onClick={() => setSettingsOpen(true)} title="Configurações"><Icon name="settings" /></button>
+    </div>
+  </aside>;
+
+  return <div className={`app-shell ${sidebarCompact ? 'sidebar-compact' : ''} ${immersive ? 'is-immersive' : ''}`}>
     <nav className="server-rail" aria-label="Servidor Tumacord">
       <button className="server-icon active" title="Tumacord"><span className="server-icon-art"><img src={logoUrl} alt="Tumacord" /></span></button>
     </nav>
 
-    <aside className="channel-sidebar">
+    {sidebarCompact ? compactSidebar : <aside className="channel-sidebar">
       <header className="server-header"><span className="brand-mark">Tuma<span>cord</span></span></header>
       <div className="channel-scroll">
         {(window.tumacordDesktop || session.connectionMode === 'server') && <section className="direct-link-actions">
@@ -1061,11 +1223,11 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
         </section>}
         {discoveredCalls.length > 0 && <section className="network-calls"><div className="group-title"><span>Calls na rede</span><i className="live-dot" /></div>{discoveredCalls.map((call) => <button className="network-call" key={`${call.hostId}:${call.callId}`} onClick={() => void enterDiscoveredCall(call)}><div><strong>{call.callName}</strong><span>{call.hostUsername} · {call.participants} {call.participants === 1 ? 'pessoa' : 'pessoas'}</span></div><small>{call.pingMs} ms</small></button>)}</section>}
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de texto' : 'Conversa'} onAdd={canCreateChannel ? () => setCreatingChannelType('text') : undefined}>
-          {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} onClick={() => openChannel(channel)} />)}
+          {visibleChannels.filter((channel) => channel.type === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} selected={selectedChannelId === channel.id} locked={bloqueado(channel)} onClick={() => openChannel(channel)} onContextMenu={(event) => openChannelMenu(event, channel)} onEdit={isServerAdmin ? () => setEditingChannelId(channel.id) : undefined} />)}
         </ChannelGroup>
         <ChannelGroup title={session.connectionMode === 'server' ? 'Canais de voz' : 'Call do grupo'} onAdd={canCreateChannel ? () => setCreatingChannelType('voice') : undefined}>
           {visibleChannels.filter((channel) => channel.type === 'voice').map((channel) => <div key={channel.id}>
-            <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} onClick={() => openChannel(channel)} />
+            <ChannelButton channel={channel} selected={selectedChannelId === channel.id} connected={voice.channelId === channel.id} locked={bloqueado(channel)} onClick={() => openChannel(channel)} onContextMenu={(event) => openChannelMenu(event, channel)} onEdit={isServerAdmin ? () => setEditingChannelId(channel.id) : undefined} />
             {membrosDoCanal(channel.id).map((member) => {
               const self = member.id === session.user.id;
               const canAdjustVolume = !self && voice.members.some((candidate) => candidate.id === member.id);
@@ -1082,7 +1244,7 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
                   ? `Assistir a transmissão de ${member.username}`
                   : `Entrar na call e assistir a transmissão de ${member.username}`;
               return <div className="voice-member-entry" key={member.socketId}>
-                <button className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => { if (canAdjustVolume) setVoiceMenuUserId((current) => current === member.id ? null : member.id); else setProfileUser(member); }} title={canAdjustVolume ? `Ajustar volume de ${member.username}` : `Ver perfil de ${member.username}`}>
+                <button className={`voice-member-mini ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onContextMenu={(event) => openMemberMenu(event, member, channel)} onClick={() => { if (canAdjustVolume) setVoiceMenuUserId((current) => current === member.id ? null : member.id); else setProfileUser(member); }} title={canAdjustVolume ? `Ajustar volume de ${member.username}` : `Ver perfil de ${member.username}`}>
                   <Avatar name={member.username} profile={member.profile} serverUrl={session.serverUrl} small />
                   {/* Quem já está na call não precisa do ping aqui: a lista de
                       presença, à direita, é o lugar dessa informação. */}
@@ -1146,10 +1308,11 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
         <button className={voice.deafened ? 'danger-active' : ''} onClick={voice.toggleDeafen} title="Áudio"><Icon name="headphones" /></button>
         <button onClick={() => setSettingsOpen(true)} title="Configurações"><Icon name="settings" /></button>
       </div>
-    </aside>
+    </aside>}
 
     <section className="main-panel">
       <header className="topbar">
+        <button className={`sidebar-toggle ${sidebarCompact ? 'toolbar-active' : ''}`} onClick={toggleSidebarCompact} aria-pressed={sidebarCompact} title={sidebarCompact ? 'Expandir a barra lateral' : 'Recolher a barra lateral e dar mais espaço às lives'}><Icon name="sidebar" /></button>
         <Icon name={boards.active ? 'board' : selectedChannel?.type === 'voice' ? 'voice' : 'hash'} />
         <strong>{boards.active ? boards.active.board.name : selectedChannel?.name ?? 'Tumacord'}</strong>
         {!boards.active && selectedChannel?.type === 'text' && <span className="channel-topic">Conversa do grupo.</span>}
@@ -1161,19 +1324,20 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
             botão nenhum. */}
         {update.supported && <UpdateButton state={update.state} onOpen={() => setUpdateOpen(true)} />}
         {isServerAdmin && <button className="admin-toolbar-button" onClick={() => setAdminOpen(true)} title="Painel administrativo"><Icon name="shield" /></button>}
+        {!boards.active && selectedChannel?.type === 'voice' && <button onClick={() => void setImmersiveMode(true)} title="Tela cheia com as lives (Esc para sair)"><Icon name="maximize" /></button>}
         <button className={memberListOpen ? 'toolbar-active' : ''} onClick={() => setMemberListOpen((value) => !value)} title="Membros"><Icon name="users" /></button>
       </header>
       <div className="content-row">
         {boards.active
           ? <Boundary title="A mesa precisou ser redesenhada"><Whiteboard session={boards.active} api={boards} currentUserId={session.user.id} connectionMode={session.connectionMode ?? 'p2p'} onNotice={showToast} onClose={boards.close} /></Boundary>
           : selectedChannel?.type === 'voice'
-          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} /></Boundary>
-          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={replicatesAttachments} showFileSync={showsAttachmentSync} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
+          ? <Boundary title="A call precisou ser redesenhada"><CallView voice={voice} channel={selectedChannel} members={selectedMembers} speakerId={devices.preferences.speakerId} userVolumes={userVolumes} streamVolume={streamVolume} setStreamVolume={setStreamVolume} streamMuted={streamMuted} setStreamMuted={setStreamMuted} mutedUsers={mutedUsers} serverUrl={session.serverUrl} onProfile={setProfileUser} onNotice={showToast} immersive={immersive} onImmersive={(on) => void setImmersiveMode(on)} onMemberMenu={(event, member) => openMemberMenu(event, member, selectedChannel)} onOpenMenu={setContextMenu} canStream={selectedChannel.access?.stream !== false} /></Boundary>
+          : <ChatView channel={selectedChannel} messages={messages} message={message} setMessage={setMessage} sendMessage={(event) => void sendMessage(event)} pendingFile={pendingFile} uploading={attachmentUploading} syncFiles={replicatesAttachments} showFileSync={showsAttachmentSync} onFile={(file) => void selectAttachment(file)} onClearAttachment={() => setPendingFile(null)} onSyncFiles={changeFileSync} onDownload={downloadAttachment} serverUrl={session.serverUrl} token={session.token} me={session.user} onEdit={editMessageBody} onAskDelete={setAApagar} />}
         {memberListOpen && !boards.active && <MemberList users={snapshot.onlineUsers} voiceMembers={allVoiceMembers} currentUserId={session.user.id} serverUrl={session.serverUrl} onProfile={setProfileUser} />}
       </div>
     </section>
 
-    {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || Boolean(donoDaMidia(media) && mutedUsers[donoDaMidia(media)!])} volume={donoDaMidia(media) ? Math.max(0, Math.min(2, userVolumes[donoDaMidia(media)!] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
+    {backgroundVoiceMedia.map((media) => <MediaElement key={`background:${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || vozBloqueada(media) || Boolean(donoDaMidia(media) && mutedUsers[donoDaMidia(media)!])} volume={donoDaMidia(media) ? Math.max(0, Math.min(2, userVolumes[donoDaMidia(media)!] ?? 1)) : 1} speakerId={devices.preferences.speakerId} audioOnly remote />)}
     {browsingText && activeRemoteScreen && !miniLiveHidden && <FloatingLivePlayer media={activeRemoteScreen} speakerId={devices.preferences.speakerId} muted={voice.deafened || streamMuted} volume={streamVolume} rawVolume={streamVolume} onVolume={(volume) => { setStreamMuted(false); setStreamVolume(volume); }} onMute={() => setStreamMuted(!streamMuted)} onOpen={() => { if (voice.channelId) setSelectedChannelId(voice.channelId); }} onClose={() => setMiniLiveHidden(true)} onNotice={showToast} />}
 
     {updateOpen && <UpdateModal bridge={update} onClose={() => setUpdateOpen(false)} onNotice={showToast} />}
@@ -1194,6 +1358,8 @@ function Tumacord({ session, onSessionChange, onLogout, onSwitchAccount }: { ses
     {voice.showShareSetup && <ShareSetupModal initialQuality={voice.quality} busy={voice.shareBusy} audioSupport={voice.screenAudioSupport} onContinue={(includeAudio, selectedQuality) => { setShareAudio(includeAudio); void voice.prepareScreenShare(includeAudio, selectedQuality); }} onClose={() => voice.setShowShareSetup(false)} />}
     {voice.showSourcePicker && <SourcePicker sources={voice.desktopSources} busy={voice.shareBusy} withAudio={shareAudio && voice.screenAudioSupport.supported !== false} onSelect={(id, kind) => void voice.shareDesktopSource(id, kind)} onBack={() => { voice.setShowSourcePicker(false); voice.setShowShareSetup(true); }} onClose={() => voice.setShowSourcePicker(false)} />}
     {profileUser && <ProfileModal user={snapshot.onlineUsers.find((candidate) => candidate.id === profileUser.id) ?? (profileUser.id === session.user.id ? session.user : profileUser)} own={profileUser.id === session.user.id} serverUrl={session.serverUrl} token={session.token} onClose={() => setProfileUser(null)} onSaved={(updated) => { const nextSession = { ...session, user: updated }; saveSession(nextSession); onSessionChange(nextSession); setProfileUser(updated); showToast('Perfil atualizado.'); }} />}
+    {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)} />}
+    {editingChannel && isServerAdmin && <ChannelSettingsModal channel={editingChannel} serverUrl={session.serverUrl} token={session.token} onClose={() => setEditingChannelId(null)} onNotice={showToast} />}
     {toast && <div className="toast">{toast}</div>}
   </div>;
 }
@@ -1202,10 +1368,15 @@ function ChannelGroup({ title, onAdd, addLabel = 'Criar canal', children }: { ti
   return <section className="channel-group"><div className="group-title"><span>{title}</span>{onAdd && <button onClick={onAdd} title={addLabel}><Icon name="plus" /></button>}</div>{children}</section>;
 }
 
-function ChannelButton({ channel, selected, connected, onClick }: { channel: Channel; selected: boolean; connected?: boolean; onClick: () => void }) {
-  return <button className={`channel-button ${selected ? 'selected' : ''} ${connected ? 'connected' : ''}`} onClick={onClick}>
-    <Icon name={channel.type === 'voice' ? 'voice' : 'hash'} /><span>{channel.name}</span>{connected && <i />}
-  </button>;
+function ChannelButton({ channel, selected, connected, locked, onClick, onContextMenu, onEdit }: { channel: Channel; selected: boolean; connected?: boolean; locked?: boolean; onClick: () => void; onContextMenu?: (event: React.MouseEvent) => void; onEdit?: () => void }) {
+  return <div className={`channel-row ${onEdit ? 'is-editable' : ''}`}>
+    <button className={`channel-button ${selected ? 'selected' : ''} ${connected ? 'connected' : ''}`} onClick={onClick} onContextMenu={onContextMenu} title={locked ? (channel.type === 'voice' ? 'Você pode ver esta call, mas não entrar nela' : 'Você pode ler este canal, mas não escrever nele') : channel.topic || undefined}>
+      <Icon name={channel.type === 'voice' ? 'voice' : 'hash'} /><span>{channel.name}</span>{locked && <Icon name="lock" className="channel-lock" />}{connected && <i />}
+    </button>
+    {/* Irmão do botão, e não filho: um botão dentro de outro não é HTML válido
+        e o clique iria para os dois. */}
+    {onEdit && <button className="channel-edit" onClick={onEdit} title={`Editar ${channel.name}`} aria-label={`Editar ${channel.name}`}><Icon name="settings" /></button>}
+  </div>;
 }
 
 interface ChatViewProps {
@@ -1224,13 +1395,15 @@ interface ChatViewProps {
   onSyncFiles: (enabled: boolean) => void;
   onDownload: (attachment: ChatAttachment) => void;
   serverUrl: string;
+  /** A sessão, para pedir as prévias de link ao servidor. */
+  token: string;
   /** Quem sou eu, para saber quais mensagens são minhas de mexer. */
   me: PublicUser;
   onEdit: (id: string, body: string) => void;
   onAskDelete: (message: ChatMessage) => void;
 }
 
-function ChatView({ channel, messages, message, setMessage, sendMessage, pendingFile, uploading, syncFiles, showFileSync, onFile, onClearAttachment, onSyncFiles, onDownload, serverUrl, me, onEdit, onAskDelete }: ChatViewProps) {
+function ChatView({ channel, messages, message, setMessage, sendMessage, pendingFile, uploading, syncFiles, showFileSync, onFile, onClearAttachment, onSyncFiles, onDownload, serverUrl, token, me, onEdit, onAskDelete }: ChatViewProps) {
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [editando, setEditando] = useState<{ id: string; body: string } | null>(null);
@@ -1262,7 +1435,8 @@ function ChatView({ channel, messages, message, setMessage, sendMessage, pending
                   <input autoFocus value={editando.body} maxLength={2000} onChange={(event) => setEditando({ id: item.id, body: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); salvarEdicao(); } if (event.key === 'Escape') setEditando(null); }} />
                   <div><button type="button" onClick={salvarEdicao}>Salvar</button><button type="button" className="ghost" onClick={() => setEditando(null)}>Cancelar</button></div>
                 </div>
-              : item.body && <p>{item.body}{item.editedAt && <em title={`Editada em ${new Date(item.editedAt).toLocaleString('pt-BR')}`}>(editada)</em>}</p>}
+              : item.body && <p><MessageText body={item.body} />{item.editedAt && <em title={`Editada em ${new Date(item.editedAt).toLocaleString('pt-BR')}`}>(editada)</em>}</p>}
+            {!emEdicao && item.body && <LinkPreviews body={item.body} serverUrl={serverUrl} token={token} />}
             {item.attachment && <div className="message-attachment">{item.attachment.previewDataUrl ? <img src={item.attachment.previewDataUrl} alt="Prévia leve do arquivo" /> : <span className="attachment-file-icon"><Icon name="file" /></span>}<div><strong>{item.attachment.name}</strong><small>{formatFileSize(item.attachment.size)} · prévia local leve</small></div><button onClick={() => onDownload(item.attachment!)} title="Baixar arquivo"><Icon name="download" /></button></div>}
           </div>
           {minha && !emEdicao && <div className="message-actions">
@@ -1286,7 +1460,7 @@ function ChatView({ channel, messages, message, setMessage, sendMessage, pending
         <span><strong>{pendingFile.file.name}</strong><small>{formatFileSize(pendingFile.file.size)}{uploading ? ' · enviando…' : ''}</small></span>
         <button type="button" disabled={uploading} onClick={onClearAttachment} title="Não enviar este arquivo"><Icon name="close" /></button>
       </div>}
-      <form className="message-box" onSubmit={sendMessage}><input ref={fileInput} className="hidden-file-input" type="file" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); event.target.value = ''; }} /><button type="button" disabled={uploading} onClick={() => fileInput.current?.click()} title="Anexar arquivo"><Icon name="plus" /></button><input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Conversar em #${channel?.name ?? ''}`} maxLength={2000} /><button className="send-button" aria-label="Enviar" disabled={uploading || (!message.trim() && !pendingFile)}><Icon name={uploading ? 'syncFile' : 'send'} /></button></form>
+      {channel?.access?.send === false ? <div className="chat-readonly"><Icon name="lock" /><span>Você pode ler este canal, mas a administração não liberou mensagens suas aqui.</span></div> : <form className="message-box" onSubmit={sendMessage}><input ref={fileInput} className="hidden-file-input" type="file" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); event.target.value = ''; }} /><button type="button" disabled={uploading} onClick={() => fileInput.current?.click()} title="Anexar arquivo"><Icon name="plus" /></button><input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Conversar em #${channel?.name ?? ''}`} maxLength={2000} /><button className="send-button" aria-label="Enviar" disabled={uploading || (!message.trim() && !pendingFile)}><Icon name={uploading ? 'syncFile' : 'send'} /></button></form>}
     </div>
   </main>;
 }
@@ -1296,7 +1470,9 @@ interface VoiceViewModel {
   selfSocketId: string;
   /** O recado de "já volto" desta pessoa. Vazio quer dizer presente. */
   away: string;
-  setAway: (message: string, theme: string) => void;
+  setAway: (message: string, theme: string, size?: number) => void;
+  /** A administração tirou desta pessoa a permissão de falar nesta call. */
+  selfSpeakBlocked: boolean;
   channelId: string | null;
   members: VoiceState[];
   muted: boolean;
@@ -1328,7 +1504,9 @@ interface VoiceViewModel {
   user: { id: string; username: string };
 }
 
-function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, onProfile, onNotice }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void }) {
+const HIDE_OWN_SCREEN_KEY = 'tumacord.hide-own-screen';
+
+function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers, streamVolume, setStreamVolume, streamMuted, setStreamMuted, serverUrl, onProfile, onNotice, immersive, onImmersive, onMemberMenu, onOpenMenu, canStream }: { voice: VoiceViewModel; channel: Channel; members: VoiceState[]; speakerId: string; userVolumes: Record<string, number>; mutedUsers: Record<string, boolean>; streamVolume: number; setStreamVolume: (volume: number) => void; streamMuted: boolean; setStreamMuted: (muted: boolean) => void; serverUrl: string; onProfile: (user: PublicUser) => void; onNotice: (message: string) => void; immersive: boolean; onImmersive: (on: boolean) => void; onMemberMenu: (event: React.MouseEvent, member: VoiceState) => void; onOpenMenu: (menu: ContextMenuState) => void; canStream: boolean }) {
   const [theaterMediaKey, setTheaterMediaKey] = useState<string | null>(null);
   // Ampliar outro quadro desmontava o quadro solto, e com ele ia a janela
   // flutuante junto. Quem está solto continua montado.
@@ -1378,6 +1556,21 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
     const userId = ownerOf(media);
     return Boolean(userId && mutedUsers[userId]);
   };
+  /** A voz de quem a administração emudeceu não toca, nem se o cliente dela insistir. */
+  const speakBlockedFor = (media: { peerId: string }) => Boolean(memberOf(media.peerId)?.speakBlocked);
+
+  // Ver a própria live é opcional. Ela continua no ar para quem assiste; o que
+  // some é o quadro na SUA tela — que não mostra nada que você não esteja vendo
+  // no monitor, e rouba espaço das lives dos outros. A escolha fica guardada.
+  const [hideOwnScreen, setHideOwnScreenState] = useState(() => {
+    try { return localStorage.getItem(HIDE_OWN_SCREEN_KEY) === 'true'; } catch { return false; }
+  });
+  const setHideOwnScreen = useCallback((hidden: boolean) => {
+    setHideOwnScreenState(hidden);
+    try { localStorage.setItem(HIDE_OWN_SCREEN_KEY, String(hidden)); } catch { /* vale só nesta sessão */ }
+    if (hidden) setTheaterMediaKey((atual) => (atual === 'local-screen' ? null : atual));
+  }, []);
+  const ownScreenVisible = Boolean(voice.localScreen) && !hideOwnScreen;
 
   /**
    * Os espectadores de cada transmissão, indexados por quem transmite.
@@ -1438,69 +1631,93 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
   // Uma live anunciada e não assistida não ocupa lugar nenhum na grade: ela
   // não é um quadro, não é um espaço reservado e não muda a disposição do que
   // já está na tela. Ela existe como um aviso ao lado da pessoa, na lista.
-  const videoCount = (voice.localScreen ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length;
+  const videoCount = (ownScreenVisible ? 1 : 0) + (voice.localCamera ? 1 : 0) + visibleVideoMedia.length + missingStreams.length;
 
-  // Tela cheia da grade inteira, e não de um quadro só.
-  //
-  // A tela cheia por quadro serve para olhar uma live de perto. Com duas ou
-  // três abertas ela obriga a escolher uma: as outras ficam atrás, na janela
-  // que sumiu. Aqui é a grade que vai para a tela cheia, e todas as lives
-  // aproveitam o monitor inteiro na mesma disposição que já tinham.
+  // O tamanho real do palco, para a arrumação orgânica das lives.
   const stageRef = useRef<HTMLDivElement>(null);
-  const [stageFullscreen, setStageFullscreen] = useState(false);
-  const stageFullscreenRef = useRef(false);
-  stageFullscreenRef.current = stageFullscreen;
-  const toggleStageFullscreen = useCallback(async () => {
-    if (stageFullscreenRef.current) {
-      if (window.tumacordDesktop) await window.tumacordDesktop.endMediaFullscreen().catch(() => false);
-      else if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
-      setStageFullscreen(false);
-      return;
+  const [stageBox, setStageBox] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = stageRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const style = window.getComputedStyle(element);
+      const width = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const height = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      setStageBox((atual) => (Math.abs(atual.width - width) < 1 && Math.abs(atual.height - height) < 1 ? atual : { width, height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  // Duas ou mais lives: cada quadro no maior tamanho que o palco permite, na
+  // proporção de uma tela, com a última linha centralizada. Se nem assim os
+  // quadros ficarem legíveis, eles mantêm um tamanho mínimo e o palco rola.
+  const organic = videoCount > 1 && !theaterMediaKey;
+  const layout = organic ? bestStageLayout(videoCount, stageBox.width, stageBox.height, 12) : null;
+  const scrolls = Boolean(layout && layout.tileHeight > 0 && layout.tileHeight < MIN_TILE_HEIGHT);
+  let tileBox: { width: number; height: number } | null = null;
+  if (layout && layout.tileWidth > 0) {
+    if (scrolls) {
+      const colunas = Math.max(1, Math.floor((stageBox.width + 12) / ((MIN_TILE_HEIGHT * 16) / 9 + 12)));
+      const largura = Math.floor((stageBox.width - 12 * (colunas - 1)) / colunas);
+      tileBox = { width: largura, height: Math.floor((largura * 9) / 16) };
+    } else {
+      tileBox = { width: layout.tileWidth, height: layout.tileHeight };
     }
-    setStageFullscreen(true);
-    if (window.tumacordDesktop) await window.tumacordDesktop.beginMediaFullscreen().catch(() => false);
-    else await stageRef.current?.requestFullscreen().catch(() => undefined);
+  }
+  const stageStyle = tileBox ? ({ '--tile-w': `${tileBox.width}px`, '--tile-h': `${tileBox.height}px` } as React.CSSProperties) : undefined;
+
+  // Na tela cheia a barra da call some com o mouse parado, como os controles
+  // de cada live: ela cobriria justamente a parte de baixo das lives.
+  const [dockVisible, setDockVisible] = useState(true);
+  const dockTimer = useRef<number | null>(null);
+  const revealDock = useCallback(() => {
+    setDockVisible(true);
+    if (dockTimer.current) window.clearTimeout(dockTimer.current);
+    dockTimer.current = window.setTimeout(() => setDockVisible(false), 2_600);
   }, []);
   useEffect(() => {
-    const onFullscreenChange = () => { if (document.fullscreenElement !== stageRef.current) setStageFullscreen(false); };
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && stageFullscreenRef.current) void toggleStageFullscreen(); };
-    const stopDesktopListener = window.tumacordDesktop?.onMediaFullscreenChanged((active) => { if (!active) setStageFullscreen(false); });
-    if (!window.tumacordDesktop) document.addEventListener('fullscreenchange', onFullscreenChange);
-    window.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('fullscreenchange', onFullscreenChange); window.removeEventListener('keydown', onKeyDown); stopDesktopListener?.(); };
-  }, [toggleStageFullscreen]);
-  // Sair da call com a grade em tela cheia deixaria o sistema em tela cheia
-  // sobre uma tela que não existe mais.
-  useEffect(() => () => {
-    if (!stageFullscreenRef.current) return;
-    if (window.tumacordDesktop) void window.tumacordDesktop.endMediaFullscreen().catch(() => false);
-    else if (document.fullscreenElement === stageRef.current) void document.exitFullscreen().catch(() => undefined);
-  }, []);
-  // Com um quadro só, a tela cheia do próprio quadro já faz isto e melhor.
-  const canFillStage = videoCount > 1 && !theaterMediaKey;
+    if (immersive) revealDock();
+    else {
+      if (dockTimer.current) window.clearTimeout(dockTimer.current);
+      setDockVisible(true);
+    }
+  }, [immersive, revealDock]);
+  useEffect(() => () => { if (dockTimer.current) window.clearTimeout(dockTimer.current); }, []);
 
-  return <main className="call-view">
-    <div ref={stageRef} className={`stage-grid count-${Math.min(4, videoCount)} ${theaterMediaKey ? 'focused-live' : ''} ${stageFullscreen ? 'is-stage-fullscreen' : ''}`}>
-      {(canFillStage || stageFullscreen) && <button
-        className="stage-fullscreen"
-        onClick={() => void toggleStageFullscreen()}
-        title={stageFullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia com todas as lives abertas'}
-      ><Icon name={stageFullscreen ? 'minimize' : 'maximize'} /><span>{stageFullscreen ? 'Sair' : 'Todas em tela cheia'}</span></button>}
-      {voice.localScreen && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen} label={`${voice.user.username} · sua tela`} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} watchers={myWatchers} ownStream away={voice.away} awayTheme={awayTheme} awayWho={voice.user.username} serverUrl={serverUrl} />}
-      {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} />}
-      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={`${media.user?.username ?? 'Amigo'}${screen ? ' · AO VIVO' : ''}`} muted={screen ? voice.deafened || streamMuted || mutedFor(media) : voice.deafened || mutedFor(media)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} watchers={screen ? watchersByStreamer.get(media.peerId) ?? [] : []} away={memberOf(media.peerId)?.away ?? ''} awayTheme={memberOf(media.peerId)?.awayTheme ?? 'violeta'} awayWho={media.user?.username ?? ''} serverUrl={serverUrl} />; })}
+  const liveMenuFor = (media: RemoteMedia): ContextMenuEntry[] => {
+    const dono = memberOf(media.peerId);
+    const itens: ContextMenuEntry[] = [];
+    if (media.kind === 'screen') {
+      itens.push(streamMuted
+        ? { label: 'Ouvir o áudio das lives', icon: 'volume', onSelect: () => setStreamMuted(false) }
+        : { label: 'Silenciar o áudio das lives', icon: 'volumeOff', onSelect: () => setStreamMuted(true) });
+    }
+    if (dono) itens.push({ label: `Ver perfil de ${dono.username}`, icon: 'users', onSelect: () => onProfile(dono) });
+    if (media.kind === 'screen') {
+      itens.push({ separator: true });
+      itens.push({ label: 'Parar de assistir', icon: 'close', danger: true, onSelect: () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } });
+    }
+    return itens;
+  };
+
+  return <main className={`call-view ${immersive ? 'is-immersive' : ''} ${immersive && dockVisible ? 'mostra-dock' : ''}`} onPointerMove={immersive ? revealDock : undefined}>
+    <div ref={stageRef} style={stageStyle} className={`stage-grid ${organic ? `layout-organic ${scrolls ? 'is-scroll' : ''}` : `count-${Math.min(4, videoCount)}`} ${theaterMediaKey ? 'focused-live' : ''}`}>
+      {ownScreenVisible && showMedia('local-screen') && <VideoTile mediaKey="local-screen" stream={voice.localScreen!} label={voice.user.username} muted screen theater={theaterMediaKey === 'local-screen'} onTheater={setTheaterMediaKey} watchers={myWatchers} ownStream away={voice.away} awayTheme={awayTheme} awaySize={readAwaySize()} awayWho={voice.user.username} serverUrl={serverUrl} onOpenMenu={onOpenMenu} menuItems={[{ label: 'Ocultar minha transmissão', icon: 'eyeOff', hint: 'A live continua no ar para quem assiste; só o quadro sai da sua tela.', onSelect: () => setHideOwnScreen(true) }]} />}
+      {voice.localCamera && showMedia('local-camera') && <VideoTile mediaKey="local-camera" stream={voice.localCamera} label={`${voice.user.username} · você`} muted theater={theaterMediaKey === 'local-camera'} onTheater={setTheaterMediaKey} onOpenMenu={onOpenMenu} />}
+      {visibleVideoMedia.map((media) => { const mediaKey = `${media.peerId}:${media.stream.id}`; const screen = media.kind === 'screen'; return showMedia(mediaKey) && <VideoTile key={mediaKey} mediaKey={mediaKey} stream={media.stream} label={media.user?.username ?? memberOf(media.peerId)?.username ?? 'Amigo'} muted={screen ? voice.deafened || streamMuted || mutedFor(media) : voice.deafened || mutedFor(media) || speakBlockedFor(media)} volume={screen ? streamVolume : volumeFor(media.user?.id)} speakerId={speakerId} screen={screen} remote theater={theaterMediaKey === mediaKey} onTheater={setTheaterMediaKey} onDetached={trackDetached} onNotice={onNotice} onClose={screen ? () => { setTheaterMediaKey(null); voice.stopWatchingLive(media.peerId); } : undefined} volumeControl={screen ? { volume: streamVolume, muted: streamMuted, onVolume: setStreamVolume, onMuted: setStreamMuted } : undefined} watchers={screen ? watchersByStreamer.get(media.peerId) ?? [] : []} away={memberOf(media.peerId)?.away ?? ''} awayTheme={memberOf(media.peerId)?.awayTheme ?? 'violeta'} awaySize={memberOf(media.peerId)?.awaySize} awayWho={media.user?.username ?? ''} serverUrl={serverUrl} onOpenMenu={onOpenMenu} menuItems={liveMenuFor(media)} />; })}
       {/* Uma live que começou não começa a tocar sozinha, e também não abre
           um cartão no meio da tela para avisar que existe. Ela se anuncia
           junto da pessoa, na lista da esquerda, e é de lá que se escolhe
-          assistir. Antes desse "sim" a mídia nem sai da máquina de quem
-          transmite — e a área principal continua sendo de quem já escolheu o
-          que ver. */}
+          assistir. */}
       {!theaterMediaKey && missingStreams.map((member) => <div className="stream-recovery-card" key={`missing-${member.id}`}><span className="live-dot" /><strong>{member.username} está AO VIVO</strong><p>A transmissão está se reconectando automaticamente.</p><small>{voice.peerHealth[member.socketId] === 'recovering' ? 'Recuperando conexão…' : 'Aguardando a faixa de vídeo…'}</small><button onClick={() => voice.recoverPeer(member.socketId, 'tentativa manual da interface', true)}>Tentar agora</button></div>)}
-      {!visibleVideoMedia.length && !missingStreams.length && !voice.localCamera && !voice.localScreen && <div className="audio-stage">
-        {tiles.length ? tiles.map((member) => <ParticipantTile key={member.socketId} member={member} serverUrl={serverUrl} onProfile={onProfile} />) : <div className="empty-call"><img src={logoUrl} alt="" /><h2>A call está quietinha</h2><p>Entre e seja o host. Quem chegar depois conecta direto com você.</p></div>}
+      {!visibleVideoMedia.length && !missingStreams.length && !voice.localCamera && !ownScreenVisible && <div className="audio-stage">
+        {tiles.length ? tiles.map((member) => <ParticipantTile key={member.socketId} member={member} serverUrl={serverUrl} onProfile={onProfile} onContextMenu={(event) => onMemberMenu(event, member)} />) : <div className="empty-call"><img src={logoUrl} alt="" /><h2>A call está quietinha</h2><p>Entre e seja o host. Quem chegar depois conecta direto com você.</p></div>}
       </div>}
     </div>
-    {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || mutedFor(media)} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly remote />)}
+    {immersive && <button className="immersive-exit" onClick={() => onImmersive(false)} title="Sair da tela cheia (Esc)"><Icon name="minimize" /><span>Sair da tela cheia</span></button>}
+    {audioMedia.map((media) => <MediaElement key={`${media.peerId}:${media.stream.id}`} stream={media.stream} muted={voice.deafened || mutedFor(media) || speakBlockedFor(media)} volume={volumeFor(media.user?.id)} speakerId={speakerId} audioOnly remote />)}
     <footer className={`call-dock ${inThisCall ? '' : 'is-idle'}`}>
       {!inThisCall ? <button className="join-call" onClick={() => void voice.join(channel.id)}><Icon name="voice" /> Entrar na call</button> : <>
         <div className="dock-side start">
@@ -1508,18 +1725,26 @@ function CallView({ voice, channel, members, speakerId, userVolumes, mutedUsers,
             <span className="dock-label">Qualidade</span>
             <Dropdown label="Qualidade da transmissão ao vivo" value={voice.quality} options={qualityDropdownOptions} onChange={(next) => { void voice.setQuality(next as StreamQuality).then((applied) => { if (applied) onNotice(`Live ajustada para ${SCREEN_QUALITIES[next as StreamQuality]?.label ?? next}.`); }); }} />
           </div>}
+          {/* A própria live escondida: continua no ar, e o selo de quem assiste
+              vem para cá, para ninguém falar sozinho sem saber. */}
+          {voice.screenOn && hideOwnScreen && <button type="button" className="dock-field own-live-hidden" onClick={() => setHideOwnScreen(false)} title={`Sua transmissão continua no ar${myWatchers.length ? ` para ${myWatchers.map((watcher) => watcher.username).join(', ')}` : ''}. Clique para voltar a vê-la aqui.`}>
+            <Icon name="eyeOff" /><span className="dock-label">Sua live oculta</span><span className="own-live-viewers"><Icon name="eye" />{myWatchers.length}</span>
+          </button>}
         </div>
         <div className="dock-controls">
-          <ControlButton icon={voice.muted ? 'micOff' : 'mic'} label={voice.muted ? 'Ativar microfone' : 'Silenciar'} active={voice.muted} danger onClick={() => void voice.toggleMute()} />
+          <ControlButton icon={voice.muted ? 'micOff' : 'mic'} label={voice.selfSpeakBlocked ? 'A administração não permite que você fale nesta call' : voice.muted ? 'Ativar microfone' : 'Silenciar'} active={voice.muted} danger disabled={voice.selfSpeakBlocked && voice.muted} onClick={() => void voice.toggleMute()} />
           <ControlButton icon="headphones" label={voice.deafened ? 'Ouvir de novo' : 'Ensurdecer'} active={voice.deafened} danger onClick={voice.toggleDeafen} />
           <ControlButton icon="camera" label={voice.cameraOn ? 'Parar a câmera' : 'Ligar a câmera'} active={voice.cameraOn} onClick={() => void voice.toggleCamera()} />
-          <ControlButton icon="screen" label={voice.screenOn ? 'Parar a transmissão' : 'Transmitir a tela'} active={voice.screenOn} accent onClick={() => void voice.requestScreenShare()} />
-          <ControlButton
+          <ControlButton icon="screen" label={!canStream && !voice.screenOn ? 'Você não tem permissão para transmitir nesta call' : voice.screenOn ? 'Parar a transmissão' : 'Transmitir a tela'} active={voice.screenOn} accent disabled={!canStream && !voice.screenOn} onClick={() => void voice.requestScreenShare()} />
+          {/* O "já volto" cobre a sua transmissão; sem live ele não tem o que
+              cobrir, e o botão só aparece enquanto você transmite. */}
+          {voice.screenOn && <ControlButton
             icon="hand"
             label={voice.away ? 'Voltei' : `Avisar que você já volta (${readAwayMessage()})`}
             active={Boolean(voice.away)}
-            onClick={() => voice.setAway(voice.away ? '' : readAwayMessage(), readAwayTheme())}
-          />
+            onClick={() => voice.setAway(voice.away ? '' : readAwayMessage(), readAwayTheme(), readAwaySize())}
+          />}
+          {videoCount > 0 && <ControlButton icon={immersive ? 'minimize' : 'maximize'} label={immersive ? 'Sair da tela cheia (Esc)' : 'Tela cheia com as lives'} active={immersive} onClick={() => onImmersive(!immersive)} />}
           <ControlButton icon="leave" label="Sair da call" danger active onClick={voice.leave} />
         </div>
         <div className="dock-side end">
@@ -1692,12 +1917,12 @@ function useDetachedLive(mediaRef: React.RefObject<HTMLVideoElement | null>, tit
   return { detached, supported, toggle };
 }
 
-function ControlButton({ icon, label, active, danger, accent, onClick }: { icon: Parameters<typeof Icon>[0]['name']; label: string; active?: boolean; danger?: boolean; accent?: boolean; onClick: () => void }) {
-  return <button className={`call-control ${active ? 'active' : ''} ${danger ? 'danger' : ''} ${accent ? 'accent' : ''}`} onClick={onClick} title={label} aria-label={label}><Icon name={icon} /></button>;
+function ControlButton({ icon, label, active, danger, accent, disabled, onClick }: { icon: Parameters<typeof Icon>[0]['name']; label: string; active?: boolean; danger?: boolean; accent?: boolean; disabled?: boolean; onClick: () => void }) {
+  return <button className={`call-control ${active ? 'active' : ''} ${danger ? 'danger' : ''} ${accent ? 'accent' : ''}`} onClick={onClick} disabled={disabled} title={label} aria-label={label}><Icon name={icon} /></button>;
 }
 
-function ParticipantTile({ member, serverUrl, onProfile }: { member: VoiceState; serverUrl: string; onProfile: (user: PublicUser) => void }) {
-  return <button className={`participant-tile ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => onProfile(member)}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong>{member.screen && <span className="streaming-label"><span className="live-dot" /> AO VIVO</span>}<span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
+function ParticipantTile({ member, serverUrl, onProfile, onContextMenu }: { member: VoiceState; serverUrl: string; onProfile: (user: PublicUser) => void; onContextMenu?: (event: React.MouseEvent) => void }) {
+  return <button className={`participant-tile ${member.speaking ? 'speaking' : ''} ${member.screen ? 'is-streaming' : ''}`} onClick={() => onProfile(member)} onContextMenu={onContextMenu}><Avatar name={member.username} profile={member.profile} serverUrl={serverUrl} large /><strong>{member.username}</strong>{member.screen && <span className="streaming-label"><span className="live-dot" /> AO VIVO</span>}<span className="tile-ping">{member.pingMs < 9999 ? `${member.pingMs} ms` : 'medindo…'}</span><div className="participant-badges">{member.isHost && <span className="host-badge"><Icon name="host" /> Host</span>}{member.muted && <span className="muted-badge"><Icon name="micOff" /></span>}</div></button>;
 }
 
 
@@ -1715,7 +1940,7 @@ interface TileVolume {
   onMuted: (muted: boolean) => void;
 }
 
-function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl, watchers = [], ownStream = false, away = '', awayTheme = 'violeta', awayWho = '', serverUrl = '' }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume; watchers?: VoiceState[]; ownStream?: boolean; away?: string; awayTheme?: string; awayWho?: string; serverUrl?: string }) {
+function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, screen, remote, theater = false, onTheater, onClose, onDetached, onNotice, volumeControl, watchers = [], ownStream = false, away = '', awayTheme = 'violeta', awaySize, awayWho = '', serverUrl = '', onOpenMenu, menuItems }: { mediaKey: string; stream: MediaStream; label: string; muted: boolean; volume?: number; speakerId?: string; screen?: boolean; remote?: boolean; theater?: boolean; onTheater?: (key: string | null) => void; onClose?: () => void; onDetached?: (key: string, detached: boolean) => void; onNotice?: (message: string) => void; volumeControl?: TileVolume; watchers?: VoiceState[]; ownStream?: boolean; away?: string; awayTheme?: string; awaySize?: number; awayWho?: string; serverUrl?: string; onOpenMenu?: (menu: ContextMenuState) => void; menuItems?: ContextMenuEntry[] }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const detachedLive = useDetachedLive(mediaRef, label, `tumacord-live-${mediaKey.replace(/[^a-zA-Z0-9]/g, '')}`);
@@ -1780,9 +2005,24 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     if ((event.target as HTMLElement).closest('.video-actions')) return;
     toggleTheater();
   };
+  // O botão direito junta os controles do quadro — que só aparecem com o
+  // mouse em movimento — e o que quem monta o quadro acrescenta: ocultar a
+  // própria live, silenciar, parar de assistir.
+  const openMenu = (event: React.MouseEvent) => {
+    if (!onOpenMenu) return;
+    event.preventDefault();
+    const items: ContextMenuEntry[] = [
+      ...(fullscreen || !onTheater ? [] : [{ label: theater ? 'Voltar à grade' : 'Ampliar dentro do app', icon: theater ? 'shrink' : 'expand', onSelect: toggleTheater } as ContextMenuEntry]),
+      { label: fullscreen ? 'Sair da tela cheia' : 'Tela cheia só desta live', icon: fullscreen ? 'minimize' : 'maximize', onSelect: () => void toggleFullscreen() } as ContextMenuEntry,
+      ...(canDetach ? [{ label: detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em janela flutuante', icon: detachedLive.detached ? 'popIn' : 'popOut', onSelect: () => void toggleDetached() } as ContextMenuEntry] : []),
+      ...(menuItems?.length ? [{ separator: true } as ContextMenuEntry, ...menuItems] : []),
+    ];
+    onOpenMenu({ x: event.clientX, y: event.clientY, title: label, items });
+  };
   return <div
     ref={tileRef}
     onDoubleClick={onTileDoubleClick}
+    onContextMenu={openMenu}
     onPointerMove={revealControls}
     onPointerEnter={revealControls}
     // O foco por teclado também revela: quem navega com Tab precisa ver onde
@@ -1791,7 +2031,7 @@ function VideoTile({ mediaKey, stream, label, muted, volume = 1, speakerId, scre
     onFocusCapture={revealControls}
     onPointerLeave={() => setControlsVisible(false)}
     className={`video-tile ${screen ? 'screen' : ''} ${theater ? 'is-theater' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${detachedLive.detached ? 'is-detached' : ''} ${controlsVisible ? 'mostra-controles' : ''}`}
-  ><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<AwayCard message={away} theme={awayTheme} who={awayWho} /><span>{screen && <i className="live-dot" />}{label}</span>{screen && <StreamViewers watchers={watchers} self={ownStream} serverUrl={serverUrl} />}<div className="video-actions">{volumeControl && fullscreen && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
+  ><MediaElement stream={stream} muted={muted} volume={volume} speakerId={speakerId} remote={remote} mediaRef={mediaRef} />{detachedLive.detached && <div className="detached-live-note"><Icon name="popOut" /><strong>Em uma janela flutuante</strong><small>Ela fica sobre os outros aplicativos, mesmo com o Tumacord minimizado.</small></div>}<AwayCard message={away} theme={awayTheme} size={awaySize} who={awayWho} /><span className="video-label">{screen && <i className="live-dot" />}{label}</span>{screen && <StreamViewers watchers={watchers} self={ownStream} serverUrl={serverUrl} />}<div className="video-actions">{volumeControl && fullscreen && <TileVolumeButton control={volumeControl} />}{onClose && <button onClick={() => void closeTile()} title="Sair desta live sem sair da call"><Icon name="close" /></button>}{canDetach && <button onClick={() => void toggleDetached()} title={detachedLive.detached ? 'Trazer de volta para o app' : 'Soltar em uma janela flutuante sobre os outros apps'}><Icon name={detachedLive.detached ? 'popIn' : 'popOut'} /></button>}<button onClick={toggleTheater} disabled={fullscreen} title={fullscreen ? 'Saia da tela cheia para usar a grade' : theater ? 'Voltar à grade (ou clique duas vezes)' : 'Ampliar dentro do app (ou clique duas vezes)'}><Icon name={theater ? 'shrink' : 'expand'} /></button><button onClick={() => void toggleFullscreen()} title={fullscreen ? 'Sair da tela cheia (Esc)' : 'Tela cheia real'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button></div></div>;
 }
 
 /**
@@ -1846,12 +2086,13 @@ function TileVolumeButton({ control }: { control: TileVolume }) {
 function AwaySettings() {
   const [message, setMessage] = useState(readAwayMessage);
   const [theme, setTheme] = useState<AwayTheme>(readAwayTheme);
+  const [size, setSize] = useState(readAwaySize);
   const aplicar = (texto: string) => {
     setMessage(texto);
     setAwayMessage(texto);
   };
   return <div className="away-settings">
-    <div className="setting-label"><span className="setting-title">Aviso de &ldquo;já volto&rdquo;<small>Aparece sobre a sua transmissão quando você aperta o botão da mãozinha na call.</small></span></div>
+    <div className="setting-label"><span className="setting-title">Aviso de &ldquo;já volto&rdquo;<small>Aparece sobre a sua transmissão quando você aperta o botão da mãozinha na call. O botão só existe enquanto você transmite.</small></span></div>
     <label className="away-field">
       <span>Texto</span>
       <input
@@ -1875,8 +2116,21 @@ function AwaySettings() {
         onClick={() => { setTheme(nome); setAwayTheme(nome); }}
       ><span>{AWAY_THEME_LABEL[nome]}</span></button>)}
     </div>
+    <label className="away-size">
+      <span>Tamanho do texto</span>
+      <input
+        type="range"
+        min={AWAY_SIZE_MIN}
+        max={AWAY_SIZE_MAX}
+        step={10}
+        value={size}
+        onChange={(event) => { const proximo = sanitizeAwaySize(Number(event.target.value)); setSize(proximo); setAwaySize(proximo); }}
+        aria-label="Tamanho do texto do aviso de já volto"
+      />
+      <output>{size}%</output>
+    </label>
     <div className="away-preview">
-      <AwayCard message={message || DEFAULT_AWAY_MESSAGE} theme={theme} who="sua tela" />
+      <AwayCard message={message || DEFAULT_AWAY_MESSAGE} theme={theme} size={size} who="sua tela" />
     </div>
   </div>;
 }
@@ -1892,10 +2146,12 @@ function AwaySettings() {
  * classe. Um tema desconhecido — de uma versão mais nova, ou de um cliente
  * alterado — cai no padrão em vez de virar CSS.
  */
-function AwayCard({ message, theme, who }: { message: string; theme: string; who: string }) {
+function AwayCard({ message, theme, size, who }: { message: string; theme: string; size?: number; who: string }) {
   const recado = sanitizeAwayMessage(message);
   if (!recado) return null;
-  return <div className={`away-card tema-${sanitizeAwayTheme(theme)}`} role="status">
+  // O tamanho chega da rede como número e é preso na faixa antes de virar
+  // estilo: fora dela vira o limite mais próximo, nunca uma fonte gigante.
+  return <div className={`away-card tema-${sanitizeAwayTheme(theme)}`} role="status" style={{ '--away-scale': sanitizeAwaySize(size) / 100 } as React.CSSProperties}>
     <Icon name="hand" />
     <strong>{recado}</strong>
     <small>{who}</small>
@@ -2242,7 +2498,7 @@ function screenAudioExplanation(support: ScreenAudioSupport): string {
   if (support.mode === 'stream') {
     return 'Ao transmitir uma janela, só o som daquela aplicação entra na live. Ao transmitir um monitor inteiro, entra o som do sistema — menos o Tumacord, o Discord e os processos de áudio deles, que ficam sempre de fora para a call não voltar pela transmissão.';
   }
-  return 'Ao marcar áudio, o Tumacord cria uma fonte estéreo temporária no PipeWire. Jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call são excluídos automaticamente, inclusive na tela inteira.';
+  return 'Ao marcar áudio, jogos, navegador e outros aplicativos entram na live; Tumacord, Discord e a voz da call ficam de fora automaticamente, inclusive na tela inteira.';
 }
 
 function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEnabled, soundVolume, setSoundVolume: updateSoundVolume, networkPreferences, onNetworkPreferences, mediaSnapshot, audioSupport, connectionMode, onNotice, onClose, onLogout, onSwitchAccount }: { devices: ReturnType<typeof useDevices>; quality: StreamQuality; setQuality: (quality: StreamQuality) => void | Promise<boolean>; soundEnabled: boolean; setSoundEnabled: (enabled: boolean) => void; soundVolume: number; setSoundVolume: (volume: number) => void; networkPreferences: NetworkPreferences; onNetworkPreferences: (patch: Partial<NetworkPreferences>) => void; mediaSnapshot: ReturnType<typeof useVoice>['mediaSnapshot']; audioSupport: ScreenAudioSupport; connectionMode: 'p2p' | 'server'; onSwitchAccount: () => void; onNotice: (message: string) => void; onClose: () => void; onLogout: () => void }) {
@@ -2267,7 +2523,9 @@ function SettingsModal({ devices, quality, setQuality, soundEnabled, setSoundEna
           em uma frase não funciona: quem quer saber como é precisa poder
           tocar — inclusive um que esteja desligado. */}
       <SoundGallery enabled={soundEnabled} />
-      <div className="quality-note"><strong>Áudio da transmissão</strong><span>{screenAudioExplanation(audioSupport)}</span></div>
+      {/* No Linux o mecanismo é problema do aplicativo: a nota não diz nada
+          que ajude quem vai transmitir, e foi pedida para sair. */}
+      {window.tumacordDesktop?.platform !== 'linux' && <div className="quality-note"><strong>Áudio da transmissão</strong><span>{screenAudioExplanation(audioSupport)}</span></div>}
     </section>}
   </div></div>;
 }
@@ -2422,7 +2680,7 @@ function InviteModal({ callId, callName, hostUsername, server, serverToken, serv
     {loading && <p className="invite-status">Pedindo um código ao servidor…</p>}
     {!loading && !code && <p className="invite-status">{server
       ? 'O servidor não emitiu o convite. Se ele for anterior à 0.8.4, atualize-o; se você acabou de entrar, tente de novo.'
-      : 'Convidar pela internet exige um servidor. Entre em Servidor dedicado e gere o convite de lá; no modo P2P, as calls só aparecem para quem está na mesma rede.'}</p>}
+      : 'Convidar pela internet exige um servidor. Entre em P2P híbrido e gere o convite de lá; no modo P2P, as calls só aparecem para quem está na mesma rede.'}</p>}
     {code && <>
       <textarea className="invite-code" readOnly value={code} rows={2} onFocus={(event) => event.currentTarget.select()} ref={(field) => { codeField.current = field; }} />
       <button className="primary-button" onClick={() => { void copyText(code, codeField.current).then((copied) => onNotice(copied ? 'Convite copiado.' : 'Não consegui copiar; o texto ficou selecionado, use Ctrl+C.')); }}>Copiar convite</button>
@@ -2506,6 +2764,11 @@ function DeviceSelect({ label, hint, value, devices, onChange }: { label: string
 // o que fica de fora. Nada de WASAPI ou PipeWire aqui — o mecanismo é problema
 // do aplicativo, não de quem vai transmitir.
 function shareAudioSummary(support: ScreenAudioSupport): { title: string; detail: string; blocked: boolean } {
+  // Desde a 0.13.5 o Linux também entrega o áudio por `stream`, mas o que ele
+  // captura continua sendo o de sempre: tudo que não é call.
+  if (window.tumacordDesktop?.platform === 'linux') {
+    return { title: 'Compartilhar áudio', detail: 'Inclui o som do sistema, mantendo Tumacord e Discord fora da live.', blocked: false };
+  }
   if (support.supported === false && support.mode === 'stream') {
     return {
       title: 'Áudio indisponível nesta versão do Windows',

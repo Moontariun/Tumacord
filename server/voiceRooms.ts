@@ -5,6 +5,8 @@ export interface ParticipantInput extends PublicUser {
   socketId: string;
   endpoint: string;
   reachability?: number;
+  /** A administração tirou desta pessoa a permissão de falar no canal. */
+  speakBlocked?: boolean;
 }
 
 interface InternalParticipant extends VoiceState {
@@ -24,15 +26,19 @@ export class VoiceRooms {
       joinedAt: this.sequence++,
       isHost: room.size === 0,
       pingMs: 9999,
-      muted: false,
+      // Quem entra sem poder falar entra mudo, e não fica a critério do cliente.
+      muted: participant.speakBlocked === true,
       speaking: false,
       deafened: false,
       camera: false,
       screen: false,
       screenAudio: false,
       watching: '',
+      watchingAll: [],
       away: '',
       awayTheme: 'violeta',
+      awaySize: 100,
+      speakBlocked: participant.speakBlocked === true,
     });
     this.rooms.set(channelId, room);
     return this.members(channelId);
@@ -66,14 +72,39 @@ export class VoiceRooms {
     return changed;
   }
 
-  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'watching' | 'away' | 'awayTheme'>>): VoiceState[] {
+  update(channelId: string, socketId: string, patch: Partial<Pick<VoiceState, 'muted' | 'speaking' | 'deafened' | 'camera' | 'screen' | 'screenAudio' | 'watching' | 'watchingAll' | 'away' | 'awayTheme' | 'awaySize'>>): VoiceState[] {
     const participant = this.rooms.get(channelId)?.get(socketId);
     if (participant) {
       Object.assign(participant, patch);
+      // As duas formas de dizer o que se assiste andam juntas: um cliente novo
+      // manda a lista, um antigo manda um só, e quem lê qualquer uma das duas
+      // precisa encontrar a mesma resposta.
+      if (patch.watchingAll) participant.watching = patch.watchingAll[0] ?? '';
+      else if (patch.watching !== undefined) participant.watchingAll = patch.watching ? [patch.watching] : [];
       if (!participant.screen) participant.screenAudio = false;
+      if (participant.speakBlocked) participant.muted = true;
       if (participant.muted) participant.speaking = false;
     }
     return this.members(channelId);
+  }
+
+  /**
+   * Liga ou desliga o bloqueio de fala de uma pessoa em uma sala.
+   *
+   * Devolve se algo mudou, para quem chama saber se precisa avisar a sala.
+   */
+  setSpeakBlocked(channelId: string, userId: string, blocked: boolean): boolean {
+    let changed = false;
+    for (const participant of this.rooms.get(channelId)?.values() ?? []) {
+      if (participant.id !== userId || Boolean(participant.speakBlocked) === blocked) continue;
+      participant.speakBlocked = blocked;
+      if (blocked) {
+        participant.muted = true;
+        participant.speaking = false;
+      }
+      changed = true;
+    }
+    return changed;
   }
 
   updatePing(channelId: string, socketId: string, pingMs: number): VoiceState[] {

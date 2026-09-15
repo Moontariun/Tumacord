@@ -10,6 +10,35 @@ export interface Channel {
   position?: number;
   topic?: string;
   userLimit?: number;
+  /**
+   * As regras de quem vê e faz o quê neste canal. Só a administração recebe
+   * este campo: a lista de exceções diz quem foi barrado de onde, e isso não
+   * é da conta de quem não administra.
+   */
+  permissions?: ChannelPermissions;
+  /**
+   * O que ESTA sessão pode fazer aqui, já resolvido pelo servidor. Ausente em
+   * servidores anteriores à 0.13.5, e ausência quer dizer "pode tudo" — era o
+   * comportamento deles.
+   */
+  access?: ChannelAccess;
+}
+
+/** As ações que um canal controla. `view` é a porta de todas as outras. */
+export type ChannelPermissionKey = 'view' | 'send' | 'connect' | 'speak' | 'stream';
+
+export type ChannelAccess = Record<ChannelPermissionKey, boolean>;
+
+/**
+ * Regras de um canal: o padrão para todo mundo e as exceções por pessoa.
+ *
+ * Cada chave ausente herda — da regra geral, e a regra geral do "pode". É o
+ * mesmo desenho de três estados do Discord (permitir, negar, herdar), e é ele
+ * que deixa fechar um canal para todos e abrir só para duas pessoas.
+ */
+export interface ChannelPermissions {
+  everyone?: Partial<ChannelAccess>;
+  users?: Record<string, Partial<ChannelAccess>>;
 }
 
 export interface ChannelCategory {
@@ -107,6 +136,15 @@ export interface VoiceState extends PublicUser {
    */
   watching: string;
   /**
+   * TODAS as transmissões que esta pessoa está assistindo, por `socketId`.
+   *
+   * `watching` guarda uma só, e era o defeito do selo de espectadores: quem
+   * abria duas lives aparecia em uma delas, e fechar uma apagava o registro da
+   * outra. `watching` continua sendo preenchido com a primeira da lista para
+   * clientes anteriores à 0.13.5.
+   */
+  watchingAll?: string[];
+  /**
    * O recado de "já volto" desta pessoa, ou vazio quando ela está presente.
    *
    * Vazio é o estado normal, e é o que faz o cartão sumir: um campo separado
@@ -122,6 +160,14 @@ export interface VoiceState extends PublicUser {
    * no padrão em vez de virar CSS.
    */
   awayTheme: string;
+  /** O tamanho do texto do recado, em porcentagem do padrão. */
+  awaySize?: number;
+  /**
+   * A administração tirou desta pessoa a permissão de falar neste canal. A
+   * voz é ponto a ponto e o servidor não a toca: quem aplica são os clientes,
+   * o dela (que fecha o microfone) e o de quem ouve (que não toca a faixa).
+   */
+  speakBlocked?: boolean;
 }
 
 export interface ServerSnapshot {

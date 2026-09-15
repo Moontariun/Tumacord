@@ -20,7 +20,7 @@ import { planPeerMediaSync, type LocalMediaKind, type LocalTrack, type PeerSende
 import { expectedScreenPeers, intentAfterAnnouncement, intentAfterBroadcasters, mediaBelongsToPeer, pendingWatchRequests } from '../lib/liveSubscription';
 import { capturedDeviceIsGone, defaultAudioInputSignature, describeMicrophoneFault, faultFromReading, initialMicrophoneFault, microphoneIdentityOf, microphoneIsMeasurable, planMicrophoneRecovery, type MicrophoneFault, type MicrophoneFaultState, type MicrophoneIdentity, type MicrophoneReading } from '../lib/microphoneHealth';
 import { readDirectReport } from '../lib/directLink';
-import { sanitizeAwayMessage, sanitizeAwayTheme } from '../lib/away';
+import { sanitizeAwayMessage, sanitizeAwaySize, sanitizeAwayTheme } from '../lib/away';
 import { discardPendingScreenAudioPort, openScreenAudioStream, primeScreenAudioBridge, type ScreenAudioStream } from '../lib/screenAudioBridge';
 
 // O sistema desta cópia não muda no meio da sessão, e é ele que decide se
@@ -595,10 +595,10 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
    * em cada máquina.
    */
   const [away, setAwayState] = useState('');
-  const setAway = useCallback((message: string, theme: string) => {
+  const setAway = useCallback((message: string, theme: string, size?: number) => {
     const recado = sanitizeAwayMessage(message);
     setAwayState(recado);
-    publishState({ away: recado, awayTheme: sanitizeAwayTheme(theme) });
+    publishState({ away: recado, awayTheme: sanitizeAwayTheme(theme), awaySize: sanitizeAwaySize(size) });
   }, [publishState]);
 
   const stopSpeakingMonitor = useCallback(() => {
@@ -1471,6 +1471,29 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     });
   }, [createPeer, ensureMicrophone, negotiate, onError, publishState, socket, startSpeakingMonitor]);
 
+  // A administração tirou a permissão de transmitir: a live para aqui, e o
+  // motivo aparece. O servidor já recusou o estado; sem isto a captura
+  // continuaria aberta sem ninguém podendo assistir.
+  useEffect(() => {
+    if (!socket) return;
+    const onStreamBlocked = (payload: { reason?: string }) => {
+      if (localStreams.current.has('screen')) void stopStream('screen');
+      if (payload?.reason) onError(payload.reason);
+    };
+    socket.on('voice:stream-blocked', onStreamBlocked);
+    return () => { socket.off('voice:stream-blocked', onStreamBlocked); };
+  }, [onError, socket, stopStream]);
+
+  /** Pede ao servidor para tirar alguém da call. Só a administração consegue. */
+  const disconnectMember = useCallback((socketId: string) => new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    if (!socket) return resolve({ ok: false, error: 'Sem conexão com o servidor.' });
+    const prazo = window.setTimeout(() => resolve({ ok: false, error: 'O servidor não respondeu.' }), 8_000);
+    socket.emit('voice:disconnect-member', { socketId }, (reply?: { ok?: boolean; error?: string }) => {
+      window.clearTimeout(prazo);
+      resolve({ ok: reply?.ok === true, error: reply?.error });
+    });
+  }), [socket]);
+
   const leave = useCallback(() => {
     const wasInCall = Boolean(channelRef.current);
     stopSpeakingMonitor();
@@ -1799,34 +1822,47 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
   watchingRef.current = watching;
 
   /**
-   * Qual transmissão esta pessoa anunciou à sala que está assistindo.
+   * Anuncia à sala TODAS as transmissões que esta pessoa está assistindo.
    *
-   * O estado de voz tem espaço para uma só, e é o suficiente: a interface
-   * mostra "quem está vendo esta live", não "quantas lives cada um abriu". O
-   * ref existe para o anúncio de saída poder perguntar "era esta que eu tinha
-   * anunciado?" — sem ele, fechar a live de A apagaria o registro de B.
+   * Até a 0.13.4 o anúncio carregava uma só, e cada clique a substituía: quem
+   * abria duas lives aparecia no selo de espectadores de apenas uma, e fechar
+   * uma delas apagava o registro da outra. Era o "não aparece em todas as
+   * lives" e o "mostra errado com mais de uma pessoa".
+   *
+   * Agora a lista inteira sai, derivada de `watching` — a mesma fonte que
+   * decide o que é assinado —, e o efeito compara com o que a SALA diz sobre
+   * esta pessoa. Se divergirem (um reingresso zera o estado no servidor, uma
+   * lista de membros atrasada chega), o anúncio sai de novo sozinho.
+   *
+   * O atraso continua: o anúncio é cosmético, e a negociação de uma live que
+   * acabou de ser aberta não é. Um `voice:state` faz o servidor devolver a
+   * lista de membros para a sala inteira, bem em cima do momento sensível.
    */
-  const myWatchingRef = useRef('');
-
-  /**
-   * Anuncia à sala quem esta pessoa está assistindo — fora do caminho crítico.
-   *
-   * O atraso não é folga: entrar numa live dispara uma negociação WebRTC, e
-   * cada `voice:state` faz o servidor devolver a lista de membros para todo
-   * mundo. Um enfeite chegando no meio da negociação é ruído em cima de um
-   * caminho que este arquivo inteiro trata como sensível a tempo.
-   *
-   * O último pedido ganha: trocar de live duas vezes em um segundo anuncia uma
-   * vez só, a última.
-   */
-  const anuncioPendente = useRef<number | null>(null);
-  const anunciarQuemAssisto = useCallback((peerId: string) => {
-    if (anuncioPendente.current) window.clearTimeout(anuncioPendente.current);
-    anuncioPendente.current = window.setTimeout(() => {
-      anuncioPendente.current = null;
-      socket?.emit('voice:state', { watching: peerId });
+  const ultimoAnuncio = useRef({ chave: '\u0000', em: 0 });
+  const euNaSala = members.find((member) => member.socketId === selfId.current);
+  // Um servidor anterior à 0.13.5 não conhece a lista e guarda só a primeira.
+  // Comparar a lista inteira com ele nunca concordaria — o anúncio viraria um
+  // laço —, então a comparação passa a ser pela primeira.
+  const salaConheceLista = Boolean(euNaSala && Array.isArray(euNaSala.watchingAll));
+  const chaveNaSala = euNaSala ? (salaConheceLista ? [...(euNaSala.watchingAll ?? [])].sort().join(',') : euNaSala.watching ?? '') : null;
+  useEffect(() => {
+    if (!socket || !channelId || chaveNaSala === null) return;
+    const lista = Object.keys(watching).sort();
+    const chave = lista.join(',');
+    const esperado = salaConheceLista ? chave : lista[0] ?? '';
+    if (esperado === chaveNaSala) {
+      ultimoAnuncio.current = { chave, em: Date.now() };
+      return;
+    }
+    // O mesmo pedido não sai duas vezes em sequência curta: se a sala ainda
+    // não refletiu o anterior, a resposta está a caminho.
+    if (ultimoAnuncio.current.chave === chave && Date.now() - ultimoAnuncio.current.em < 5_000) return;
+    const timer = window.setTimeout(() => {
+      ultimoAnuncio.current = { chave, em: Date.now() };
+      socket.emit('voice:state', { watchingAll: lista, watching: lista[0] ?? '' });
     }, 1_200);
-  }, [socket]);
+    return () => window.clearTimeout(timer);
+  }, [channelId, chaveNaSala, salaConheceLista, socket, watching]);
 
   // Um pedido de assistir feito antes de o anúncio chegar.
   //
@@ -1850,8 +1886,6 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // servidor devolver uma lista de membros nova no exato instante em que a
     // inscrição está sendo negociada. Um atraso curto tira o enfeite de cima
     // do que importa, e ninguém percebe a diferença num selo de espectadores.
-    myWatchingRef.current = peerId;
-    anunciarQuemAssisto(peerId);
     watchSent.current.set(peerId, streamId);
   }, [socket]);
   watchLiveRef.current = watchLive;
@@ -1872,13 +1906,6 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     watchSent.current.delete(peerId);
     watchPending.current.delete(peerId);
     if (streamId) socket?.emit('rtc:watch', { target: peerId, stream: streamId, watching: false });
-    // Sair da live de alguém limpa o anúncio para a sala. Só quando é a live
-    // que estava sendo assistida: parar de assistir a A não pode apagar o
-    // registro de que se está assistindo a B.
-    if (myWatchingRef.current === peerId) {
-      myWatchingRef.current = '';
-      anunciarQuemAssisto('');
-    }
   }, [socket]);
 
   /**
@@ -2453,7 +2480,24 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     return () => { cancelled = true; };
   }, []);
 
+  // Sem permissão de falar, o microfone fecha aqui. Quem ouve também não toca a
+  // faixa — a voz é ponto a ponto, e um cliente alterado que reabrisse o
+  // microfone continuaria mudo para os outros.
+  const selfSpeakBlocked = Boolean(members.find((member) => member.socketId === selfId.current)?.speakBlocked);
+  useEffect(() => {
+    if (!selfSpeakBlocked || mutedRef.current) return;
+    localStreams.current.get('microphone')?.getAudioTracks().forEach((track) => { track.enabled = false; });
+    mutedRef.current = true;
+    setMuted(true);
+    speakingRef.current = false;
+    onError('A administração tirou sua permissão de falar nesta call.');
+  }, [onError, selfSpeakBlocked]);
+
   const toggleMute = async () => {
+    if (mutedRef.current && selfSpeakBlocked) {
+      onError('A administração não permite que você fale nesta call.');
+      return;
+    }
     const next = !mutedRef.current;
     if (!next && !localStreams.current.has('microphone')) await ensureMicrophone().catch(() => onError('Não consegui abrir o microfone.'));
     localStreams.current.get('microphone')?.getAudioTracks().forEach((track) => { track.enabled = !next; });
@@ -2748,7 +2792,7 @@ export function useVoice({ socket, user, preferences, onError, onDevicesChanged,
     // estão assistindo à MINHA transmissão — a pergunta que decide o som de
     // alguém entrando e saindo da sua live.
     selfSocketId: selfId.current,
-    away, setAway,
+    away, setAway, selfSpeakBlocked, disconnectMember,
     channelId, members, muted, deafened, cameraOn, screenOn, remoteMedia,
     peerHealth, recoverPeer, recoverAllPeers,
     screenSource,

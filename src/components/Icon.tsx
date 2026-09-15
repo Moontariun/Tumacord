@@ -6,7 +6,7 @@ export type IconName =
   | 'chevron' | 'maximize' | 'minimize' | 'volume' | 'volumeOff' | 'expand'
   | 'shrink' | 'paperclip' | 'download' | 'syncFile' | 'file' | 'server'
   | 'shield' | 'refresh' | 'popOut' | 'popIn' | 'pencil' | 'eraser' | 'update'
-  | 'board' | 'hand' | 'undo' | 'lock' | 'trash' | 'eye';
+  | 'board' | 'hand' | 'undo' | 'lock' | 'trash' | 'eye' | 'eyeOff' | 'sidebar' | 'link';
 
 // Conjunto próprio, desenhado na mesma grade de 24 px, com traço de 1.8 e
 // cantos arredondados. Nada de emoji na interface: cada símbolo é um SVG que
@@ -38,6 +38,10 @@ const glyphs: Record<IconName, ReactNode> = {
   // Quem está vendo uma transmissão. Traço só, para casar com o resto do
   // conjunto — nenhum ícone daqui é preenchido.
   eye: <><path d="M2.2 12S5.9 5.6 12 5.6 21.8 12 21.8 12 18.1 18.4 12 18.4 2.2 12 2.2 12Z" /><circle cx="12" cy="12" r="3.1" /></>,
+  eyeOff: <><path d="M9.9 5.9A10 10 0 0 1 12 5.6c6.1 0 9.8 6.4 9.8 6.4a17.6 17.6 0 0 1-2.9 3.6M6.4 7.2C3.6 9 2.2 12 2.2 12S5.9 18.4 12 18.4a9.6 9.6 0 0 0 4.9-1.3" /><path d="M9.9 9.9a3.1 3.1 0 0 0 4.3 4.3" /><path d="m3.6 3.6 16.8 16.8" /></>,
+  // A barra lateral recolhendo: o painel da esquerda e a seta para dentro dele.
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="2.4" /><path d="M9 4v16" /><path d="m15.4 9.4-2.6 2.6 2.6 2.6" /></>,
+  link: <><path d="M10.4 13.6a4 4 0 0 0 5.7 0l3.1-3.1a4 4 0 0 0-5.7-5.7l-1.2 1.2" /><path d="M13.6 10.4a4 4 0 0 0-5.7 0l-3.1 3.1a4 4 0 0 0 5.7 5.7l1.2-1.2" /></>,
   users: <><circle cx="9.2" cy="7.6" r="3.6" /><path d="M2.6 20.4v-1.3a4.4 4.4 0 0 1 4.4-4.4h4.4a4.4 4.4 0 0 1 4.4 4.4v1.3" /><path d="M16.4 4.4a3.6 3.6 0 0 1 0 6.9M18.4 14.9a4.4 4.4 0 0 1 3 4.2v1.3" /></>,
   send: <><path d="M20.8 3.2 3.4 9.6a.7.7 0 0 0 0 1.3l7 2.5 2.6 7.2a.7.7 0 0 0 1.3 0Z" /><path d="m20.8 3.2-10.4 10.2" /></>,
   host: <><path d="m3.4 8.2 4 3.2L12 5l4.6 6.4 4-3.2-1.7 9.4H5.1Z" /><path d="M5.4 20.4h13.2" /></>,

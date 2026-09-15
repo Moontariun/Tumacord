@@ -257,6 +257,13 @@ async function createWindow() {
   // navegação e sempre acima dos outros aplicativos. Todo o resto continua
   // bloqueado.
   window.webContents.setWindowOpenHandler(({ frameName, url }) => {
+    // Um link clicado no chat abre no navegador do sistema, e só se for
+    // http ou https: `openExternal` com `file:` ou um esquema de aplicativo
+    // executaria o que quem mandou a mensagem quisesse.
+    if (!frameName.startsWith('tumacord-live') && /^https?:\/\//i.test(url ?? '')) {
+      void shell.openExternal(url);
+      return { action: 'deny' };
+    }
     // Cada mídia solta abre com um nome próprio (`tumacord-live-tela`,
     // `tumacord-live-camera`…). Exigir o nome exato aqui negava todas elas.
     if (!frameName.startsWith('tumacord-live') || (url && url !== 'about:blank')) return { action: 'deny' };
@@ -498,7 +505,10 @@ app.whenReady().then(async () => {
       return { ok: false, code: 'unknown-source', error: 'Esta fonte não está mais disponível para captura.' };
     }
     const result = await screenAudioRouter.prepare({ sourceId, kind: offeredSources.get(sourceId) ?? '' });
-    if (result.ok) activeScreenAudioSource = sourceId;
+    // O Linux não precisa de fonte, e no Wayland ela pode vir vazia. A porta do
+    // PCM só é entregue com uma captura ativa, e vazio não pode significar
+    // "nenhuma" quando a captura está de pé.
+    if (result.ok) activeScreenAudioSource = sourceId || 'sistema';
     return result;
   });
   // A porta é pedida pelo renderer, e não entregue junto da preparação. A

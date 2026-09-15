@@ -140,3 +140,11 @@ export function roleForNewUser(users: readonly RoleCarrier[], normalizedUsername
   if (countOwners(users) === 0) return 'owner';
   return normalizedUsername === adminUsername ? 'admin' : 'member';
 }
+
+// Tirar alguém de uma call. É mais leve que remover a conta — a pessoa pode
+// entrar de novo — e por isso qualquer administrador pode, com a mesma regra
+// de sempre sobre donos: só um dono mexe em outro dono.
+export function canDisconnectFromVoice(actor: Role, target: Role): boolean {
+  if (!isAdministrator(actor)) return false;
+  return target !== 'owner' || actor === 'owner';
+}

@@ -1,5 +1,58 @@
 # Histórico de versões
 
+## 0.13.5 — as lives se arrumam sozinhas, e a administração decide quem vê cada canal
+
+<!-- tumacord:resumo -->
+Tela cheia que funciona de verdade, barra lateral que recolhe, grade de lives que se ajusta ao espaço, menu do botão direito, links com prévia no chat e permissões por canal. E o áudio da live no Linux parou de criar um dispositivo visível no sistema.
+
+**Tela cheia e espaço para as lives**
+
+- O botão de "todas em tela cheia" não fazia nada visível: ele levava a janela para a tela cheia e deixava a grade presa entre as barras, do mesmo tamanho de antes. Agora quem sai de cena é a interface — barras, topo e lista de membros — e as lives ocupam a tela inteira na mesma arrumação. A barra da call some com o mouse parado e volta com o movimento; Esc sai.
+- Um botão novo no topo recolhe a barra da esquerda para 76 px: ícone de cada canal, o rosto de cada pessoa na call com anel de quem fala, ponto de quem transmite e microfone cortado de quem está sem som, e os botões de voz. As lives ganham a largura na hora. A escolha fica guardada.
+
+**A grade de lives**
+
+- Com três ou mais lives a grade tinha formatos fixos: três deixavam um buraco no canto, e a partir de cinco os quadros viravam selos. Agora o tamanho de cada quadro é calculado sobre o espaço real do palco — qual número de colunas deixa cada live maior, na proporção de uma tela —, e a última linha fica centralizada. A arrumação acompanha a janela, a barra lateral e a lista de membros.
+
+**Botão direito**
+
+- Sobre uma live: ampliar, tela cheia só dela, soltar em janela flutuante, silenciar, ver perfil e parar de assistir.
+- Sobre a **sua** live: ocultar. Ela continua no ar para quem assiste; some só da sua tela, e um aviso na barra da call mostra quantas pessoas estão vendo e traz o quadro de volta num clique.
+- Sobre alguém na call: ver perfil, volume, silenciar para você, assistir — e, para a administração, **desconectar da call**. O servidor confere o papel de novo antes de tirar alguém, e só um dono desconecta outro dono.
+
+**O selo de quem está assistindo**
+
+- Ele falhava porque o estado de voz guardava **uma** live assistida por pessoa: quem abria duas aparecia em só uma, e fechar uma apagava o registro da outra. Agora a lista inteira viaja, e ela é reenviada sozinha quando a sala diverge — num reingresso, por exemplo.
+- O selo some junto com os controles da live quando o mouse para, e o rótulo mostra só o nome de quem transmite, sem "AO VIVO".
+
+**"Já volto"**
+
+- O botão só aparece enquanto você transmite, e o aviso sai sozinho quando a live acaba.
+- O tamanho do texto é ajustável em Voz e vídeo, de 60% a 200%, com prévia. Ele viaja como número, e quem recebe o prende nessa faixa antes de desenhar.
+
+**Links no chat**
+
+- Endereços viram links e ganham prévia com título, descrição e imagem, como no Discord e no WhatsApp. Links do YouTube usam o oEmbed dele.
+- Quem busca a página é o servidor, e a imagem chega embutida: o aplicativo de cada pessoa não visita o site do link, e ninguém entrega o próprio IP por abrir uma conversa.
+- A busca recusa endereço interno — conferido depois da resolução de nome, na hora de conectar, e de novo a cada redirecionamento —, só usa http e https nas portas padrão, e tem teto de tempo, tamanho e pedidos por pessoa.
+
+**Permissões por canal**
+
+- A administração edita cada canal — nome, tópico, limite — e define, para todos e para cada pessoa, quem pode **ver**, **enviar mensagens**, **entrar na call**, **falar** e **transmitir**. Três estados por regra, como no Discord: herdar, permitir e negar. "Canal privado" é um atalho para fechar a visão de todos.
+- Quem decide é o servidor: canal que a pessoa não vê não chega a ela nem no instantâneo, mensagem de canal fechado vai só para quem enxerga, e entrar, falar e transmitir são recusados na origem. A mudança vale na hora — quem perde a entrada sai da call, quem perde a fala é emudecido, quem perde a transmissão tem a live encerrada.
+- A voz é ponto a ponto e não passa pelo servidor. Por isso o bloqueio de fala é aplicado nos dois lados: o cliente de quem foi bloqueado fecha o microfone, e o de quem ouve não toca aquela faixa.
+
+**Áudio da live no Linux sem dispositivo visível**
+
+- Até aqui a live criava "Tumacord Stream Audio" como alto-falante e como microfone do sistema enquanto durava. Agora o áudio é capturado por um **fluxo de gravação** (`pw-record`), que aparece como um programa gravando e não na lista de dispositivos; o PCM chega pelo mesmo canal que o Windows já usava.
+- Um PipeWire anterior à 1.0, sem `pw-record --raw`, continua no barramento antigo.
+- A nota sobre o PipeWire saiu das configurações de voz.
+
+**Outros**
+
+- Na tela de entrada, "Servidor dedicado" passou a se chamar "P2P híbrido".
+- Links clicados no aplicativo instalado abrem no navegador do sistema, e só se forem http ou https.
+
 ## 0.13.4 — o ping deixa de depender de alguém estar falando
 
 <!-- tumacord:resumo -->
