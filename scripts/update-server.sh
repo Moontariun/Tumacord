@@ -120,9 +120,15 @@ fi
 
 # 1. Alterações locais são suas e não podem ser descartadas em silêncio. Quem
 #    trocou a imagem do relay ou ajustou uma porta precisa saber antes.
-if [[ -n "$(git status --porcelain -- ':!*.env' 2>/dev/null)" ]]; then
+#
+#    Só arquivos VERSIONADOS contam (`-uno`). Até a 0.13.5 esta conferência
+#    contava também os não versionados — o `docker-compose.override.yml` da
+#    rede do proxy, os `.sha256` dos backups — e recusava a atualização por
+#    causa deles, embora `checkout` nunca os toque. E o conselho que ela dava,
+#    `git stash`, nem os guardaria: sem `-u` o stash ignora não versionados.
+if [[ -n "$(git status --porcelain -uno -- ':!*.env' 2>/dev/null)" ]]; then
   echo "Há alterações locais versionadas nesta pasta:" >&2
-  git status --short -- ':!*.env' >&2
+  git status --short -uno -- ':!*.env' >&2
   echo >&2
   echo "Guarde-as antes de continuar:" >&2
   echo "  git stash push -m 'antes da atualizacao'" >&2
