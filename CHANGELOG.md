@@ -1,5 +1,16 @@
 # Histórico de versões
 
+## 0.13.6 — o áudio da live no Linux para de criar dispositivo, agora de verdade
+
+<!-- tumacord:resumo -->
+A 0.13.5 prometia capturar o áudio da live sem dispositivo visível e, na prática, continuava criando o "Tumacord_Stream_Audio". A captura nova nunca achava o próprio nó no PipeWire e caía sempre no caminho antigo.
+
+- A captura procurava o nó do `pw-record` pelo PID gravado **no nó**. O PipeWire grava esse PID no **cliente** dono do nó, que o nó aponta por `client.id`. O nó nunca era encontrado, a preparação desistia depois de três segundos e a ponte caía no barramento antigo — exatamente o dispositivo que ela existe para evitar.
+- Agora o PID é lido do cliente, e do próprio nó quando alguma versão do PipeWire o gravar ali. Sem PID legível em lugar nenhum, um único nó de captura com o nosso nome é reconhecido como nosso.
+- O teste passou na 0.13.5 porque o grafo de exemplo trazia o PID no nó. Ele foi refeito no formato que o PipeWire 1.6 produz de fato, e a captura foi exercida contra o PipeWire real antes desta versão sair: modo novo, nenhum dispositivo, e o áudio de um aplicativo tocando chegou inteiro.
+- Reiniciar o computador não resolvia: os módulos saem quando a live termina e voltavam na live seguinte.
+- O atualizador do servidor deixou de recusar a atualização por causa de arquivos não versionados, como o `docker-compose.override.yml` e os `.sha256` dos backups.
+
 ## 0.13.5 — as lives se arrumam sozinhas, e a administração decide quem vê cada canal
 
 <!-- tumacord:resumo -->

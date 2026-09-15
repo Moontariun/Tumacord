@@ -68,14 +68,34 @@ class PcmFramer {
   }
 }
 
+/**
+ * O PID do processo que criou um nó.
+ *
+ * O `pw-record` NÃO grava o PID no nó: ele fica no cliente dono do nó, que o
+ * nó aponta por `client.id`. A 0.13.5 procurava o PID no nó, nunca achava, e
+ * toda live caía no barramento antigo — com o dispositivo visível que esta
+ * captura existe para evitar. O nó continua sendo lido primeiro, para o caso
+ * de uma versão do PipeWire que o grave ali.
+ */
+function nodeProcessId(graph, node) {
+  const props = node.info?.props ?? {};
+  if (props['application.process.id'] !== undefined) return Number(props['application.process.id']);
+  const client = graph.find((entry) => entry.type === 'PipeWire:Interface:Client' && Number(entry.id) === Number(props['client.id']));
+  const clientProps = client?.info?.props ?? {};
+  const pid = clientProps['application.process.id'] ?? clientProps['pipewire.sec.pid'];
+  return pid === undefined ? undefined : Number(pid);
+}
+
 /** Quais saídas de aplicativo ligar a quais entradas do nó de captura. */
 function captureRoutePlan(graph, capturePid) {
   const nodes = graph.filter((entry) => entry.type === 'PipeWire:Interface:Node');
   const ports = graph.filter((entry) => entry.type === 'PipeWire:Interface:Port');
   const candidates = nodes.filter((entry) => entry.info?.props?.['node.name'] === CAPTURE_NAME);
   // Um nó com o mesmo nome pode ter sobrado de uma execução anterior que caiu.
-  // O do processo atual é o que tem o PID dele.
-  const captureNode = candidates.find((entry) => Number(entry.info?.props?.['application.process.id']) === Number(capturePid)) ?? (capturePid ? undefined : candidates[0]);
+  // O do processo atual é o que tem o PID dele. Sem PID legível em lugar
+  // nenhum, um candidato único é o nosso: não há outro para confundir.
+  const captureNode = candidates.find((entry) => nodeProcessId(graph, entry) === Number(capturePid))
+    ?? (!capturePid || (candidates.length === 1 && nodeProcessId(graph, candidates[0]) === undefined) ? candidates[0] : undefined);
   if (!captureNode) return { captureFound: false, links: [] };
   const inputs = ports.filter((entry) => Number(entry.info?.props?.['node.id']) === Number(captureNode.id) && entry.info?.props?.['port.direction'] === 'in');
   const links = [];
@@ -303,4 +323,4 @@ class PipewireStreamCapture {
   }
 }
 
-module.exports = { PipewireStreamCapture, PcmFramer, captureRoutePlan, captureArguments, CAPTURE_NAME, BLOCK_BYTES };
+module.exports = { PipewireStreamCapture, PcmFramer, captureRoutePlan, nodeProcessId, captureArguments, CAPTURE_NAME, BLOCK_BYTES };

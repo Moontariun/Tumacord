@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { PcmFramer, captureRoutePlan, captureArguments, CAPTURE_NAME, PipewireStreamCapture } = require('../desktop/pipewire-capture.cjs');
+const { PcmFramer, captureRoutePlan, captureArguments, nodeProcessId, CAPTURE_NAME, PipewireStreamCapture } = require('../desktop/pipewire-capture.cjs');
 const { LinuxScreenAudioBridge } = require('../desktop/screen-audio.cjs');
 
 test('blocos saem sempre com quadros inteiros, mesmo com pedaços cortados no meio de uma amostra', () => {
@@ -31,8 +31,13 @@ test('o fluxo de captura não é dispositivo: não se liga a nada sozinho e sai 
 });
 
 const GRAFO = [
-  { id: 50, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': CAPTURE_NAME, 'application.process.id': 999, 'media.class': 'Stream/Input/Audio' } } },
-  { id: 51, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': CAPTURE_NAME, 'application.process.id': 111, 'media.class': 'Stream/Input/Audio' } } },
+  // Como o PipeWire 1.6 descreve de verdade o nó do `pw-record`: sem PID no
+  // nó, com o PID no cliente apontado por `client.id`. A 0.13.5 testava contra
+  // um grafo com o PID no nó, e por isso o defeito passou.
+  { id: 50, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': CAPTURE_NAME, 'client.id': 70, 'media.class': 'Stream/Input/Audio' } } },
+  { id: 51, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': CAPTURE_NAME, 'client.id': 71, 'media.class': 'Stream/Input/Audio' } } },
+  { id: 70, type: 'PipeWire:Interface:Client', info: { props: { 'application.process.id': 999, 'pipewire.sec.pid': 999 } } },
+  { id: 71, type: 'PipeWire:Interface:Client', info: { props: { 'application.process.id': 111, 'pipewire.sec.pid': 111 } } },
   { id: 20, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': 'Firefox', 'application.name': 'Firefox', 'media.class': 'Stream/Output/Audio' } } },
   { id: 21, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': 'WEBRTC VoiceEngine', 'application.process.binary': 'Discord', 'media.class': 'Stream/Output/Audio' } } },
   { id: 500, type: 'PipeWire:Interface:Port', info: { props: { 'node.id': 50, 'port.direction': 'in', 'audio.channel': 'FL' } } },
@@ -48,6 +53,21 @@ test('aplicativos vão para o nó de captura DESTE processo; a call fica de fora
   const plano = captureRoutePlan(GRAFO, 999);
   assert.equal(plano.captureFound, true);
   assert.deepEqual(plano.links, [['200', '500'], ['201', '501']]);
+});
+
+test('o PID do nó é lido do cliente dono dele, e do próprio nó quando estiver lá', () => {
+  assert.equal(nodeProcessId(GRAFO, GRAFO[0]), 999);
+  assert.equal(nodeProcessId(GRAFO, GRAFO[1]), 111);
+  assert.equal(nodeProcessId([], { info: { props: { 'application.process.id': 42 } } }), 42);
+  assert.equal(nodeProcessId([], { info: { props: { 'client.id': 5 } } }), undefined);
+});
+
+test('sem PID legível em lugar nenhum, o único nó de captura é o nosso', () => {
+  const semPid = [
+    { id: 60, type: 'PipeWire:Interface:Node', info: { props: { 'node.name': CAPTURE_NAME } } },
+    { id: 600, type: 'PipeWire:Interface:Port', info: { props: { 'node.id': 60, 'port.direction': 'in', 'audio.channel': 'FL' } } },
+  ];
+  assert.equal(captureRoutePlan(semPid, 1234).captureFound, true);
 });
 
 test('um nó que sobrou de uma execução anterior não recebe nada', () => {
